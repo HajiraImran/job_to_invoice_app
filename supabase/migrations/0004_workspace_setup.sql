@@ -122,10 +122,13 @@ create unique index analytics_events_onboarding_completed_once
 
 alter table commercial.job_allowances enable row level security;
 alter table commercial.job_allowances force row level security;
+select identity.install_migrator_force_rls_policy('commercial.job_allowances');
 alter table commercial.audit_events enable row level security;
 alter table commercial.audit_events force row level security;
+select identity.install_migrator_force_rls_policy('commercial.audit_events');
 alter table commercial.idempotency_records enable row level security;
 alter table commercial.idempotency_records force row level security;
+select identity.install_migrator_force_rls_policy('commercial.idempotency_records');
 
 create policy job_allowances_select on commercial.job_allowances
   for select to api_app

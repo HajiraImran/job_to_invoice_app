@@ -166,9 +166,9 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | ID | D-007 |
 | Date | 2026-09-14 |
 | Status | Resolved |
-| Decision | Put `app_users` and `action_grants` in schema `identity`. Put tenant tables in schema `commercial`. Give `migrator` `BYPASSRLS` and object ownership so `FORCE ROW LEVEL SECURITY` does not block migrations. Runtime roles `api_app`, `worker_app`, and `purge_app` stay `NOBYPASSRLS`, nologin, and non-superuser. Create `assets` in this slice only so `workspaces.logo_asset_id` can use a composite tenant FK; defer `job_id`/`draft_id` FKs until jobs and drafts exist. Local `pnpm migrate:clean` / `pnpm test:db` start embedded PostgreSQL 16 when `DATABASE_URL_MIGRATIONS` is unset. |
+| Decision | Put `app_users` and `action_grants` in schema `identity`. Put tenant tables in schema `commercial`. `migrator` owns those objects so `FORCE ROW LEVEL SECURITY` stays on. Runtime roles `api_app`, `worker_app`, and `purge_app` stay `NOBYPASSRLS`, nologin, and non-superuser. Create `assets` in this slice only so `workspaces.logo_asset_id` can use a composite tenant FK; defer `job_id`/`draft_id` FKs until jobs and drafts exist. Local `pnpm migrate:clean` / `pnpm test:db` start embedded PostgreSQL 16 when `DATABASE_URL_MIGRATIONS` is unset. Role-level `BYPASSRLS` on `migrator` is superseded by D-010. |
 | Reason | ACC02A requires a restricted identity schema. ARC02 requires FORCE RLS and a non-bypass API role. Root `workspace_id` FKs cannot be two copies of the same column. The logo FK is the first non-root composite tenant FK and unblocks isolation tests without jobs, quotes, approvals, or invoices. |
-| Evidence | `supabase/migrations/0001_foundation.sql`, `0002_identity_tenancy.sql`, `scripts/db-test.mjs` |
+| Evidence | `supabase/migrations/0001_foundation.sql`, `0002_identity_tenancy.sql`, `scripts/db-test.mjs`; D-010 for hosted `NOBYPASSRLS` |
 | Owner | Engineering lead |
 | PRD implication | Authorization still comes from verified identity plus `SET LOCAL`. Workspace IDs in routes/bodies remain non-authoritative. Jobs/quotes/approvals/invoices remain later migrations. |
 | Impacted requirement IDs | ARC02, ARC03, AUTHZ01, ACC02A, DB01, DEC04, SREF07 |
@@ -211,5 +211,23 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Impacted test IDs | QA01, QA61, QA64 |
 | Migration implications | Additive tables `job_allowances`, `audit_events`, `idempotency_records`; completed-setup check; `complete_workspace_setup`. |
 | Reversible | No for completing setup in place; logo skip is slice timing only |
+| Escalation category | architecture |
+
+### D-010 — Hosted migrator NOBYPASSRLS with table-scoped owner policies
+
+| Field | Value |
+| --- | --- |
+| ID | D-010 |
+| Date | 2026-09-14 |
+| Status | Resolved |
+| Decision | Keep D-007’s schema split, `FORCE ROW LEVEL SECURITY`, `migrator` object ownership, and runtime `NOBYPASSRLS`. Do not grant role-level `BYPASSRLS` to `migrator`. Hosted Supabase `postgres` is not superuser and cannot `ALTER ROLE … BYPASSRLS`. Owner DML for migrations and `SECURITY DEFINER` functions uses a table-scoped `FOR ALL TO migrator USING (true) WITH CHECK (true)` policy named `{schema}_{table}_migrator_all`, installed by `identity.install_migrator_force_rls_policy`. Do not `ALTER` hosted `anon` or `authenticated`. Create those roles only when absent for embedded Postgres. Never give equivalent unrestricted policies to `api_app`, `worker_app`, `purge_app`, `anon`, or `authenticated`. Never use `service_role`. |
+| Reason | The first hosted `db push` of `0001` failed on `ALTER ROLE migrator … BYPASSRLS`. FORCE RLS must remain. Local superuser tests hid the hosted restriction. Table-scoped owner policies restore definer/migration DML without cluster-wide bypass (including `auth`). |
+| Evidence | Hosted error `LegacyDbPushApplyError` at `ALTER ROLE migrator … bypassrls`; PostgreSQL: only superusers set `BYPASSRLS`; `supabase/migrations/0001_foundation.sql`–`0004_workspace_setup.sql`; `scripts/db-test.mjs`; `supabase/tests/0003_runtime_roles.sql`; `supabase/tests/0005_migrator_force_rls_policy.sql` |
+| Owner | Engineering lead |
+| PRD implication | ARC02 FORCE RLS and non-bypass API/worker/purge roles stand. Provisioning and workspace setup still run as `SECURITY DEFINER` owned by `migrator`, executable only by `api_app`. Hosted apply of 0001–0004 remains a later authorized step. |
+| Impacted requirement IDs | ARC02, ARC03, AUTHZ01, ACC02A, DB01, SREF07 |
+| Impacted test IDs | QA03; isolation suite; provision_owner / complete_workspace_setup db tests |
+| Migration implications | Modify 0001 before first successful hosted application. Add owner policies in 0002–0004. History was empty; no leftover app roles/schemas at diagnosis. |
+| Reversible | No for hosted compatibility; policy names are additive |
 | Escalation category | architecture |
 

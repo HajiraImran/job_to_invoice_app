@@ -24,23 +24,22 @@ begin
 end
 $roles$;
 
-alter role migrator with nologin nosuperuser nocreatedb nocreaterole noreplication bypassrls;
+-- Hosted Supabase postgres is not superuser and cannot GRANT BYPASSRLS (D-010).
+-- Create anon/authenticated only when missing for embedded Postgres. Never ALTER platform roles.
+alter role migrator with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
 alter role api_app with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
 alter role worker_app with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
 alter role purge_app with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
-alter role anon with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
-alter role authenticated with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
 
 alter role api_app set search_path = commercial, identity, pg_temp;
 alter role worker_app set search_path = commercial, identity, pg_temp;
 alter role purge_app set search_path = commercial, identity, pg_temp;
 
-comment on role migrator is 'Object owner. Migrations only. Not a runtime pool.';
+comment on role migrator is
+  'Object owner. Migrations and SECURITY DEFINER only. NOBYPASSRLS. FORCE RLS owner access is table-scoped policies (D-010). Not a runtime pool.';
 comment on role api_app is 'FORCE RLS API runtime. Not owner, not superuser, not BYPASSRLS.';
 comment on role worker_app is 'FORCE RLS worker. EXECUTE named functions only. Separate from API.';
 comment on role purge_app is 'Scheduled deletion job only. Never in Fastify or outbox pools.';
-comment on role anon is 'Supabase anonymous client role. No commercial grants.';
-comment on role authenticated is 'Supabase authenticated client role. No commercial grants.';
 
 grant migrator to current_user;
 grant api_app to current_user;

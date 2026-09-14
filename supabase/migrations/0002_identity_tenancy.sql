@@ -39,6 +39,59 @@ $$;
 comment on function identity.set_local_tenant_context(uuid, uuid) is
   'SET LOCAL tenant GUC from verified server identity. Session SET is forbidden.';
 
+create function identity.install_migrator_force_rls_policy(p_table regclass)
+returns void
+language plpgsql
+security invoker
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_nsp text;
+  v_relname text;
+  v_forced boolean;
+  v_policy text;
+begin
+  select n.nspname, c.relname, c.relforcerowsecurity
+    into v_nsp, v_relname, v_forced
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+  where c.oid = p_table
+    and c.relkind = 'r';
+
+  if v_nsp is null or v_relname is null then
+    raise exception 'migrator FORCE RLS policy requires a table'
+      using errcode = '22023';
+  end if;
+  if v_nsp not in ('identity', 'commercial') then
+    raise exception 'migrator FORCE RLS policy is only for identity/commercial tables'
+      using errcode = '42501';
+  end if;
+  if v_forced is not true then
+    raise exception 'FORCE RLS required before migrator owner policy on %.%', v_nsp, v_relname
+      using errcode = '55000';
+  end if;
+
+  v_policy := v_nsp || '_' || v_relname || '_migrator_all';
+
+  if not exists (
+    select 1
+    from pg_policy p
+    where p.polrelid = p_table
+      and p.polname = v_policy
+  ) then
+    execute format(
+      'create policy %I on %I.%I for all to migrator using (true) with check (true)',
+      v_policy,
+      v_nsp,
+      v_relname
+    );
+  end if;
+end;
+$$;
+
+comment on function identity.install_migrator_force_rls_policy(regclass) is
+  'Installs the table-scoped migrator FOR ALL policy required under FORCE RLS (D-010).';
+
 create or replace function identity.touch_updated_at()
 returns trigger
 language plpgsql
@@ -246,14 +299,19 @@ create trigger assets_reject_key_change
 
 alter table identity.app_users enable row level security;
 alter table identity.app_users force row level security;
+select identity.install_migrator_force_rls_policy('identity.app_users');
 alter table identity.action_grants enable row level security;
 alter table identity.action_grants force row level security;
+select identity.install_migrator_force_rls_policy('identity.action_grants');
 alter table commercial.workspaces enable row level security;
 alter table commercial.workspaces force row level security;
+select identity.install_migrator_force_rls_policy('commercial.workspaces');
 alter table commercial.memberships enable row level security;
 alter table commercial.memberships force row level security;
+select identity.install_migrator_force_rls_policy('commercial.memberships');
 alter table commercial.assets enable row level security;
 alter table commercial.assets force row level security;
+select identity.install_migrator_force_rls_policy('commercial.assets');
 
 create policy app_users_select on identity.app_users
   for select to api_app
@@ -413,6 +471,9 @@ revoke all on function identity.set_local_tenant_context(uuid, uuid) from public
 revoke all on function identity.touch_updated_at() from public;
 revoke all on function identity.reject_identity_key_change() from public;
 revoke all on function commercial.reject_tenant_key_change() from public;
+revoke all on function identity.install_migrator_force_rls_policy(regclass) from public;
+revoke all on function identity.install_migrator_force_rls_policy(regclass)
+  from api_app, worker_app, purge_app, anon, authenticated;
 
 grant execute on function identity.current_workspace_id() to api_app, worker_app, purge_app;
 grant execute on function identity.current_actor_id() to api_app, worker_app, purge_app;

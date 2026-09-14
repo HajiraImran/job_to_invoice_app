@@ -139,6 +139,9 @@ try {
       if ("owned_by_migrator" in row) {
         assert(row.owned_by_migrator === true, `${file} tables not owned by migrator`);
       }
+      if ("migrator_policy" in row) {
+        assert(row.migrator_policy === true, `${file} FORCE RLS tables missing migrator owner policy`);
+      }
     });
   }
 
@@ -156,7 +159,9 @@ try {
     assert(byName.worker_app.rolsuper === false, "worker_app must not be superuser");
     assert(byName.worker_app.rolbypassrls === false, "worker_app must not bypass RLS");
     assert(byName.purge_app.rolbypassrls === false, "purge_app must not bypass RLS");
-    assert(byName.migrator.rolbypassrls === true, "migrator may bypass RLS for migrations");
+    assert(byName.migrator.rolbypassrls === false, "migrator must not bypass RLS on hosted Postgres");
+    assert(byName.migrator.rolsuper === false, "migrator must not be superuser");
+    assert(byName.migrator.rolcanlogin === false, "migrator must be nologin");
     assert(byName.api_app !== byName.worker_app, "roles must be distinct");
   });
 
@@ -175,10 +180,64 @@ try {
     }
   });
 
+  await test("every FORCE RLS table has the migrator owner policy and no runtime equivalent", async () => {
+    const missing = await admin.query(`
+      select n.nspname || '.' || c.relname as table_name
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname in ('identity', 'commercial')
+        and c.relkind = 'r'
+        and c.relforcerowsecurity
+        and not exists (
+          select 1
+          from pg_policy p
+          where p.polrelid = c.oid
+            and p.polname = n.nspname || '_' || c.relname || '_migrator_all'
+            and p.polcmd = '*'
+            and p.polroles = array[(select oid from pg_roles where rolname = 'migrator')]::oid[]
+            and pg_get_expr(p.polqual, p.polrelid) in ('true', '(true)')
+            and pg_get_expr(p.polwithcheck, p.polrelid) in ('true', '(true)')
+        )
+    `);
+    assert(
+      missing.rows.length === 0,
+      `FORCE RLS tables missing migrator owner policy: ${missing.rows.map((row) => row.table_name).join(", ")}`,
+    );
+    const leaked = await admin.query(`
+      select n.nspname || '.' || c.relname as table_name, p.polname
+      from pg_policy p
+      join pg_class c on c.oid = p.polrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname in ('identity', 'commercial')
+        and p.polcmd = '*'
+        and pg_get_expr(p.polqual, p.polrelid) in ('true', '(true)')
+        and (
+          0 = any (p.polroles)
+          or exists (
+            select 1 from pg_roles r
+            where r.oid = any (p.polroles)
+              and r.rolname in ('api_app', 'worker_app', 'purge_app', 'anon', 'authenticated')
+          )
+        )
+    `);
+    assert(leaked.rows.length === 0, "unrestricted FOR ALL policy leaked to a runtime or client role");
+  });
+
   await insertUser(admin, A, "a@example.com");
   await insertUser(admin, B, "b@example.com");
   await insertWorkspace(admin, A);
   await insertWorkspace(admin, B);
+
+  await test("migrator owner policy allows DML without BYPASSRLS", async () => {
+    await admin.query("begin");
+    try {
+      await admin.query("set local role migrator");
+      const seen = await admin.query("select count(*)::int as n from commercial.workspaces");
+      assert(seen.rows[0].n >= 2, "migrator must see FORCE RLS rows via owner policy");
+    } finally {
+      await admin.query("commit");
+    }
+  });
 
   await test("workspace A can read its own records", async () => {
     const rows = await withApi(admin, async () => {
@@ -359,6 +418,18 @@ try {
       },
       /permission denied/i,
       "anon select",
+    );
+    await expectFail(
+      async () => {
+        await admin.query("set role anon");
+        try {
+          await admin.query("select id from identity.app_users");
+        } finally {
+          await admin.query("reset role");
+        }
+      },
+      /permission denied/i,
+      "anon identity select",
     );
     await expectFail(
       async () => {

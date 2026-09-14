@@ -37,6 +37,7 @@ create unique index analytics_events_signup_verified_once
 
 alter table commercial.analytics_events enable row level security;
 alter table commercial.analytics_events force row level security;
+select identity.install_migrator_force_rls_policy('commercial.analytics_events');
 
 create policy analytics_events_select on commercial.analytics_events
   for select to api_app

@@ -28,12 +28,12 @@
 
 | Role | DSN | Notes |
 | --- | --- | --- |
-| `migrator` | `DATABASE_URL_MIGRATIONS` | Object owner. Migrations only. Not a runtime pool. |
+| `migrator` | `DATABASE_URL_MIGRATIONS` | Object owner. `NOBYPASSRLS`. FORCE RLS owner access is table-scoped `FOR ALL TO migrator` policies (D-010). Migrations and SECURITY DEFINER only. Not a runtime pool. |
 | `api_app` | `DATABASE_URL_API` | FORCE RLS. No `BYPASSRLS`. No superuser. No arbitrary UPDATE/DELETE of issued financial payload. |
 | `worker_app` | `DATABASE_URL_WORKER` | FORCE RLS. EXECUTE named outbox/PDF/billing functions only. Separate pool from API. |
 | `purge_app` | `DATABASE_URL_PURGE` | Scheduled deletion job only. Never in Fastify or outbox pools. No role-level `BYPASSRLS`. Calls named `purge_*` SECURITY DEFINER functions owned by `migrator`. |
 
-Supabase `service_role` is forbidden as an application connection. Client roles `anon` and `authenticated` have no grants on `identity` or `commercial`. `api_app`, `worker_app`, and `purge_app` must not be `BYPASSRLS`, superuser, or table owner. `migrator` is the object owner and is the only role that may hold `BYPASSRLS`, solely so FORCE RLS does not block migrations.
+Supabase `service_role` is forbidden as an application connection. Client roles `anon` and `authenticated` have no grants on `identity` or `commercial`. Hosted migrations must not `ALTER` those platform roles; create them only when absent for local embedded Postgres. `api_app`, `worker_app`, `purge_app`, and `migrator` must not be `BYPASSRLS`, superuser, or login roles. `migrator` is the object owner. Because hosted `postgres` cannot grant `BYPASSRLS`, each FORCE RLS application table has a `FOR ALL TO migrator USING (true) WITH CHECK (true)` policy so definer functions and migration DML still work. Runtime roles never receive that unrestricted policy.
 
 ## Schemas
 
