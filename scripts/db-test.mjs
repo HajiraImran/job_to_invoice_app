@@ -147,38 +147,117 @@ try {
 
   await test("roles are distinct and api/worker/purge cannot bypass RLS", async () => {
     const roles = await admin.query(`
-      select rolname, rolsuper, rolbypassrls, rolcanlogin
+      select rolname, rolsuper, rolbypassrls, rolcanlogin, rolcreatedb, rolcreaterole, rolreplication
       from pg_roles
       where rolname in ('migrator', 'api_app', 'worker_app', 'purge_app')
       order by rolname
     `);
     const byName = Object.fromEntries(roles.rows.map((row) => [row.rolname, row]));
-    assert(byName.api_app.rolsuper === false, "api_app must not be superuser");
-    assert(byName.api_app.rolbypassrls === false, "api_app must not bypass RLS");
-    assert(byName.api_app.rolcanlogin === false, "api_app must be nologin");
-    assert(byName.worker_app.rolsuper === false, "worker_app must not be superuser");
-    assert(byName.worker_app.rolbypassrls === false, "worker_app must not bypass RLS");
-    assert(byName.purge_app.rolbypassrls === false, "purge_app must not bypass RLS");
-    assert(byName.migrator.rolbypassrls === false, "migrator must not bypass RLS on hosted Postgres");
-    assert(byName.migrator.rolsuper === false, "migrator must not be superuser");
-    assert(byName.migrator.rolcanlogin === false, "migrator must be nologin");
+    assert(Object.keys(byName).length === 4, "expected four application roles");
+    for (const name of ["migrator", "api_app", "worker_app", "purge_app"]) {
+      const role = byName[name];
+      assert(role.rolsuper === false, `${name} must not be superuser`);
+      assert(role.rolbypassrls === false, `${name} must not bypass RLS`);
+      assert(role.rolcanlogin === false, `${name} must be nologin`);
+      assert(role.rolcreatedb === false, `${name} must not createdb`);
+      assert(role.rolcreaterole === false, `${name} must not createrole`);
+      assert(role.rolreplication === false, `${name} must not replicate`);
+    }
     assert(byName.api_app !== byName.worker_app, "roles must be distinct");
   });
 
-  await test("bootstrap rejects pre-existing BYPASSRLS application roles", async () => {
-    await admin.query("alter role migrator with bypassrls");
-    try {
-      await expectFail(
-        () =>
-          admin.query(readFileSync(join(root, "supabase", "migrations", "0001_foundation.sql"), "utf8")),
-        /must not have BYPASSRLS/i,
-        "unsafe migrator BYPASSRLS",
-      );
-    } finally {
-      await admin.query("alter role migrator with nobypassrls");
+  await test("application migrations contain no ALTER ROLE", async () => {
+    const dir = join(root, "supabase", "migrations");
+    for (const file of readdirSync(dir).filter((name) => name.endsWith(".sql"))) {
+      const sql = readFileSync(join(dir, file), "utf8")
+        .replace(/--[^\n]*/g, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "");
+      assert(!/\balter\s+role\b/i.test(sql), `${file} must not contain ALTER ROLE`);
+      assert(!/\balter\s+role\s+anon\b/i.test(sql), `${file} must not alter anon`);
+      assert(!/\balter\s+role\s+authenticated\b/i.test(sql), `${file} must not alter authenticated`);
     }
-    const restored = await admin.query("select rolbypassrls from pg_roles where rolname = 'migrator'");
-    assert(restored.rows[0].rolbypassrls === false, "migrator must be restored without BYPASSRLS");
+  });
+
+  const foundationSql = readFileSync(join(root, "supabase", "migrations", "0001_foundation.sql"), "utf8");
+  const restoreMigrator =
+    "alter role migrator with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls";
+  const unsafeAttributes = [
+    { name: "LOGIN", clause: "login" },
+    { name: "SUPERUSER", clause: "superuser" },
+    { name: "CREATEDB", clause: "createdb" },
+    { name: "CREATEROLE", clause: "createrole" },
+    { name: "REPLICATION", clause: "replication" },
+    { name: "BYPASSRLS", clause: "bypassrls" },
+  ];
+  for (const attr of unsafeAttributes) {
+    await test(`bootstrap rejects pre-existing ${attr.name} application roles`, async () => {
+      await admin.query(`alter role migrator with ${attr.clause}`);
+      try {
+        await expectFail(
+          () => admin.query(foundationSql),
+          new RegExp(`D-010[\\s\\S]*${attr.name}`),
+          `unsafe migrator ${attr.name}`,
+        );
+      } finally {
+        await admin.query(restoreMigrator);
+      }
+    });
+  }
+
+  await test("bootstrap does not alter or drop anon or authenticated", async () => {
+    const before = await admin.query(`
+      select oid, rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+      from pg_roles
+      where rolname in ('anon', 'authenticated')
+      order by rolname
+    `);
+    assert(before.rows.length === 2, "anon and authenticated must exist before re-bootstrap");
+    await admin.query(foundationSql);
+    const after = await admin.query(`
+      select oid, rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+      from pg_roles
+      where rolname in ('anon', 'authenticated')
+      order by rolname
+    `);
+    assert(
+      JSON.stringify(before.rows) === JSON.stringify(after.rows),
+      "anon and authenticated must be unchanged after re-bootstrap",
+    );
+  });
+
+  await test("local clean setup drops only the four application roles", async () => {
+    const beforeClients = await admin.query(`
+      select oid, rolname
+      from pg_roles
+      where rolname in ('anon', 'authenticated')
+      order by rolname
+    `);
+    await admin.query("alter role migrator with login");
+    await applyCleanMigrations(admin, root);
+    await admin.query(
+      "grant api_app, worker_app, purge_app, anon, authenticated, migrator to current_user",
+    );
+    const afterClients = await admin.query(`
+      select oid, rolname
+      from pg_roles
+      where rolname in ('anon', 'authenticated')
+      order by rolname
+    `);
+    assert(
+      JSON.stringify(beforeClients.rows) === JSON.stringify(afterClients.rows),
+      "anon and authenticated must survive local cleanup",
+    );
+    const migrator = await admin.query(`
+      select rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+      from pg_roles
+      where rolname = 'migrator'
+    `);
+    assert(migrator.rows[0].rolcanlogin === false, "cleanup must recreate migrator as nologin");
+    assert(migrator.rows[0].rolsuper === false, "cleanup must recreate migrator as nonsuperuser");
+    assert(migrator.rows[0].rolcreatedb === false, "cleanup must recreate migrator as nocreatedb");
+    assert(migrator.rows[0].rolcreaterole === false, "cleanup must recreate migrator as nocreaterole");
+    assert(migrator.rows[0].rolreplication === false, "cleanup must recreate migrator as noreplication");
+    assert(migrator.rows[0].rolbypassrls === false, "cleanup must recreate migrator as nobypassrls");
   });
 
   await test("tenant tables enable and force RLS and are owned by migrator", async () => {

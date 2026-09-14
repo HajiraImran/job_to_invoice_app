@@ -213,21 +213,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | No for completing setup in place; logo skip is slice timing only |
 | Escalation category | architecture |
 
-### D-010 — Hosted migrator NOBYPASSRLS with table-scoped owner policies
+### D-010 — Hosted CREATE ROLE-only bootstrap with table-scoped owner policies
 
 | Field | Value |
 | --- | --- |
 | ID | D-010 |
 | Date | 2026-09-14 |
 | Status | Resolved |
-| Decision | Keep D-007’s schema split, `FORCE ROW LEVEL SECURITY`, `migrator` object ownership, and runtime roles that must not bypass RLS. Hosted Supabase `postgres` is not superuser and cannot toggle `BYPASSRLS` or `NOBYPASSRLS` on `ALTER ROLE` / `CREATE ROLE`. New application roles omit those clauses and rely on PostgreSQL’s default `NOBYPASSRLS`. Bootstrap then fails closed if `migrator`, `api_app`, `worker_app`, or `purge_app` has `rolbypassrls`. Owner DML uses table-scoped `FOR ALL TO migrator USING (true) WITH CHECK (true)` policies named `{schema}_{table}_migrator_all`, installed by `identity.install_migrator_force_rls_policy`. Do not `ALTER` hosted `anon` or `authenticated`. Create those roles only when absent for embedded Postgres. Never give equivalent unrestricted policies to runtime or client roles. Never use `service_role`. |
-| Reason | Hosted `db push` of `0001` failed first on `ALTER ROLE … BYPASSRLS` and then on `ALTER ROLE … NOBYPASSRLS`. Both attributes are superuser-only. FORCE RLS must remain. Table-scoped owner policies restore definer/migration DML without cluster-wide bypass. Explicit `rolbypassrls` rejection prevents a leftover unsafe role from applying silently. |
-| Evidence | Hosted errors `LegacyDbPushApplyError` at `ALTER ROLE migrator … bypassrls` and `… nobypassrls`; PostgreSQL: only superusers change `BYPASSRLS`; `supabase/migrations/0001_foundation.sql`–`0004_workspace_setup.sql`; `scripts/db-test.mjs`; `supabase/tests/0003_runtime_roles.sql`; `supabase/tests/0005_migrator_force_rls_policy.sql` |
+| Decision | Keep D-007’s schema split, `FORCE ROW LEVEL SECURITY`, `migrator` object ownership, and runtime roles that must not bypass RLS. Hosted Supabase `postgres` rejects `ALTER ROLE` (including `BYPASSRLS` / `NOBYPASSRLS` and ordinary attribute changes). Application roles `migrator`, `api_app`, `worker_app`, and `purge_app` receive `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION` only in `CREATE ROLE` when missing. PostgreSQL defaults new roles to `NOBYPASSRLS`. Bootstrap never repairs a pre-existing role: it fails closed if any of those four has `LOGIN`, `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, or `BYPASSRLS`. Owner DML uses table-scoped `FOR ALL TO migrator USING (true) WITH CHECK (true)` policies named `{schema}_{table}_migrator_all`. Do not `ALTER` or drop hosted `anon` / `authenticated`; create them only when absent for embedded Postgres. Never give unrestricted policies to runtime or client roles. Never use `service_role`. |
+| Reason | Hosted `db push` of `0001` failed on `ALTER ROLE … BYPASSRLS`, then `NOBYPASSRLS`, then `ALTER ROLE migrator with nologin nosuperuser …` with no bypass clause. Hosted `postgres` cannot `ALTER ROLE`. FORCE RLS must remain. Safe attributes belong on `CREATE ROLE` only. Pre-existing unsafe roles must abort, not be rewritten. Table-scoped owner policies restore definer/migration DML without cluster-wide bypass. |
+| Evidence | Hosted `LegacyDbPushApplyError` at `ALTER ROLE migrator` (bypass, nobypass, and attribute-only forms); `supabase/migrations/0001_foundation.sql`–`0004_workspace_setup.sql`; `scripts/db-test.mjs`; `supabase/tests/0003_runtime_roles.sql`; `supabase/tests/0005_migrator_force_rls_policy.sql` |
 | Owner | Engineering lead |
 | PRD implication | ARC02 FORCE RLS and non-bypass API/worker/purge roles stand. Provisioning and workspace setup still run as `SECURITY DEFINER` owned by `migrator`, executable only by `api_app`. Hosted apply of 0001–0004 remains a later authorized step. |
 | Impacted requirement IDs | ARC02, ARC03, AUTHZ01, ACC02A, DB01, SREF07 |
 | Impacted test IDs | QA03; isolation suite; provision_owner / complete_workspace_setup db tests |
-| Migration implications | Modify `0001` before first successful hosted application. Omit `BYPASSRLS`/`NOBYPASSRLS` from role DDL; validate `rolbypassrls` is false; keep owner policies in `0002`–`0004`. History was empty after failed retries. |
+| Migration implications | Modify `0001` before first successful hosted application. No `ALTER ROLE` in application migrations. Validate unsafe attributes; keep owner policies in `0002`–`0004`. History was empty after failed retries. |
 | Reversible | No for hosted compatibility; policy names are additive |
 | Escalation category | architecture |
 

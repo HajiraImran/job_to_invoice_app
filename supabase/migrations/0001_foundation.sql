@@ -1,7 +1,7 @@
 -- Identity and tenancy foundation. Jobs, quotes, approvals and invoices are later migrations.
 -- Runtime roles are nologin; CI/tests SET ROLE from the migration bootstrap user.
--- Hosted Supabase postgres cannot SET BYPASSRLS or NOBYPASSRLS (D-010). New roles
--- default to NOBYPASSRLS. Existing application roles with rolbypassrls fail closed.
+-- Hosted Supabase rejects ALTER ROLE. Safe attributes are assigned only at CREATE ROLE.
+-- Pre-existing application roles are validated and never repaired (D-010).
 
 do $roles$
 begin
@@ -26,34 +26,44 @@ begin
 end
 $roles$;
 
--- Supported attributes only. Never ALTER platform anon/authenticated. Never mention BYPASSRLS.
-alter role migrator with nologin nosuperuser nocreatedb nocreaterole noreplication;
-alter role api_app with nologin nosuperuser nocreatedb nocreaterole noreplication;
-alter role worker_app with nologin nosuperuser nocreatedb nocreaterole noreplication;
-alter role purge_app with nologin nosuperuser nocreatedb nocreaterole noreplication;
-
 do $guard$
 declare
   v_unsafe text;
 begin
-  select string_agg(rolname, ', ' order by rolname)
+  select string_agg(format('%s (%s)', rolname, attrs), '; ' order by rolname)
     into v_unsafe
-  from pg_roles
-  where rolname in ('migrator', 'api_app', 'worker_app', 'purge_app')
-    and rolbypassrls;
+  from (
+    select
+      rolname,
+      concat_ws(
+        ', ',
+        case when rolcanlogin then 'LOGIN' end,
+        case when rolsuper then 'SUPERUSER' end,
+        case when rolcreatedb then 'CREATEDB' end,
+        case when rolcreaterole then 'CREATEROLE' end,
+        case when rolreplication then 'REPLICATION' end,
+        case when rolbypassrls then 'BYPASSRLS' end
+      ) as attrs
+    from pg_roles
+    where rolname in ('migrator', 'api_app', 'worker_app', 'purge_app')
+      and (
+        rolcanlogin
+        or rolsuper
+        or rolcreatedb
+        or rolcreaterole
+        or rolreplication
+        or rolbypassrls
+      )
+  ) unsafe;
   if v_unsafe is not null then
-    raise exception 'application role must not have BYPASSRLS (D-010): %', v_unsafe
+    raise exception 'application role is unsafe (D-010): %', v_unsafe
       using errcode = '42501';
   end if;
 end
 $guard$;
 
-alter role api_app set search_path = commercial, identity, pg_temp;
-alter role worker_app set search_path = commercial, identity, pg_temp;
-alter role purge_app set search_path = commercial, identity, pg_temp;
-
 comment on role migrator is
-  'Object owner. Migrations and SECURITY DEFINER only. Default NOBYPASSRLS; bootstrap rejects rolbypassrls. FORCE RLS owner access is table-scoped policies (D-010). Not a runtime pool.';
+  'Object owner. Migrations and SECURITY DEFINER only. Safe attributes set at CREATE ROLE only. Bootstrap rejects unsafe pre-existing roles (D-010). FORCE RLS owner access is table-scoped policies. Not a runtime pool.';
 comment on role api_app is 'FORCE RLS API runtime. Not owner, not superuser, not BYPASSRLS.';
 comment on role worker_app is 'FORCE RLS worker. EXECUTE named functions only. Separate from API.';
 comment on role purge_app is 'Scheduled deletion job only. Never in Fastify or outbox pools.';

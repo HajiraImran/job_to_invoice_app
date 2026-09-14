@@ -28,12 +28,12 @@
 
 | Role | DSN | Notes |
 | --- | --- | --- |
-| `migrator` | `DATABASE_URL_MIGRATIONS` | Object owner. Hosted DDL does not toggle `BYPASSRLS`/`NOBYPASSRLS`; new roles default to `NOBYPASSRLS`; bootstrap fails if `rolbypassrls` is true. FORCE RLS owner access is table-scoped `FOR ALL TO migrator` policies (D-010). Migrations and SECURITY DEFINER only. Not a runtime pool. |
+| `migrator` | `DATABASE_URL_MIGRATIONS` | Object owner. Hosted Supabase rejects `ALTER ROLE`; safe attributes are assigned only at `CREATE ROLE`; bootstrap fails if a pre-existing app role is unsafe and does not repair it. FORCE RLS owner access is table-scoped `FOR ALL TO migrator` policies (D-010). Migrations and SECURITY DEFINER only. Not a runtime pool. |
 | `api_app` | `DATABASE_URL_API` | FORCE RLS. No `BYPASSRLS`. No superuser. No arbitrary UPDATE/DELETE of issued financial payload. |
 | `worker_app` | `DATABASE_URL_WORKER` | FORCE RLS. EXECUTE named outbox/PDF/billing functions only. Separate pool from API. |
 | `purge_app` | `DATABASE_URL_PURGE` | Scheduled deletion job only. Never in Fastify or outbox pools. No role-level `BYPASSRLS`. Calls named `purge_*` SECURITY DEFINER functions owned by `migrator`. |
 
-Supabase `service_role` is forbidden as an application connection. Client roles `anon` and `authenticated` have no grants on `identity` or `commercial`. Hosted migrations must not `ALTER` those platform roles; create them only when absent for local embedded Postgres. `api_app`, `worker_app`, `purge_app`, and `migrator` must not be `BYPASSRLS`, superuser, or login roles. Hosted `postgres` cannot set `BYPASSRLS` or `NOBYPASSRLS`; `0001` omits those clauses, relies on the default for new roles, and raises if any application role already has `rolbypassrls`. `migrator` is the object owner. Each FORCE RLS application table has a `FOR ALL TO migrator USING (true) WITH CHECK (true)` policy so definer functions and migration DML still work. Runtime roles never receive that unrestricted policy.
+Supabase `service_role` is forbidden as an application connection. Client roles `anon` and `authenticated` have no grants on `identity` or `commercial`. Hosted migrations must not `ALTER` or drop those platform roles; create them only when absent for local embedded Postgres. Application migrations contain no `ALTER ROLE`. `api_app`, `worker_app`, `purge_app`, and `migrator` are created with `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION` and must not have `BYPASSRLS`. If any of those four already exists with `LOGIN`, `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, or `BYPASSRLS`, bootstrap raises and does not rewrite the role. `migrator` is the object owner. Each FORCE RLS application table has a `FOR ALL TO migrator USING (true) WITH CHECK (true)` policy so definer functions and migration DML still work. Runtime roles never receive that unrestricted policy.
 
 ## Schemas
 
