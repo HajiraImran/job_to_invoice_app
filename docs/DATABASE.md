@@ -42,6 +42,35 @@ Supabase `service_role` is forbidden as an application connection. Client roles 
 - Supabase CLI inserts `supabase_migrations.schema_migrations` as the bootstrap session user after the file returns. `migrator` cannot write that catalog. Leaving `SET ROLE migrator` in effect prevents history from being recorded and rolls back the migration.
 - Do not `ALTER ROLE`. Do not change hosted `0001_foundation.sql`. Never use `service_role`.
 
+## Hosted apply (D-012)
+
+`db.<project-ref>.supabase.co:5432` is IPv6-only. On an IPv4-only network `supabase db push --linked` times out while `supabase db query --linked` still works (HTTPS). Hosted applies from this network must use the IPv4 **session** pooler, not `--linked`, not `migrate:clean`, and not transaction-mode port `6543`.
+
+Required URL shape:
+
+`postgres://postgres.<linked-project-ref>:<percent-encoded-password>@aws-0-<region>.pooler.supabase.com:5432/postgres`
+
+- Host must be exactly `aws-0-<region>.pooler.supabase.com` (no extra subdomains).
+- Port `5432` must be present in the URL. An omitted port is rejected.
+- Username must be `postgres.<linked-project-ref>` from `supabase/.temp/project-ref` after `supabase link`. Do not supply a different project ref through the environment.
+- Reserved password characters (`@`, `:`, `/`, `?`, `#`, `%`, and similar) must be percent-encoded. Do not store this URL in the repository.
+- Do not add query parameters such as `pgbouncer=true`. Session mode is selected by port `5432`; those parameters are incompatible with session-level `SET ROLE` / `RESET ROLE`.
+- Never `service_role`. Never print, log, or commit the URL, username/password pair, or password.
+
+`pnpm hosted:db-push` validates that shape, checks IPv4 reachability to port `5432`, then runs exactly `supabase db push --db-url <validated URL>` once, with an argv array and the shell disabled. It does not pass `--linked`, `--include-all`, `--include-roles`, or `--include-seed`. Captured CLI output is redacted; spawn failures are reported without argv or credentials.
+
+Passing `--db-url` still exposes the URI on the local process list while the CLI runs. That residual exposure is unavoidable with this CLI interface. Unset the variable after apply.
+
+PowerShell (process environment only):
+
+```powershell
+$env:DATABASE_URL_MIGRATIONS = "<percent-encoded session-pooler URI>"
+pnpm hosted:db-push
+Remove-Item Env:DATABASE_URL_MIGRATIONS
+```
+
+Local `pnpm migrate:clean` / `pnpm test:db` still use embedded PostgreSQL when `DATABASE_URL_MIGRATIONS` is unset.
+
 ## Schemas
 
 | Schema | Contents | Client access |

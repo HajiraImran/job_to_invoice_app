@@ -1,0 +1,410 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  applyHostedMigrations,
+  assertSafeHostedMigrationUrl,
+  hostedDbPushArgv,
+  isExecutedAsMain,
+  readLinkedProjectRef,
+  redactCapturedOutput,
+  runHostedDbPush,
+  supabaseCliExecutable,
+} from "./hosted-db-push.mjs";
+
+const LINKED_REF = "abcdefghijklmnopabcd";
+const OTHER_REF = "zzzzzzzzzzzzzzzzzzzz";
+const HOST = "aws-0-us-west-2.pooler.supabase.com";
+const PASSWORD = "unit-test-password";
+const ENCODED_SPECIAL = "p%40ss%3Aw%2Frd%21-ok";
+const DECODED_SPECIAL = "p@ss:w/rd!-ok";
+
+function sessionUrl({
+  protocol = "postgres",
+  user = `postgres.${LINKED_REF}`,
+  password = PASSWORD,
+  host = HOST,
+  port = ":5432",
+  database = "/postgres",
+  suffix = "",
+} = {}) {
+  return `${protocol}://${user}:${password}@${host}${port}${database}${suffix}`;
+}
+
+function writeRefFile(contents) {
+  const dir = mkdtempSync(path.join(tmpdir(), "jti-ref-"));
+  const filePath = path.join(dir, "project-ref");
+  if (contents !== null) {
+    writeFileSync(filePath, contents);
+  }
+  return filePath;
+}
+
+function captureWriters() {
+  const stdout = [];
+  const stderr = [];
+  return {
+    stdout: { write(chunk) { stdout.push(String(chunk)); } },
+    stderr: { write(chunk) { stderr.push(String(chunk)); } },
+    stdoutText: () => stdout.join(""),
+    stderrText: () => stderr.join(""),
+  };
+}
+
+test("rejects missing url", () => {
+  assert.throws(() => assertSafeHostedMigrationUrl(undefined, LINKED_REF), /required/);
+  assert.throws(() => assertSafeHostedMigrationUrl("", LINKED_REF), /required/);
+});
+
+test("rejects missing and empty linked project-ref file", () => {
+  const missing = path.join(mkdtempSync(path.join(tmpdir(), "jti-ref-")), "project-ref");
+  assert.throws(() => readLinkedProjectRef(missing), /missing or unreadable/);
+  assert.throws(() => readLinkedProjectRef(writeRefFile("")), /empty/);
+  assert.throws(() => readLinkedProjectRef(writeRefFile("   \n")), /empty/);
+});
+
+test("rejects malformed linked project-ref", () => {
+  assert.throws(() => readLinkedProjectRef(writeRefFile("not-a-ref")), /malformed/);
+  assert.throws(() => readLinkedProjectRef(writeRefFile("ABCDEFGHIJABCDEFGHIJ")), /malformed/);
+  assert.throws(() => readLinkedProjectRef(writeRefFile("abcdefghijklmnopabc")), /malformed/);
+  assert.throws(() => readLinkedProjectRef(writeRefFile(`${LINKED_REF}x`)), /malformed/);
+});
+
+test("reads a valid linked project-ref", () => {
+  assert.equal(readLinkedProjectRef(writeRefFile(`\n${LINKED_REF}\n`)), LINKED_REF);
+});
+
+test("accepts a URL that matches the linked project-ref", () => {
+  const parsed = assertSafeHostedMigrationUrl(sessionUrl(), LINKED_REF);
+  assert.equal(parsed.port, "5432");
+  assert.equal(parsed.hostname, HOST);
+  assert.equal(parsed.username, `postgres.${LINKED_REF}`);
+});
+
+test("accepts postgresql:// and percent-encoded passwords", () => {
+  const parsed = assertSafeHostedMigrationUrl(
+    sessionUrl({ protocol: "postgresql", password: ENCODED_SPECIAL }),
+    LINKED_REF,
+  );
+  assert.equal(parsed.password, ENCODED_SPECIAL);
+  assert.equal(decodeURIComponent(parsed.password), DECODED_SPECIAL);
+});
+
+test("rejects a username for a different project ref", () => {
+  assert.throws(
+    () => assertSafeHostedMigrationUrl(sessionUrl({ user: `postgres.${OTHER_REF}` }), LINKED_REF),
+    /linked-project-ref/,
+  );
+});
+
+test("rejects invalid usernames", () => {
+  assert.throws(
+    () => assertSafeHostedMigrationUrl(sessionUrl({ user: "postgres" }), LINKED_REF),
+    /linked-project-ref/,
+  );
+  assert.throws(
+    () => assertSafeHostedMigrationUrl(sessionUrl({ user: "postgres." }), LINKED_REF),
+    /linked-project-ref/,
+  );
+  assert.throws(
+    () => assertSafeHostedMigrationUrl(sessionUrl({ user: `api.${LINKED_REF}` }), LINKED_REF),
+    /linked-project-ref/,
+  );
+});
+
+test("does not accept an environment project ref that disagrees with the linked file", async () => {
+  const previous = process.env.SUPABASE_PROJECT_REF;
+  process.env.SUPABASE_PROJECT_REF = OTHER_REF;
+  try {
+    const captured = captureWriters();
+    let spawned = 0;
+    const status = await applyHostedMigrations({
+      env: { DATABASE_URL_MIGRATIONS: sessionUrl(), SUPABASE_PROJECT_REF: OTHER_REF },
+      projectRefPath: writeRefFile(LINKED_REF),
+      checkReachable: async () => {},
+      spawn: () => {
+        spawned += 1;
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      stdout: captured.stdout,
+      stderr: captured.stderr,
+    });
+    assert.equal(status, 0);
+    assert.equal(spawned, 1);
+    await assert.rejects(
+      () =>
+        applyHostedMigrations({
+          env: {
+            DATABASE_URL_MIGRATIONS: sessionUrl({ user: `postgres.${OTHER_REF}` }),
+            SUPABASE_PROJECT_REF: OTHER_REF,
+          },
+          projectRefPath: writeRefFile(LINKED_REF),
+          checkReachable: async () => {},
+          spawn: () => {
+            throw new Error("spawn must not run");
+          },
+        }),
+      /linked-project-ref/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.SUPABASE_PROJECT_REF;
+    } else {
+      process.env.SUPABASE_PROJECT_REF = previous;
+    }
+  }
+});
+
+test("rejects the direct database host", () => {
+  assert.throws(
+    () =>
+      assertSafeHostedMigrationUrl(
+        sessionUrl({ host: `db.${LINKED_REF}.supabase.co` }),
+        LINKED_REF,
+      ),
+    /IPv6-only/,
+  );
+});
+
+test("rejects an omitted port", () => {
+  assert.throws(
+    () => assertSafeHostedMigrationUrl(sessionUrl({ port: "" }), LINKED_REF),
+    /explicit/,
+  );
+});
+
+test("rejects transaction pooler port 6543", () => {
+  assert.throws(
+    () => assertSafeHostedMigrationUrl(sessionUrl({ port: ":6543" }), LINKED_REF),
+    /6543/,
+  );
+});
+
+test("rejects invalid and malicious pooler hosts", () => {
+  for (const host of [
+    "evil.pooler.supabase.com",
+    "aws-0-us-west-2.evil.pooler.supabase.com",
+    "aws-0-us-west-2.pooler.supabase.com.evil.com",
+    "pooler.supabase.com",
+    "localhost",
+    "127.0.0.1",
+    "example.com",
+  ]) {
+    assert.throws(
+      () => assertSafeHostedMigrationUrl(sessionUrl({ host }), LINKED_REF),
+      /aws-0-<region>\.pooler\.supabase\.com/,
+    );
+  }
+});
+
+function thrownMessage(fn) {
+  try {
+    fn();
+  } catch (error) {
+    assert.ok(error instanceof Error);
+    return error.message;
+  }
+  assert.fail("expected an error");
+}
+
+test("rejects a privileged role", () => {
+  const role = ["service", "role"].join("_");
+  const message = thrownMessage(() =>
+    assertSafeHostedMigrationUrl(sessionUrl({ user: role }), LINKED_REF),
+  );
+  assert.match(message, /privileged/);
+  assert.doesNotMatch(message, new RegExp(PASSWORD));
+});
+
+test("rejects an empty password", () => {
+  assert.throws(
+    () =>
+      assertSafeHostedMigrationUrl(
+        `postgres://postgres.${LINKED_REF}:@${HOST}:5432/postgres`,
+        LINKED_REF,
+      ),
+    /password/,
+  );
+  assert.throws(
+    () =>
+      assertSafeHostedMigrationUrl(
+        `postgres://postgres.${LINKED_REF}@${HOST}:5432/postgres`,
+        LINKED_REF,
+      ),
+    /password/,
+  );
+});
+
+test("rejects query parameters incompatible with session SET ROLE", () => {
+  assert.throws(
+    () => assertSafeHostedMigrationUrl(sessionUrl({ suffix: "?pgbouncer=true" }), LINKED_REF),
+    /query parameters/,
+  );
+  assert.throws(
+    () => assertSafeHostedMigrationUrl(sessionUrl({ suffix: "?sslmode=require" }), LINKED_REF),
+    /query parameters/,
+  );
+});
+
+test("command-injection strings remain one inert argv value", () => {
+  const injection = `${PASSWORD}; calc.exe & echo`;
+  const url = sessionUrl({ password: encodeURIComponent(injection) });
+  assertSafeHostedMigrationUrl(url, LINKED_REF);
+  const argv = hostedDbPushArgv(url);
+  assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+  let spawned = 0;
+  const captured = captureWriters();
+  const status = runHostedDbPush(url, {
+    spawn: (bin, receivedArgv, options) => {
+      spawned += 1;
+      assert.equal(receivedArgv.length, 4);
+      assert.equal(receivedArgv[3], url);
+      assert.equal(options.shell, false);
+      return { status: 0, stdout: "", stderr: "" };
+    },
+    stdout: captured.stdout,
+    stderr: captured.stderr,
+  });
+  assert.equal(status, 0);
+  assert.equal(spawned, 1);
+});
+
+test("redacts credentials from stdout, stderr, and thrown errors", () => {
+  const url = sessionUrl({ password: ENCODED_SPECIAL });
+  const captured = captureWriters();
+  runHostedDbPush(url, {
+    spawn: () => ({
+      status: 1,
+      stdout: `connected ${url} password=${DECODED_SPECIAL}\n`,
+      stderr: `postgresql://postgres.${LINKED_REF}:${ENCODED_SPECIAL}@${HOST}:5432/postgres boom\n`,
+    }),
+    stdout: captured.stdout,
+    stderr: captured.stderr,
+  });
+  const combined = `${captured.stdoutText()}${captured.stderrText()}`;
+  assert.doesNotMatch(combined, new RegExp(PASSWORD));
+  assert.doesNotMatch(combined, /p%40ss/);
+  assert.doesNotMatch(combined, /p@ss:w\/rd/);
+  assert.doesNotMatch(combined, /postgres(ql)?:\/\//i);
+
+  const redacted = redactCapturedOutput(`using ${url} and ${DECODED_SPECIAL}`, url);
+  assert.doesNotMatch(redacted, /p%40ss/);
+  assert.doesNotMatch(redacted, /p@ss:w\/rd/);
+
+  const message = thrownMessage(() =>
+    assertSafeHostedMigrationUrl(sessionUrl({ password: PASSWORD, host: "evil.example" }), LINKED_REF),
+  );
+  assert.match(message, /pooler/);
+  assert.doesNotMatch(message, new RegExp(PASSWORD));
+  assert.doesNotMatch(message, /postgres:\/\//);
+});
+
+test("omits output when credentials cannot be redacted safely", () => {
+  const shortUrl = sessionUrl({ password: "short" });
+  const redacted = redactCapturedOutput(`leak ${shortUrl}`, shortUrl);
+  assert.equal(
+    redacted,
+    "hosted apply output omitted because credentials cannot be redacted safely",
+  );
+});
+
+test("selects Windows and non-Windows CLI executables", () => {
+  assert.equal(supabaseCliExecutable("win32"), "supabase.cmd");
+  assert.equal(supabaseCliExecutable("linux"), "supabase");
+  assert.equal(supabaseCliExecutable("darwin"), "supabase");
+});
+
+test("main guard matches resolved, relative, and Windows path forms", () => {
+  const modulePath = fileURLToPath(new URL("./hosted-db-push.mjs", import.meta.url));
+  const meta = pathToFileURL(modulePath).href;
+  const relativePath = path.relative(process.cwd(), modulePath);
+  assert.equal(isExecutedAsMain(meta, modulePath), true);
+  assert.equal(isExecutedAsMain(meta, relativePath), true);
+  assert.equal(isExecutedAsMain(meta, modulePath.replaceAll("\\", "/"), "win32"), true);
+  assert.equal(isExecutedAsMain(meta, modulePath.toUpperCase(), "win32"), true);
+  assert.equal(isExecutedAsMain(meta, pathToFileURL(modulePath).href), true);
+  assert.equal(isExecutedAsMain(meta, fileURLToPath(import.meta.url)), false);
+  assert.equal(isExecutedAsMain(meta, undefined), false);
+  assert.equal(isExecutedAsMain(meta, ""), false);
+});
+
+test("spawns exactly once with the validated URL and does not retry", async () => {
+  const url = sessionUrl();
+  const captured = captureWriters();
+  let spawned = 0;
+  const status = await applyHostedMigrations({
+    env: { DATABASE_URL_MIGRATIONS: url },
+    projectRefPath: writeRefFile(LINKED_REF),
+    checkReachable: async (hostname) => {
+      assert.equal(hostname, HOST);
+    },
+    spawn: (bin, argv, options) => {
+      spawned += 1;
+      assert.equal(bin, supabaseCliExecutable());
+      assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+      assert.equal(options.shell, false);
+      assert.doesNotMatch(argv.join(" "), /include-all|include-roles|include-seed|--linked/);
+      return { status: 1, stdout: "failed once", stderr: "" };
+    },
+    stdout: captured.stdout,
+    stderr: captured.stderr,
+  });
+  assert.equal(status, 1);
+  assert.equal(spawned, 1);
+});
+
+test("does not spawn when validation fails and reports spawn failures without argv", async () => {
+  let spawned = 0;
+  const spawn = () => {
+    spawned += 1;
+    return { status: 0, stdout: "", stderr: "" };
+  };
+  await assert.rejects(
+    () =>
+      applyHostedMigrations({
+        env: {},
+        projectRefPath: writeRefFile(LINKED_REF),
+        spawn,
+        checkReachable: async () => {},
+      }),
+    /required/,
+  );
+  const message = thrownMessage(() =>
+    runHostedDbPush(sessionUrl(), {
+      spawn: () => {
+        spawned += 1;
+        const failure = new Error("ENOENT");
+        failure.spawnargs = ["supabase.cmd", "db", "push", "--db-url", sessionUrl()];
+        return { error: failure, status: null, stdout: "", stderr: "" };
+      },
+    }),
+  );
+  assert.match(message, /Failed to start the Supabase CLI/);
+  assert.doesNotMatch(message, /--db-url/);
+  assert.doesNotMatch(message, new RegExp(PASSWORD));
+  assert.doesNotMatch(message, /postgres:\/\//);
+  assert.equal(spawned, 1);
+});
+
+test("does not spawn when the pooler is unreachable", async () => {
+  let spawned = 0;
+  await assert.rejects(
+    () =>
+      applyHostedMigrations({
+        env: { DATABASE_URL_MIGRATIONS: sessionUrl() },
+        projectRefPath: writeRefFile(LINKED_REF),
+        checkReachable: async () => {
+          throw new Error("D-012: IPv4 session pooler port 5432 is unreachable");
+        },
+        spawn: () => {
+          spawned += 1;
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      }),
+    /unreachable/,
+  );
+  assert.equal(spawned, 0);
+});

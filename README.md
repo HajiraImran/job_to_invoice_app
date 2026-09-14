@@ -27,6 +27,14 @@ pnpm secret-scan
 
 `pnpm migrate:clean` applies `supabase/migrations` to an empty PostgreSQL database using `DATABASE_URL_MIGRATIONS`. `pnpm test:db` reapplies those migrations and runs tenant isolation tests. Do not use a `service_role` connection string. If `DATABASE_URL_MIGRATIONS` is unset, the scripts start a project-local PostgreSQL 16 cluster and stop it when they finish.
 
+Hosted `db push --linked` dials an IPv6-only Postgres endpoint. From an IPv4-only network, after `supabase link`, set a process-local session-pooler URL and run `pnpm hosted:db-push` (D-012). Percent-encode reserved password characters. Never put the URL in repository files. Never print it. `--db-url` is still visible on the local process list while the CLI runs.
+
+```powershell
+$env:DATABASE_URL_MIGRATIONS = "<percent-encoded session-pooler URI>"
+pnpm hosted:db-push
+Remove-Item Env:DATABASE_URL_MIGRATIONS
+```
+
 Portal and admin Next.js builds do not require production credentials. EAS production signing credentials are not stored in this repository.
 
 ## Apps

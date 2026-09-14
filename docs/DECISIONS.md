@@ -249,3 +249,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | No for hosted CLI compatibility |
 | Escalation category | architecture |
 
+### D-012 — Hosted apply over IPv4 session pooler
+
+| Field | Value |
+| --- | --- |
+| ID | D-012 |
+| Date | 2026-09-14 |
+| Status | Resolved |
+| Decision | Hosted `db.<project-ref>.supabase.co:5432` is IPv6-only. `supabase db query --linked` still works over HTTPS; `supabase db push --linked` dials the IPv6 direct host and times out (`LegacyDbConnectError`). Hosted applies from IPv4-only networks must use Supavisor **session** mode: exact host `aws-0-<region>.pooler.supabase.com`, explicit port `5432`, user `postgres.<linked-project-ref>` from `supabase/.temp/project-ref`. Do not take the project ref from the environment. Do not use extra pooler subdomains, omitted port, port `6543`, `--linked`, `--include-all`, `--include-roles`, `--include-seed`, or `migrate:clean`. Do not use `service_role`. Do not reapply `0001`. Percent-encode reserved password characters. `pnpm hosted:db-push` validates that URL, spawns the CLI once with argv and the shell disabled, redacts captured output, and does not print credentials. `--db-url` remains visible on the local process list while the CLI runs. |
+| Reason | Direct host `db.fhgacxkpgjdcjuvanesv.supabase.co` resolves only to AAAA. TCP 5432 to it fails. The us-west-2 session pooler resolves to IPv4 and accepts TCP 5432 and 6543. Linked `db push` of `0002`–`0004` timed out during connect after `0001` was already recorded. |
+| Evidence | DNS AAAA-only for `db.fhgacxkpgjdcjuvanesv.supabase.co`; TCP 5432 false to that host; TCP 5432 true to `aws-0-us-west-2.pooler.supabase.com`; `LegacyDbConnectError` / `PgClient: Connection timed out`; `scripts/hosted-db-push.mjs`; `pnpm test:hosted-push` |
+| Owner | Engineering lead |
+| PRD implication | Hosted `0002`–`0004` remain unverified until an authorized apply through the session pooler succeeds. |
+| Impacted requirement IDs | ARC02, DB01, SREF07 |
+| Impacted test IDs | `pnpm test:hosted-push` |
+| Migration implications | Do not change `0001`. Do not repair history. Next authorized hosted apply must use a process-local `DATABASE_URL_MIGRATIONS` session-pooler URL via `pnpm hosted:db-push`, not `db push --linked` from an IPv4-only network. |
+| Reversible | No for IPv4-only networks without the IPv4 add-on |
+| Escalation category | architecture |
+

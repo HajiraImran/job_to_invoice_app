@@ -17,6 +17,17 @@ These are the only Auth values that may ship in the iPhone app:
 - `AUTH_ISSUER` — `https://<project-ref>.supabase.co/auth/v1`
 - `AUTH_AUDIENCE` — `authenticated`
 - `DATABASE_URL_API` — login role that can `SET ROLE api_app`. Never `service_role`.
+- `DATABASE_URL_MIGRATIONS` — local embedded Postgres, or for hosted apply from an IPv4-only network the **session** pooler URL (`postgres://postgres.<linked-ref>:<percent-encoded-password>@aws-0-<region>.pooler.supabase.com:5432/postgres`). Username must match `supabase/.temp/project-ref`. Port `5432` must be explicit. Never the IPv6-only `db.<ref>.supabase.co` host. Never port `6543`. Never query parameters such as `pgbouncer=true`. Never `service_role` (D-012). Reserved password characters must be percent-encoded. Do not put this URL in repository files.
+
+Hosted apply from PowerShell, process environment only:
+
+```powershell
+$env:DATABASE_URL_MIGRATIONS = "<percent-encoded session-pooler URI>"
+pnpm hosted:db-push
+Remove-Item Env:DATABASE_URL_MIGRATIONS
+```
+
+`pnpm hosted:db-push` does not print the URL. Passing `--db-url` still exposes it on the local process list while the CLI runs.
 
 The API verifies owner access tokens with the project JWKS:
 

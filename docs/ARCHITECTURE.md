@@ -85,6 +85,8 @@ Rules:
 
 Migrations after `0001` may `SET ROLE migrator` for application DDL so objects stay owned by `migrator`. They must `RESET ROLE` as the last executable statement before returning to the Supabase CLI (D-011). Failure to reset leaves the session as `migrator`, which cannot insert `supabase_migrations.schema_migrations`, so history is not recorded and the migration rolls back.
 
+Hosted `db.<ref>.supabase.co` is IPv6-only. IPv4-only networks must apply through the exact session pooler host `aws-0-<region>.pooler.supabase.com` on explicit port 5432, with username `postgres.<linked-project-ref>` from `supabase/.temp/project-ref`. Do not use `db push --linked`, extra pooler subdomains, an omitted port, or transaction pooler port 6543 (D-012).
+
 ## Request authorization (ARC03)
 
 Normative tenant-context algorithm. Session-level `SET` is forbidden. GUC must never be set before `BEGIN` or in middleware that runs on a pooled client that is not yet in a transaction.
