@@ -32,7 +32,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | MET07 | CAC = media / non-refunded new paying; unknown separate; $40–50 hypothesis | ops | — | spend import | — | — | Report | ANA03 | PENDING | Business hypothesis |
 | MET08 | Monthly renewal by cohort; weekly activity; annual buy ≠ annual retention | analytics | S21 | reports | entitlement_snapshots | purchase_verified | Cohort job | — | PENDING | |
 | AUTHZ01 | Auth from verified identity; workspace ID not auth; cross-tenant 404; portal ≠ owner; staff MFA | apps/api | all | JWT + RLS | memberships staff_users | — | QA03 QA59 | ARC02 | PENDING | |
-| INV01 | Integer cents; qty 3-decimal string; no binary float; server authoritative; shared package | packages/domain | S10 S11 | calculate | document_lines | — | F01–F12 QA30 | FIN01 | PENDING | |
+| INV01 | Integer cents; qty 3-decimal string; no binary float; server authoritative; shared package | packages/domain | S10 S11 | calculate | document_lines | — | packages/domain fixtures.test.ts F01–F12; 40 passing domain tests | FIN01 | VERIFIED | Shared BigInt engine; mobile/API/PDF must import this package |
 | INV02 | Accepted commercial facts immutable; corrections via new version/reversal/credit | apps/api | S08 | triggers | documents ledger_entries | — | QA26 | DB04 | PENDING | |
 | INV03 | Canonical snapshot SHA-256; separate PDF digest; integrity not legal ID | packages/domain apps/worker | S11 S26 | hash | documents.snapshot_sha256 artifacts | — | QA24 QA30 | QUO02A | PENDING | |
 | INV04 | At most one pending approval per job; lock; one terminal winner | apps/api | S12 | TX01 TX02 | approval_requests | — | QA16 QA20 | DB03 | PENDING | |
@@ -83,7 +83,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | S28 | Support console MFA grant expiry audit | apps/admin | S28 | admin | staff_users staff_access_grants | — | QA59 QA60 | SEC05 | PENDING | |
 | VAL01 | Name/email/phone lengths; no enumeration rewrite | packages/domain apps/api | S04 S07 | validation | customers workspaces | — | QA02 | — | PENDING | |
 | VAL02 | US address; distinct billing/site; TZ confirm; MM/DD/YYYY | packages/domain | S04 S06 | validation | address_json | — | QA64 | — | PENDING | |
-| VAL03 | Line limits; USD only; quote needs one positive net | packages/domain | S10 | validation | document_lines | — | F01 VAL | — | PENDING | |
+| VAL03 | Line limits; USD only; quote needs one positive net | packages/domain | S10 | validation | document_lines | — | F01 VAL boundaries.test.ts | — | PENDING | Qty/price/discount/100-line/total/positive-net calc limits verified; description/unit validation still pending |
 | VAL04 | Notes/terms/reason/name; plain text; client+server | packages/domain | S09 S26 | validation | snapshots | — | QA24 | — | PENDING | |
 | ACC01 | Supabase OTP 6-digit 10m 60s 5 fails; no second code store; secure tokens | apps/mobile apps/api | S02 S03 | Supabase Auth | app_users | signup_verified | QA01 QA02 | SREF06 | PENDING | |
 | ACC02 | JWT verify; refresh once; 7-day offline read; sign-out unsynced warn | apps/mobile apps/api | S02 S05 | JWT | app_users | — | QA05 ACC | SREF06 | PENDING | |
@@ -100,7 +100,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | QUO03 | Recipient change = withdraw+replace; signer immutable | apps/api | S12 | replace | approval_requests | — | QA17 | APR03 | PENDING | |
 | CHG01 | Accepted quote, no invoice; one pending; rebase; invoice blocks drafts | apps/api | S13 S15 | changes | document_drafts | change_started | QA31 | — | PENDING | |
 | CHG02 | Positive lines / positive net credits; mixed OK; reason if zero-value scope change | apps/api | S13 S14 | validation | document_lines | — | QA27 | — | PENDING | |
-| CHG03 | Source remaining caps; recheck in txn | packages/domain apps/api | S14 | TX02 | scope_entries | — | QA28 F06 | FIN03 | PENDING | |
+| CHG03 | Source remaining caps; recheck in txn | packages/domain apps/api | S14 | TX02 | scope_entries | — | QA28 F06 fixtures.test.ts | FIN03 | PENDING | Domain cap CREDIT_EXCEEDS_SOURCE verified; TX02 lock recheck still pending |
 | CHG04 | CO-000001; previous/change/new totals; decline applies nothing | apps/api | S13 S26 | TX02 | documents | — | QA27 | — | PENDING | |
 | CHG05 | No silent rollback; reverse via new reduction/addition | apps/api | S13 S14 | — | scope_entries | — | QA27 | SUB05 | PENDING | |
 | APR01 | 256-bit token hashed; fragment URL; purge payload 24h; no-store | apps/portal apps/api | S25 | exchange | approval_requests | — | QA63 | SEC01 | PENDING | |
@@ -112,31 +112,31 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | APR06 | Lock predicates; one decision; ALREADY_DECIDED; 409 race | apps/api | S26 | TX02 | approval_decisions | — | QA20 QA21 | — | PENDING | |
 | APR07 | Decline comment 1000; no chat/price edit | apps/portal | S26 | TX02 | approval_decisions.comment | — | QA25 | — | PENDING | |
 | APR08 | Owner+customer emails; failed receipt does not undo | apps/worker | S12 S27 | outbox | delivery_attempts | request_delivery_result | QA34 | EMAIL04 EMAIL05 | PENDING | |
-| FIN01 | q*p half-up − d; tax half-up net*r/10000; no inclusive/compound | packages/domain | S10 | calculate | — | — | F01–F03 | INV01 | PENDING | |
-| FIN02 | Operator rates; default 0 with confirm copy; group by rate | apps/mobile | S04 S10 | — | workspaces.default_tax_bp | — | FIN02 | DEC09 | PENDING | |
-| FIN03 | Cumulative tax reduction formula; cap C+x≤N | packages/domain | S14 S18 | calculate | scope_entries | — | F05 F06 | — | PENDING | |
-| FIN04 | Invoice lines from accepted residual; credits same method; three totals | packages/domain | S15 S18 | TX03 TX04 | document_lines | — | F08 F12 | — | PENDING | |
-| FIN05 | Balance = invoice − credits − pays + refunds; never max(0) | packages/domain | S16 | TX04 | ledger_entries | — | F07–F11 | — | PENDING | |
-| F01 | Basic tax 25980 | packages/domain | S10 | calculate | — | — | QA30 | FIN01 | PENDING | |
-| F02 | Qty rounding 333 | packages/domain | S10 | calculate | — | — | QA30 | FIN01 | PENDING | |
-| F03 | Half cent tax 1 | packages/domain | S10 | calculate | — | — | QA30 | FIN01 | PENDING | |
-| F04 | Addition 10825 / 36805 | packages/domain | S13 | calculate | — | — | QA30 | CHG | PENDING | |
-| F05 | Sequential tax 3,2,3 | packages/domain | S14 | calculate | — | — | QA29 | FIN03 | PENDING | |
-| F06 | Over reduction 422 | apps/api | S14 | TX02 | — | — | QA29 | CREDIT_EXCEEDS_SOURCE | PENDING | |
-| F07 | Partial pay 6000 | packages/domain | S16 | TX04 | — | — | QA37 | FIN05 | PENDING | |
-| F08 | Credit after pay -2000 | packages/domain | S18 | TX04 | — | — | QA38 | FIN05 | PENDING | |
-| F09 | Refund settles | packages/domain | S17 | TX04 | — | — | QA38 | FIN05 | PENDING | |
-| F10 | Overpay refund_due | packages/domain | S17 | TX04 | — | — | QA37 | FIN05 | PENDING | |
-| F11 | Reversal no dup refund | apps/api | S16 | TX04 | ledger_entries | — | QA40 | BIL07 | PENDING | |
-| F12 | Full reduce zero invoice | apps/api | S15 | TX03 | documents | — | QA36 | BIL01 | PENDING | |
+| FIN01 | q*p half-up − d; tax half-up net*r/10000; no inclusive/compound | packages/domain | S10 | calculate | — | — | fixtures.test.ts F01–F03 | INV01 | VERIFIED | BigInt half-up; no Math.round |
+| FIN02 | Operator rates; default 0 with confirm copy; group by rate | apps/mobile | S04 S10 | — | workspaces.default_tax_bp | — | FIN02 | DEC09 | PENDING | Domain groups tax_by_rate; setup copy/UI still pending |
+| FIN03 | Cumulative tax reduction formula; cap C+x≤N | packages/domain | S14 S18 | calculate | scope_entries | — | fixtures.test.ts F05 F06 | — | VERIFIED | |
+| FIN04 | Invoice lines from accepted residual; credits same method; three totals | packages/domain | S15 S18 | TX03 TX04 | document_lines | — | fixtures.test.ts F08 F12 | — | VERIFIED | Residual snapshot; TX03 issue still pending |
+| FIN05 | Balance = invoice − credits − pays + refunds; never max(0) | packages/domain | S16 | TX04 | ledger_entries | — | fixtures.test.ts F07–F11 | — | VERIFIED | Signed balance; TX04 persistence still pending |
+| F01 | Basic tax 25980 | packages/domain | S10 | calculate | — | — | fixtures.test.ts F01 | FIN01 | VERIFIED | |
+| F02 | Qty rounding 333 | packages/domain | S10 | calculate | — | — | fixtures.test.ts F02 | FIN01 | VERIFIED | |
+| F03 | Half cent tax 1 | packages/domain | S10 | calculate | — | — | fixtures.test.ts F03 | FIN01 | VERIFIED | |
+| F04 | Addition 10825 / 36805 | packages/domain | S13 | calculate | — | — | fixtures.test.ts F04 | CHG | VERIFIED | |
+| F05 | Sequential tax 3,2,3 | packages/domain | S14 | calculate | — | — | fixtures.test.ts F05 | FIN03 | VERIFIED | |
+| F06 | Over reduction 422 | packages/domain apps/api | S14 | TX02 | — | — | fixtures.test.ts F06 | CREDIT_EXCEEDS_SOURCE | VERIFIED | Domain throws CREDIT_EXCEEDS_SOURCE; HTTP 422 mapping still apps/api |
+| F07 | Partial pay 6000 | packages/domain | S16 | TX04 | — | — | fixtures.test.ts F07 | FIN05 | VERIFIED | |
+| F08 | Credit after pay -2000 | packages/domain | S18 | TX04 | — | — | fixtures.test.ts F08 | FIN05 | VERIFIED | |
+| F09 | Refund settles | packages/domain | S17 | TX04 | — | — | fixtures.test.ts F09 | FIN05 | VERIFIED | |
+| F10 | Overpay refund_due | packages/domain | S17 | TX04 | — | — | fixtures.test.ts F10 | FIN05 | VERIFIED | |
+| F11 | Reversal no dup refund | packages/domain apps/api | S16 | TX04 | ledger_entries | — | fixtures.test.ts F11 | BIL07 | VERIFIED | Domain reversal; ledger persistence still apps/api |
+| F12 | Full reduce zero invoice | packages/domain apps/api | S15 | TX03 | documents | — | fixtures.test.ts F12 | BIL01 | VERIFIED | Zero invoice settled without payment; TX03 issue still apps/api |
 | BIL01 | Issue rules; due options; deposit date after issue OK | apps/api | S15 | TX03 | documents | invoice_issued | QA31 | — | PENDING | |
 | BIL02 | INV number+freeze one txn; PDF after; no second active | apps/api apps/worker | S15 S16 | TX03 | documents jobs | — | QA33 QA43 | INV06 | PENDING | |
 | BIL03 | Void unpaid only; replacement new number | apps/api | S16 | void | documents | — | QA42 QA43 | — | PENDING | |
 | BIL04 | CN-000001; caps; cannot delete issued credit | apps/api | S18 | TX04 | credit_allocations | — | QA38 | FIN03 | PENDING | |
 | BIL05 | Payment fields; overpay confirm; Recorded by business | apps/api | S17 | TX04 | ledger_entries | payment_recorded | QA37 | DEC05 | PENDING | |
-| BIL06 | Refund when negative; oldest-first allocations | apps/api | S17 | TX04 | ledger_refund_allocations | — | QA39 | — | PENDING | |
-| BIL07 | One reversal; block if dependent refunds; no cosmetic void | apps/api | S16 | TX04 | ledger_entries | — | QA40 QA41 | — | PENDING | |
-| BIL08 | Derived states; no late fees; credit-to-zero ≠ Paid | apps/api | S16 | derive | — | — | QA38 | INV07 | PENDING | |
+| BIL06 | Refund when negative; oldest-first allocations | apps/api | S17 | TX04 | ledger_refund_allocations | — | QA39 boundaries.test.ts | — | PENDING | Domain allocation/caps verified; API/UI still pending |
+| BIL07 | One reversal; block if dependent refunds; no cosmetic void | apps/api | S16 | TX04 | ledger_entries | — | QA40 QA41 fixtures.test.ts F11 | — | PENDING | Domain reversal rules verified; API/UI still pending |
+| BIL08 | Derived states; no late fees; credit-to-zero ≠ Paid | apps/api | S16 | derive | — | — | QA38 fixtures.test.ts | INV07 | PENDING | Domain deriveLedger verified; API/UI still pending |
 | SUB01 | Entitlement pro; StoreKit prices; monthly default; no weekly/lifetime | apps/mobile | S21 | StoreKit | entitlement_snapshots | paywall_viewed | QA45 | SREF01 | PENDING | IDs provisional |
 | SUB02 | 3 lifetime free; slot on first publish/direct issue; rollback if precommit fail | apps/api | S11 S21 | TX01 | job_allowances | document_published | QA10 | INV09 | PENDING | |
 | SUB03 | 14-day app-managed trial; explicit start; 20 jobs; never reset | apps/api | S21 | trial | job_allowances | trial_started | QA11 QA12 | — | PENDING | Not Apple intro offer |
