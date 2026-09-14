@@ -7,6 +7,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyHostedMigrations,
   assertSafeHostedMigrationUrl,
+  classifyHostedCliOutput,
+  extractPendingMigrationBasenames,
+  formatSanitizedReport,
   hostedCliLaunch,
   hostedDbPushArgv,
   isExecutedAsMain,
@@ -275,6 +278,7 @@ test("command-injection strings remain one inert argv value", () => {
   assertSafeHostedMigrationUrl(url, LINKED_REF);
   const argv = hostedDbPushArgv(url);
   assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+  assert.ok(!argv.includes("--dry-run"));
   const jsEntry = writeJsEntry();
   let spawned = 0;
   const captured = captureWriters();
@@ -287,6 +291,7 @@ test("command-injection strings remain one inert argv value", () => {
       assert.equal(bin, process.execPath);
       assert.equal(receivedArgv.length, 5);
       assert.equal(receivedArgv[4], url);
+      assert.ok(!receivedArgv.includes("--dry-run"));
       assert.equal(options.shell, false);
       return { status: 0, stdout: "", stderr: "" };
     },
@@ -311,6 +316,9 @@ test("redacts credentials from stdout, stderr, and thrown errors", () => {
     stderr: captured.stderr,
   });
   const combined = `${captured.stdoutText()}${captured.stderrText()}`;
+  assert.match(combined, /ok: false/);
+  assert.doesNotMatch(combined, /connected /);
+  assert.doesNotMatch(combined, /boom/);
   assert.doesNotMatch(combined, new RegExp(PASSWORD));
   assert.doesNotMatch(combined, /p%40ss/);
   assert.doesNotMatch(combined, /p@ss:w\/rd/);
@@ -455,7 +463,7 @@ test("spawns exactly once with the validated URL and does not retry", async () =
       assert.equal(bin, "supabase");
       assert.deepEqual(argv, ["db", "push", "--db-url", url]);
       assert.equal(options.shell, false);
-      assert.doesNotMatch(argv.join(" "), /include-all|include-roles|include-seed|--linked/);
+      assert.doesNotMatch(argv.join(" "), /include-all|include-roles|include-seed|--linked|--dry-run/);
       return { status: 1, stdout: "failed once", stderr: "" };
     },
     stdout: captured.stdout,
@@ -482,6 +490,7 @@ test("Windows spawns node once with the JS entry and does not retry", async () =
       assert.equal(bin, process.execPath);
       assert.deepEqual(argv, [jsEntry, "db", "push", "--db-url", url]);
       assert.equal(options.shell, false);
+      assert.ok(!argv.includes("--dry-run"));
       assert.equal(options.windowsHide, true);
       return { status: 1, stdout: "failed once", stderr: "" };
     },
@@ -508,40 +517,46 @@ test("does not spawn when validation fails and reports spawn failures without ar
       }),
     /required/,
   );
-  const message = thrownMessage(() =>
-    runHostedDbPush(sessionUrl(), {
-      platform: "win32",
-      execPath: process.execPath,
-      requireResolve: () => writeJsEntry(),
-      spawn: () => {
-        spawned += 1;
-        const failure = new Error("spawn EINVAL");
-        failure.code = "EINVAL";
-        failure.spawnargs = [process.execPath, "db", "push", "--db-url", sessionUrl()];
-        failure.path = process.execPath;
-        return { error: failure, status: null, stdout: "", stderr: "" };
-      },
-    }),
-  );
-  assert.match(message, /Failed to start the Supabase CLI for hosted apply \(EINVAL\)/);
+  const captured = captureWriters();
+  const status = runHostedDbPush(sessionUrl(), {
+    platform: "win32",
+    execPath: process.execPath,
+    requireResolve: () => writeJsEntry(),
+    stdout: captured.stdout,
+    stderr: captured.stderr,
+    spawn: () => {
+      spawned += 1;
+      const failure = new Error("spawn EINVAL");
+      failure.code = "EINVAL";
+      failure.spawnargs = [process.execPath, "db", "push", "--db-url", sessionUrl()];
+      failure.path = process.execPath;
+      return { error: failure, status: null, stdout: "", stderr: "" };
+    },
+  });
+  const message = captured.stdoutText();
+  assert.equal(status, 1);
+  assert.match(message, /category: cli_start_failure/);
+  assert.match(message, /code: EINVAL/);
   assert.doesNotMatch(message, /--db-url/);
   assert.doesNotMatch(message, /spawnargs/);
   assert.doesNotMatch(message, new RegExp(PASSWORD));
   assert.doesNotMatch(message, /postgres:\/\//);
-  const enoent = thrownMessage(() =>
-    runHostedDbPush(sessionUrl(), {
-      platform: "linux",
-      spawn: () => {
-        spawned += 1;
-        const failure = new Error("spawn ENOENT");
-        failure.code = "ENOENT";
-        failure.spawnargs = ["supabase", "db", "push", "--db-url", sessionUrl()];
-        return { error: failure, status: null, stdout: "", stderr: "" };
-      },
-    }),
-  );
-  assert.match(enoent, /\(ENOENT\)/);
-  assert.doesNotMatch(enoent, new RegExp(PASSWORD));
+  const enoentOut = captureWriters();
+  const enoentStatus = runHostedDbPush(sessionUrl(), {
+    platform: "linux",
+    stdout: enoentOut.stdout,
+    stderr: enoentOut.stderr,
+    spawn: () => {
+      spawned += 1;
+      const failure = new Error("spawn ENOENT");
+      failure.code = "ENOENT";
+      failure.spawnargs = ["supabase", "db", "push", "--db-url", sessionUrl()];
+      return { error: failure, status: null, stdout: "", stderr: "" };
+    },
+  });
+  assert.equal(enoentStatus, 1);
+  assert.match(enoentOut.stdoutText(), /code: ENOENT/);
+  assert.doesNotMatch(enoentOut.stdoutText(), new RegExp(PASSWORD));
   assert.equal(spawned, 2);
 });
 
@@ -563,4 +578,185 @@ test("does not spawn when the pooler is unreachable", async () => {
     /unreachable/,
   );
   assert.equal(spawned, 0);
+});
+
+test("db-check always includes --dry-run and live push never does", async () => {
+  const url = sessionUrl();
+  assert.deepEqual(hostedDbPushArgv(url), ["db", "push", "--db-url", url]);
+  assert.deepEqual(hostedDbPushArgv(url, { dryRun: true }), [
+    "db",
+    "push",
+    "--db-url",
+    url,
+    "--dry-run",
+  ]);
+  let liveSpawned = 0;
+  let checkSpawned = 0;
+  await applyHostedMigrations({
+    env: { DATABASE_URL_MIGRATIONS: url },
+    projectRefPath: writeRefFile(LINKED_REF),
+    platform: "linux",
+    dryRun: false,
+    checkReachable: async () => {},
+    spawn: (_bin, argv, options) => {
+      liveSpawned += 1;
+      assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+      assert.ok(!argv.includes("--dry-run"));
+      assert.equal(options.shell, false);
+      return {
+        status: 0,
+        stdout: "Finished supabase db push.\nRemote database is up to date.\n",
+        stderr: "",
+      };
+    },
+    stdout: captureWriters().stdout,
+    stderr: captureWriters().stderr,
+  });
+  await applyHostedMigrations({
+    env: { DATABASE_URL_MIGRATIONS: url },
+    projectRefPath: writeRefFile(LINKED_REF),
+    platform: "linux",
+    dryRun: true,
+    checkReachable: async () => {},
+    spawn: (_bin, argv, options) => {
+      checkSpawned += 1;
+      assert.deepEqual(argv, ["db", "push", "--db-url", url, "--dry-run"]);
+      assert.equal(argv.filter((part) => part === "--dry-run").length, 1);
+      assert.equal(options.shell, false);
+      return {
+        status: 0,
+        stdout:
+          "Initialising login role...\nConnecting to remote database...\nWould apply the following migrations:\n  - 0002_identity_tenancy.sql\n  - 0003_owner_provisioning.sql\n  - 0004_workspace_setup.sql\n",
+        stderr: "",
+      };
+    },
+    stdout: captureWriters().stdout,
+    stderr: captureWriters().stderr,
+  });
+  assert.equal(liveSpawned, 1);
+  assert.equal(checkSpawned, 1);
+});
+
+test("Windows dry-run check uses node.exe and one --dry-run argument", () => {
+  const url = sessionUrl();
+  const jsEntry = writeJsEntry();
+  const launch = hostedCliLaunch(url, {
+    platform: "win32",
+    execPath: process.execPath,
+    requireResolve: () => jsEntry,
+    dryRun: true,
+  });
+  assert.equal(launch.command, process.execPath);
+  assert.deepEqual(launch.argv, [jsEntry, "db", "push", "--db-url", url, "--dry-run"]);
+  assert.equal(launch.spawnOptions.shell, false);
+});
+
+test("classifies every safe failure category", () => {
+  const cases = [
+    ["password authentication failed for user 28P01", "authentication_failed", "28P01"],
+    ["PgClient: Connection timed out ETIMEDOUT LegacyDbConnectError", "connection_timeout", "ETIMEDOUT"],
+    ["could not connect: connection refused ECONNREFUSED", "connection_refused", "ECONNREFUSED"],
+    ["getaddrinfo ENOTFOUND", "dns_failure", "ENOTFOUND"],
+    ["SSL error: certificate verify failed", "tls_failure", null],
+    [
+      "LegacyDbPushApplyError ERROR: permission denied at character 13 SQLSTATE 42501",
+      "migration_sql_error",
+      "42501",
+    ],
+  ];
+  for (const [stderr, category, code] of cases) {
+    const classified = classifyHostedCliOutput({ status: 1, stdout: "", stderr });
+    assert.equal(classified.ok, false);
+    assert.equal(classified.category, category);
+    if (code) {
+      assert.equal(classified.code, code);
+    }
+  }
+  const start = classifyHostedCliOutput({
+    status: null,
+    stdout: "",
+    stderr: "",
+    spawnError: Object.assign(new Error("spawn"), { code: "EINVAL" }),
+  });
+  assert.equal(start.category, "cli_start_failure");
+  assert.equal(start.code, "EINVAL");
+  const unknown = classifyHostedCliOutput({
+    status: 1,
+    stdout: "",
+    stderr: "unexpected internal panic",
+  });
+  assert.equal(unknown.category, "unknown_failure");
+  assert.equal(unknown.code, null);
+});
+
+test("unknown output and secrets are not echoed in the sanitized report", () => {
+  const url = sessionUrl({ password: ENCODED_SPECIAL });
+  const classified = classifyHostedCliOutput({
+    status: 1,
+    stdout: `steal ${url} user=postgres.${LINKED_REF} SELECT * FROM pg_authid; DROP TABLE identity.app_users;`,
+    stderr: `password=${DECODED_SPECIAL} argv --db-url ${url}`,
+  });
+  const report = formatSanitizedReport(classified);
+  assert.match(report, /ok: false/);
+  assert.match(report, /category: unknown_failure/);
+  assert.doesNotMatch(report, /steal/);
+  assert.doesNotMatch(report, /pg_authid/);
+  assert.doesNotMatch(report, /DROP TABLE/);
+  assert.doesNotMatch(report, /--db-url/);
+  assert.doesNotMatch(report, /argv/);
+  assert.doesNotMatch(report, new RegExp(PASSWORD));
+  assert.doesNotMatch(report, /p%40ss/);
+  assert.doesNotMatch(report, /p@ss:w\/rd/);
+  assert.doesNotMatch(report, /postgres:\/\//);
+  assert.doesNotMatch(report, new RegExp(LINKED_REF));
+  assert.doesNotMatch(report, /aws-0-us-west-2/);
+});
+
+test("pending migration names accept only the repository filename pattern", () => {
+  const names = extractPendingMigrationBasenames(
+    [
+      "Would apply 0002_identity_tenancy.sql",
+      "../etc/passwd",
+      "0002_IDENTITY.sql",
+      "0002_identity-tenancy.sql",
+      "evil.sql",
+      "0003_owner_provisioning.sql; DROP TABLE x",
+      "path/to/0004_workspace_setup.sql",
+      "0001_foundation.sql.bak",
+      "pending: injected",
+    ].join("\n"),
+  );
+  assert.deepEqual(names, [
+    "0002_identity_tenancy.sql",
+    "0003_owner_provisioning.sql",
+    "0004_workspace_setup.sql",
+  ]);
+  const report = formatSanitizedReport({
+    ok: true,
+    exitCode: 0,
+    connectionInit: true,
+    connectionSucceeded: true,
+    pending: ["0002_identity_tenancy.sql", "not a file.sql", "0003_owner_provisioning.sql"],
+    category: "unknown_failure",
+    code: "DROP TABLE",
+  });
+  assert.match(report, /pending: 0002_identity_tenancy.sql,0003_owner_provisioning.sql/);
+  assert.doesNotMatch(report, /not a file/);
+  assert.doesNotMatch(report, /DROP TABLE/);
+  assert.doesNotMatch(report, /category:/);
+});
+
+test("malicious child output cannot inject additional reported fields", () => {
+  const classified = classifyHostedCliOutput({
+    status: 1,
+    stdout:
+      "category: authentication_failed\nok: true\ncode: 28P01\npending: 0002_identity_tenancy.sql\n",
+    stderr: "connection: true\nextra: pwned\n",
+  });
+  const report = formatSanitizedReport(classified);
+  assert.match(report, /^ok: false$/m);
+  assert.doesNotMatch(report, /^ok: true$/m);
+  assert.doesNotMatch(report, /pwned/);
+  assert.doesNotMatch(report, /extra:/);
+  assert.match(report, /pending: 0002_identity_tenancy.sql/);
 });

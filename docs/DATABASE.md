@@ -57,7 +57,7 @@ Required URL shape:
 - Do not add query parameters such as `pgbouncer=true`. Session mode is selected by port `5432`; those parameters are incompatible with session-level `SET ROLE` / `RESET ROLE`.
 - Never `service_role`. Never print, log, or commit the URL, username/password pair, or password.
 
-`pnpm hosted:db-push` validates that shape, checks IPv4 reachability to port `5432`, then runs exactly `db push --db-url <validated URL>` once, with an argv array and the shell disabled. Windows invokes `node.exe` with the resolved `supabase/dist/supabase.js` entry; it does not spawn `supabase.cmd`, `supabase.ps1`, `cmd.exe`, or PowerShell, and it never sets `shell:true`. Non-Windows spawns `supabase`. It does not pass `--linked`, `--include-all`, `--include-roles`, or `--include-seed`. Captured CLI output is redacted; spawn failures report a generic message and a safe code such as `EINVAL` or `ENOENT`, without argv or credentials.
+`pnpm hosted:db-push` validates that shape, checks IPv4 reachability to port `5432`, then runs exactly `db push --db-url <validated URL>` once. `pnpm hosted:db-check` uses the same validation and launcher with one extra argv value, `--dry-run`. Neither command uses `--linked`, `--include-all`, `--include-roles`, `--include-seed`, `shell:true`, `cmd.exe`, or PowerShell. Child stdout/stderr is never printed raw. The wrapper emits only a sanitized report: ok/fail, exit code, whether connect started/succeeded, pending `NNNN_name.sql` basenames, and an allowlisted failure category or error code. Unknown child text is omitted.
 
 Passing `--db-url` still exposes the URI on the local process list while the CLI runs. That residual exposure is unavoidable with this CLI interface. Unset the variable after apply.
 
@@ -65,6 +65,7 @@ PowerShell (process environment only):
 
 ```powershell
 $env:DATABASE_URL_MIGRATIONS = "<percent-encoded session-pooler URI>"
+pnpm hosted:db-check
 pnpm hosted:db-push
 Remove-Item Env:DATABASE_URL_MIGRATIONS
 ```

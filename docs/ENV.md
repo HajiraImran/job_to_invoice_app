@@ -23,11 +23,12 @@ Hosted apply from PowerShell, process environment only:
 
 ```powershell
 $env:DATABASE_URL_MIGRATIONS = "<percent-encoded session-pooler URI>"
+pnpm hosted:db-check
 pnpm hosted:db-push
 Remove-Item Env:DATABASE_URL_MIGRATIONS
 ```
 
-`pnpm hosted:db-push` does not print the URL. Windows launches the resolved Supabase JS entry through `node.exe`; `.cmd`/`.ps1` shims and `shell:true` are not used. Passing `--db-url` still exposes it on the local process list while the CLI runs.
+`pnpm hosted:db-check` is `--dry-run` only. `pnpm hosted:db-push` applies. Neither prints the URL, password, argv, or raw CLI text; failures are an allowlisted category. Windows launches the resolved Supabase JS entry through `node.exe`; `.cmd`/`.ps1` shims and `shell:true` are not used. Passing `--db-url` still exposes it on the local process list while the CLI runs.
 
 The API verifies owner access tokens with the project JWKS:
 

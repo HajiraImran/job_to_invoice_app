@@ -21,11 +21,14 @@ const DEFAULT_PROJECT_REF_PATH = path.join(
   "project-ref",
 );
 const JS_ENTRY_UNRESOLVED = "D-012: Supabase CLI JavaScript entry could not be resolved";
-const SAFE_SPAWN_CODES = new Set(["EINVAL", "ENOENT", "EACCES", "EPERM"]);
 const localRequire = createRequire(import.meta.url);
 
-export function hostedDbPushArgv(url) {
-  return ["db", "push", "--db-url", url];
+export function hostedDbPushArgv(url, { dryRun = false } = {}) {
+  const argv = ["db", "push", "--db-url", url];
+  if (dryRun) {
+    argv.push("--dry-run");
+  }
+  return argv;
 }
 
 function isRegularNamedJsEntry(candidate) {
@@ -135,9 +138,10 @@ export function hostedCliLaunch(
     requireResolve,
     pathEnv,
     pathDelimiter,
+    dryRun = false,
   } = {},
 ) {
-  const cliArgv = hostedDbPushArgv(url);
+  const cliArgv = hostedDbPushArgv(url, { dryRun });
   const spawnOptions = {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -159,12 +163,145 @@ export function hostedCliLaunch(
   };
 }
 
-function spawnFailureMessage(error) {
-  const code = error && typeof error.code === "string" && SAFE_SPAWN_CODES.has(error.code) ? error.code : null;
-  if (code) {
-    return `Failed to start the Supabase CLI for hosted apply (${code})`;
+const FAILURE_CATEGORIES = new Set([
+  "authentication_failed",
+  "connection_timeout",
+  "connection_refused",
+  "dns_failure",
+  "tls_failure",
+  "migration_sql_error",
+  "cli_start_failure",
+  "unknown_failure",
+]);
+const SAFE_ERROR_CODES = new Set([
+  "28P01",
+  "08001",
+  "08004",
+  "08006",
+  "57P01",
+  "57P03",
+  "53300",
+  "XX000",
+  "42501",
+  "42P01",
+  "EINVAL",
+  "ENOENT",
+  "EACCES",
+  "EPERM",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "ECONNRESET",
+]);
+const MIGRATION_BASENAME = /^\d{4}_[a-z0-9_]+\.sql$/;
+const SAFE_CODE_PATTERN = new RegExp(`\\b(${[...SAFE_ERROR_CODES].join("|")})\\b`);
+
+export function extractPendingMigrationBasenames(text) {
+  const found = new Set();
+  const source = String(text ?? "");
+  const pattern = /(?<![A-Za-z0-9_.])(\d{4}_[a-z0-9_]+\.sql)(?![A-Za-z0-9_.])/g;
+  for (const match of source.matchAll(pattern)) {
+    const name = match[1];
+    if (MIGRATION_BASENAME.test(name)) {
+      found.add(name);
+    }
   }
-  return "Failed to start the Supabase CLI for hosted apply";
+  return [...found].sort();
+}
+
+function extractSafeErrorCode(text, spawnError) {
+  const spawnCode = spawnError && typeof spawnError.code === "string" ? spawnError.code : "";
+  if (SAFE_ERROR_CODES.has(spawnCode)) {
+    return spawnCode;
+  }
+  const source = String(text ?? "");
+  const match = source.match(SAFE_CODE_PATTERN);
+  if (match && SAFE_ERROR_CODES.has(match[1])) {
+    return match[1];
+  }
+  return null;
+}
+
+function classifyFailureCategory(text, spawnError) {
+  if (spawnError) {
+    return "cli_start_failure";
+  }
+  const source = String(text ?? "");
+  if (/password authentication failed|28P01|invalid (authorization|password)|sasl/i.test(source)) {
+    return "authentication_failed";
+  }
+  if (/\bENOTFOUND\b|getaddrinfo|dns (look ?up|resolution) failed/i.test(source)) {
+    return "dns_failure";
+  }
+  if (/\bECONNREFUSED\b|connection refused/i.test(source)) {
+    return "connection_refused";
+  }
+  if (/\b(SSL|TLS)\b|certificate verify|self[- ]signed certificate/i.test(source)) {
+    return "tls_failure";
+  }
+  if (
+    /\bETIMEDOUT\b|connection timed out|connect timed out|LegacyDbConnectError/i.test(source)
+  ) {
+    return "connection_timeout";
+  }
+  if (
+    /LegacyDbPushApplyError|SQLSTATE|syntax error|permission denied|ERROR:|at character \d+/i.test(
+      source,
+    )
+  ) {
+    return "migration_sql_error";
+  }
+  return "unknown_failure";
+}
+
+export function classifyHostedCliOutput({
+  status = 1,
+  stdout = "",
+  stderr = "",
+  spawnError = null,
+} = {}) {
+  const text = `${stdout ?? ""}\n${stderr ?? ""}`;
+  const exitCode = spawnError ? 1 : status === null || status === undefined ? 1 : status;
+  const ok = !spawnError && exitCode === 0;
+  const connectionInit = /initialis(?:e|ing) login role|connecting to remote database/i.test(text);
+  const connectionSucceeded =
+    /remote database is up to date|would apply the following|finished supabase db push|applying migration/i.test(
+      text,
+    ) && !/connection timed out|password authentication failed|econnrefused|enotfound/i.test(text);
+  const pending = extractPendingMigrationBasenames(text);
+  const category = ok ? null : classifyFailureCategory(text, spawnError);
+  const code = extractSafeErrorCode(text, spawnError);
+  return {
+    ok,
+    exitCode,
+    connectionInit,
+    connectionSucceeded,
+    pending,
+    category: category && FAILURE_CATEGORIES.has(category) ? category : ok ? null : "unknown_failure",
+    code,
+  };
+}
+
+export function formatSanitizedReport(result) {
+  const exitCode = Number.isInteger(result.exitCode) ? result.exitCode : 1;
+  const pending = Array.isArray(result.pending)
+    ? result.pending.filter((name) => MIGRATION_BASENAME.test(name))
+    : [];
+  const lines = [
+    `ok: ${result.ok ? "true" : "false"}`,
+    `exit: ${exitCode}`,
+    `connection_init: ${result.connectionInit ? "true" : "false"}`,
+    `connection: ${result.connectionSucceeded ? "true" : "false"}`,
+    `pending: ${pending.length > 0 ? pending.join(",") : "(none)"}`,
+  ];
+  if (!result.ok) {
+    const category = FAILURE_CATEGORIES.has(result.category) ? result.category : "unknown_failure";
+    lines.push(`category: ${category}`);
+    if (typeof result.code === "string" && SAFE_ERROR_CODES.has(result.code)) {
+      lines.push(`code: ${result.code}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 export function isExecutedAsMain(metaUrl, argv1 = process.argv[1], platform = process.platform) {
@@ -368,6 +505,7 @@ export function runHostedDbPush(
     requireResolve,
     pathEnv,
     pathDelimiter,
+    dryRun = false,
     stdout = process.stdout,
     stderr = process.stderr,
   } = {},
@@ -378,20 +516,17 @@ export function runHostedDbPush(
     requireResolve,
     pathEnv,
     pathDelimiter,
+    dryRun,
   });
   const result = spawn(launch.command, launch.argv, launch.spawnOptions);
-  if (result.error) {
-    throw new Error(spawnFailureMessage(result.error));
-  }
-  const out = redactCapturedOutput(result.stdout, url);
-  const err = redactCapturedOutput(result.stderr, url);
-  if (out) {
-    stdout.write(out);
-  }
-  if (err) {
-    stderr.write(err);
-  }
-  return result.status === null ? 1 : result.status;
+  const classified = classifyHostedCliOutput({
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    spawnError: result.error ?? null,
+  });
+  stdout.write(formatSanitizedReport(classified));
+  return classified.exitCode;
 }
 
 export async function applyHostedMigrations({
@@ -403,6 +538,7 @@ export async function applyHostedMigrations({
   requireResolve,
   pathEnv,
   pathDelimiter,
+  dryRun = false,
   stdout = process.stdout,
   stderr = process.stderr,
   checkReachable = assertIpv4SessionPoolerReachable,
@@ -419,6 +555,7 @@ export async function applyHostedMigrations({
     requireResolve,
     pathEnv,
     pathDelimiter,
+    dryRun,
     stdout,
     stderr,
   });
@@ -426,7 +563,8 @@ export async function applyHostedMigrations({
 
 if (isExecutedAsMain(import.meta.url, process.argv[1])) {
   try {
-    process.exitCode = await applyHostedMigrations();
+    const dryRun = process.argv.includes("--check");
+    process.exitCode = await applyHostedMigrations({ dryRun });
   } catch (error) {
     process.stderr.write(`${safeErrorMessage(error)}\n`);
     process.exitCode = 1;
