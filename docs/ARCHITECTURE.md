@@ -76,12 +76,12 @@ Rules:
 
 | Role | DSN | Privileges | Must not |
 | --- | --- | --- | --- |
-| `migrator` | `DATABASE_URL_MIGRATIONS` | Object owner; `NOBYPASSRLS`; table-scoped FORCE RLS owner policies (D-010); used only by migration CI | Runtime HTTP or worker pool; `BYPASSRLS`; `service_role` |
+| `migrator` | `DATABASE_URL_MIGRATIONS` | Object owner; default `NOBYPASSRLS` (not toggled in DDL); fail-closed if `rolbypassrls`; table-scoped FORCE RLS owner policies (D-010); used only by migration CI | Runtime HTTP or worker pool; `BYPASSRLS`; `service_role` |
 | `api_app` | `DATABASE_URL_API` | FORCE RLS; DML allowed by command functions; no BYPASSRLS | Superuser; service_role; arbitrary financial UPDATE/DELETE; purge |
 | `worker_app` | `DATABASE_URL_WORKER` | FORCE RLS; EXECUTE named outbox/billing/PDF functions only | service_role; BYPASSRLS; trust payload `workspace_id`; share API pool |
 | `purge_app` | `DATABASE_URL_PURGE` | Scheduled deletion job only; EXECUTE named `purge_*` SECURITY DEFINER functions owned by `migrator`; never in Fastify or outbox pool | HTTP handlers; ad-hoc SQL from support; session `BYPASSRLS`; service_role |
 
-`purge_app` is the only privileged deletion path (DB05). It does not hold `BYPASSRLS` as a role attribute. Deletion functions are `SECURITY DEFINER`, audited, and callable only by `purge_app`. `migrator` is also `NOBYPASSRLS`: hosted Supabase cannot grant role-level `BYPASSRLS` (D-010). Owner DML uses table-scoped `FOR ALL TO migrator` policies on FORCE RLS tables. CI fails if `service_role` or `BYPASSRLS` appears on `api_app`, `worker_app`, or app connection config.
+`purge_app` is the only privileged deletion path (DB05). It does not hold `BYPASSRLS` as a role attribute. Deletion functions are `SECURITY DEFINER`, audited, and callable only by `purge_app`. Hosted Supabase cannot toggle `BYPASSRLS` or `NOBYPASSRLS`. New application roles rely on the PostgreSQL default (`NOBYPASSRLS`); `0001` then fails closed if `rolbypassrls` is true (D-010). Owner DML uses table-scoped `FOR ALL TO migrator` policies on FORCE RLS tables. CI fails if `service_role` or `BYPASSRLS` appears on `api_app`, `worker_app`, or app connection config.
 
 ## Request authorization (ARC03)
 
@@ -125,7 +125,7 @@ Worker:
 - Every tenant table: `workspace_id UUID NOT NULL`, `UNIQUE(workspace_id, id)`.
 - Every tenant relationship: composite FK `(workspace_id, referenced_id)` (DB01). Single-column FKs on tenant relationships are rejected.
 - `api_app` and `worker_app` are not database owner, superuser, or `BYPASSRLS`.
-- `migrator` is object owner and `NOBYPASSRLS`. FORCE RLS owner access is a table-scoped policy, not role-level bypass (D-010).
+- `migrator` is object owner. Hosted DDL never sets `BYPASSRLS` or `NOBYPASSRLS`; bootstrap requires `rolbypassrls` false. FORCE RLS owner access is a table-scoped policy (D-010).
 - Token-hash lookup uses a restricted function that returns minimum request/workspace metadata only (ARC03).
 - Authorization tests must hit database paths, not only HTTP (DB04).
 - `action_grants` lives in the restricted identity schema (ACC02A).

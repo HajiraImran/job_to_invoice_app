@@ -165,6 +165,22 @@ try {
     assert(byName.api_app !== byName.worker_app, "roles must be distinct");
   });
 
+  await test("bootstrap rejects pre-existing BYPASSRLS application roles", async () => {
+    await admin.query("alter role migrator with bypassrls");
+    try {
+      await expectFail(
+        () =>
+          admin.query(readFileSync(join(root, "supabase", "migrations", "0001_foundation.sql"), "utf8")),
+        /must not have BYPASSRLS/i,
+        "unsafe migrator BYPASSRLS",
+      );
+    } finally {
+      await admin.query("alter role migrator with nobypassrls");
+    }
+    const restored = await admin.query("select rolbypassrls from pg_roles where rolname = 'migrator'");
+    assert(restored.rows[0].rolbypassrls === false, "migrator must be restored without BYPASSRLS");
+  });
+
   await test("tenant tables enable and force RLS and are owned by migrator", async () => {
     const tables = await admin.query(`
       select n.nspname, c.relname, c.relrowsecurity, c.relforcerowsecurity, pg_get_userbyid(c.relowner) as owner
