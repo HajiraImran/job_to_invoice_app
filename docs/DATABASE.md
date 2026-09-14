@@ -61,7 +61,7 @@ Required URL shape:
 
 Passing `--db-url` still exposes the URI on the local process list while the CLI runs. That residual exposure is unavoidable with this CLI interface. Unset the variable after apply.
 
-Local Windows session-pooler live apply has been unreliable after a successful dry-run. Authorized hosted development apply of pending `0002`–`0004` is the dispatch-only Ubuntu workflow `.github/workflows/hosted-development-migrations.yml` (confirmation `APPLY_0002_0004`, Environment `development`, secret `DATABASE_URL_MIGRATIONS`). See `docs/ENV.md`.
+Local Windows session-pooler live apply has been unreliable after a successful dry-run. Hosted development `0002`–`0004` were applied through the dispatch-only Ubuntu workflow `.github/workflows/hosted-development-migrations.yml` (confirmation `APPLY_0002_0004`, Environment `development`, secret `DATABASE_URL_MIGRATIONS`). Further hosted applies use that path. See `docs/ENV.md`.
 
 PowerShell (process environment only):
 
@@ -73,6 +73,8 @@ Remove-Item Env:DATABASE_URL_MIGRATIONS
 ```
 
 Local `pnpm migrate:clean` / `pnpm test:db` still use embedded PostgreSQL when `DATABASE_URL_MIGRATIONS` is unset.
+
+Hosted development catalog evidence (2026-09-15), project `fhgacxkpgjdcjuvanesv`: `schema_migrations` contains exactly `0001`/`foundation`, `0002`/`identity_tenancy`, `0003`/`owner_provisioning`, `0004`/`workspace_setup`. `migration list --linked` showed local and remote aligned; no pending local migrations. All nine identity/commercial tables exist, are owned by `migrator`, have FORCE RLS, and have `{schema}_{table}_migrator_all`. No unrestricted `FOR ALL` policy is granted to runtime or client roles. `api_app`, `migrator`, `worker_app`, and `purge_app` are `NOLOGIN NOSUPERUSER NOBYPASSRLS`. `anon` and `authenticated` have no schema `USAGE` and no table DML grants on those private objects. `identity.provision_owner` and `commercial.complete_workspace_setup` are `migrator`-owned `SECURITY DEFINER` functions with `search_path=identity, commercial, pg_temp` and `EXECUTE` for `api_app` only. `pnpm secret-scan` passed. Still unverified on hosted: live two-tenant behavioral isolation; execution of those two functions; database lint; live OTP, API JWT, and physical-device behavior.
 
 ## Schemas
 
