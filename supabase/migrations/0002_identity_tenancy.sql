@@ -491,4 +491,6 @@ revoke all on commercial.workspaces from public, anon, authenticated, worker_app
 revoke all on commercial.memberships from public, anon, authenticated, worker_app, purge_app;
 revoke all on commercial.assets from public, anon, authenticated, worker_app, purge_app;
 
+-- D-011: restore the bootstrap session role. Supabase CLI records
+-- schema_migrations as that role after this file returns; migrator has no catalog access.
 reset role;

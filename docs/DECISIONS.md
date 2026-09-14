@@ -231,3 +231,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | No for hosted compatibility; policy names are additive |
 | Escalation category | architecture |
 
+### D-011 — RESET ROLE before Supabase records migration history
+
+| Field | Value |
+| --- | --- |
+| ID | D-011 |
+| Date | 2026-09-14 |
+| Status | Resolved |
+| Decision | Application migrations after `0001` may `SET ROLE migrator` so schemas, tables, functions, and SECURITY DEFINER objects stay owned by `migrator`. Any migration that sets that role must `RESET ROLE` as its last executable statement, after all DDL, grants, ownership changes, functions, policies, and comments. No executable statement may follow `RESET ROLE`. Do not change hosted `0001_foundation.sql`. Do not `ALTER ROLE`. Never use `service_role`. |
+| Reason | Hosted `db push` applied and recorded `0001`, then failed on `0002` at `INSERT INTO supabase_migrations.schema_migrations` (statement 82). `0002` had run as `migrator`. That role has no catalog access, so history insert failed and `0002` rolled back. `0001` does not `SET ROLE` and recorded successfully. |
+| Evidence | Hosted `LegacyDbPushApplyError` at `INSERT INTO supabase_migrations.schema_migrations` during `0002`; `supabase/migrations/0002_identity_tenancy.sql`–`0004_workspace_setup.sql`; `scripts/db-test.mjs`; `supabase/tests/0006_migrator_ownership.sql` |
+| Owner | Engineering lead |
+| PRD implication | ARC02 ownership, FORCE RLS, and definer functions stand. Hosted `0001` remains applied. Hosted `0002`–`0004` remain unverified until a later authorized apply. |
+| Impacted requirement IDs | ARC02, DB01, AUTHZ01, SREF07 |
+| Impacted test IDs | QA03; isolation suite; provision_owner / complete_workspace_setup db tests |
+| Migration implications | Edit only unapplied `0002`–`0004`. Last statement must be `RESET ROLE`. Do not rewrite or reapply `0001`. Do not repair hosted history in this change. |
+| Reversible | No for hosted CLI compatibility |
+| Escalation category | architecture |
+

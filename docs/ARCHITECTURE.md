@@ -83,6 +83,8 @@ Rules:
 
 `purge_app` is the only privileged deletion path (DB05). It does not hold `BYPASSRLS` as a role attribute. Deletion functions are `SECURITY DEFINER`, audited, and callable only by `purge_app`. Hosted Supabase rejects `ALTER ROLE`. Application roles get `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION` only when created; `NOBYPASSRLS` is the PostgreSQL default. `0001` never repairs a pre-existing role and fails closed if `LOGIN`, `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, or `BYPASSRLS` is set (D-010). Owner DML uses table-scoped `FOR ALL TO migrator` policies on FORCE RLS tables. Role default `search_path` is not set in migrations; SQL is schema-qualified and definer functions fix `search_path`. CI fails if `service_role` or `BYPASSRLS` appears on `api_app`, `worker_app`, or app connection config.
 
+Migrations after `0001` may `SET ROLE migrator` for application DDL so objects stay owned by `migrator`. They must `RESET ROLE` as the last executable statement before returning to the Supabase CLI (D-011). Failure to reset leaves the session as `migrator`, which cannot insert `supabase_migrations.schema_migrations`, so history is not recorded and the migration rolls back.
+
 ## Request authorization (ARC03)
 
 Normative tenant-context algorithm. Session-level `SET` is forbidden. GUC must never be set before `BEGIN` or in middleware that runs on a pooled client that is not yet in a transaction.
@@ -126,6 +128,7 @@ Worker:
 - Every tenant relationship: composite FK `(workspace_id, referenced_id)` (DB01). Single-column FKs on tenant relationships are rejected.
 - `api_app` and `worker_app` are not database owner, superuser, or `BYPASSRLS`.
 - `migrator` is object owner. Hosted migrations never use `ALTER ROLE`. Bootstrap requires application roles to be nologin, nonsuperuser, nocreatedb, nocreaterole, noreplication, and nobypassrls. FORCE RLS owner access is a table-scoped policy (D-010).
+- Migrations that `SET ROLE migrator` must `RESET ROLE` before control returns to Supabase CLI so history can be recorded (D-011).
 - Token-hash lookup uses a restricted function that returns minimum request/workspace metadata only (ARC03).
 - Authorization tests must hit database paths, not only HTTP (DB04).
 - `action_grants` lives in the restricted identity schema (ACC02A).

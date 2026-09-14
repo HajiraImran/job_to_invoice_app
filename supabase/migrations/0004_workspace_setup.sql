@@ -599,4 +599,6 @@ revoke all on commercial.job_allowances from public, anon, authenticated, worker
 revoke all on commercial.audit_events from public, anon, authenticated, worker_app, purge_app;
 revoke all on commercial.idempotency_records from public, anon, authenticated, worker_app, purge_app;
 
+-- D-011: restore the bootstrap session role. Supabase CLI records
+-- schema_migrations as that role after this file returns; migrator has no catalog access.
 reset role;

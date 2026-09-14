@@ -43,6 +43,67 @@ async function expectFail(fn, pattern, message) {
   }
 }
 
+function splitSqlStatements(sql) {
+  const stripped = sql.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
+  const statements = [];
+  let current = "";
+  let i = 0;
+  let dollarTag = null;
+  while (i < stripped.length) {
+    if (dollarTag) {
+      const end = stripped.indexOf(dollarTag, i);
+      if (end === -1) {
+        current += stripped.slice(i);
+        break;
+      }
+      current += stripped.slice(i, end + dollarTag.length);
+      i = end + dollarTag.length;
+      dollarTag = null;
+      continue;
+    }
+    if (stripped[i] === "'") {
+      current += stripped[i++];
+      while (i < stripped.length) {
+        if (stripped[i] === "'" && stripped[i + 1] === "'") {
+          current += "''";
+          i += 2;
+          continue;
+        }
+        current += stripped[i];
+        if (stripped[i] === "'") {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    const dollar = stripped.slice(i).match(/^\$[A-Za-z0-9_]*\$/);
+    if (dollar) {
+      dollarTag = dollar[0];
+      current += dollar[0];
+      i += dollar[0].length;
+      continue;
+    }
+    if (stripped[i] === ";") {
+      const stmt = current.trim();
+      if (stmt) {
+        statements.push(stmt);
+      }
+      current = "";
+      i += 1;
+      continue;
+    }
+    current += stripped[i];
+    i += 1;
+  }
+  const tail = current.trim();
+  if (tail) {
+    statements.push(tail);
+  }
+  return statements;
+}
+
 async function insertUser(admin, person, email) {
   await admin.query(
     `insert into identity.app_users (
@@ -117,7 +178,36 @@ async function test(name, fn) {
 }
 
 try {
-  await applyCleanMigrations(admin, root);
+  await admin.query(`
+    create schema if not exists supabase_migrations authorization current_user;
+    drop table if exists supabase_migrations.schema_migrations;
+    create table supabase_migrations.schema_migrations (
+      version text primary key,
+      name text not null,
+      statements text[]
+    );
+    revoke all on schema supabase_migrations from public;
+    revoke all on table supabase_migrations.schema_migrations from public;
+  `);
+  await applyCleanMigrations(admin, root, {
+    afterEach: async (file) => {
+      const who = await admin.query("select current_user as current_role, session_user as session_role");
+      assert(
+        who.rows[0].current_role === who.rows[0].session_role,
+        `${file} must RESET ROLE before returning to the bootstrap session user`,
+      );
+      assert(who.rows[0].current_role !== "migrator", `${file} left SET ROLE migrator in effect`);
+      if (file.startsWith("0001")) {
+        await admin.query("revoke all on schema supabase_migrations from migrator");
+        await admin.query("revoke all on table supabase_migrations.schema_migrations from migrator");
+      }
+      await admin.query(
+        `insert into supabase_migrations.schema_migrations(version, name, statements)
+         values ($1, $2, $3)`,
+        [file.slice(0, 4), file.replace(/\.sql$/, ""), ["applied"]],
+      );
+    },
+  });
   await admin.query(
     "grant api_app, worker_app, purge_app, anon, authenticated, migrator to current_user",
   );
@@ -175,6 +265,55 @@ try {
       assert(!/\balter\s+role\b/i.test(sql), `${file} must not contain ALTER ROLE`);
       assert(!/\balter\s+role\s+anon\b/i.test(sql), `${file} must not alter anon`);
       assert(!/\balter\s+role\s+authenticated\b/i.test(sql), `${file} must not alter authenticated`);
+    }
+  });
+
+  await test("SET ROLE migrations end with RESET ROLE and nothing after it", async () => {
+    const dir = join(root, "supabase", "migrations");
+    let setRoleFiles = 0;
+    for (const file of readdirSync(dir)
+      .filter((name) => name.endsWith(".sql"))
+      .sort()) {
+      const statements = splitSqlStatements(readFileSync(join(dir, file), "utf8"));
+      const setRoleAt = statements.findIndex((stmt) => /^set\s+role\b/i.test(stmt));
+      const resetAt = statements.findIndex((stmt) => /^reset\s+role$/i.test(stmt));
+      if (setRoleAt === -1) {
+        assert(resetAt === -1, `${file} RESET ROLE without SET ROLE`);
+        continue;
+      }
+      setRoleFiles += 1;
+      assert(/^set\s+role\s+migrator$/i.test(statements[setRoleAt]), `${file} must SET ROLE migrator`);
+      assert(resetAt === statements.length - 1, `${file} must end with RESET ROLE`);
+      assert(
+        statements.filter((stmt) => /^reset\s+role$/i.test(stmt)).length === 1,
+        `${file} must RESET ROLE only once, after migrator-owned objects exist`,
+      );
+      assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
+    }
+    assert(setRoleFiles === 3, "expected SET ROLE migrator in 0002, 0003, and 0004");
+  });
+
+  await test("migration history inserts succeed as the restored bootstrap role", async () => {
+    const recorded = await admin.query(
+      "select version from supabase_migrations.schema_migrations order by version",
+    );
+    assert(
+      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004",
+      "bootstrap role must record 0001-0004 after RESET ROLE",
+    );
+    await admin.query("set role migrator");
+    try {
+      await expectFail(
+        () =>
+          admin.query(
+            `insert into supabase_migrations.schema_migrations(version, name, statements)
+             values ('9999', 'must_fail', array['no'])`,
+          ),
+        /permission denied/i,
+        "migrator history insert",
+      );
+    } finally {
+      await admin.query("reset role");
     }
   });
 
@@ -273,6 +412,31 @@ try {
       assert(row.relforcerowsecurity === true, `${row.nspname}.${row.relname} FORCE RLS off`);
       assert(row.owner === "migrator", `${row.nspname}.${row.relname} owner is ${row.owner}`);
     }
+    const leakedOwners = await admin.query(`
+      select kind, name
+      from (
+        select 'schema'::text as kind, n.nspname as name
+        from pg_namespace n
+        where n.nspname in ('identity', 'commercial')
+          and pg_get_userbyid(n.nspowner) <> 'migrator'
+        union all
+        select 'relation', n.nspname || '.' || c.relname
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname in ('identity', 'commercial')
+          and pg_get_userbyid(c.relowner) <> 'migrator'
+        union all
+        select 'function', n.nspname || '.' || p.proname
+        from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname in ('identity', 'commercial')
+          and pg_get_userbyid(p.proowner) <> 'migrator'
+      ) leaked
+    `);
+    assert(
+      leakedOwners.rows.length === 0,
+      `objects not owned by migrator: ${leakedOwners.rows.map((row) => `${row.kind} ${row.name}`).join(", ")}`,
+    );
   });
 
   await test("every FORCE RLS table has the migrator owner policy and no runtime equivalent", async () => {

@@ -199,4 +199,6 @@ grant execute on function identity.provision_owner(uuid, text, text) to api_app;
 grant select, insert on commercial.analytics_events to api_app;
 revoke all on commercial.analytics_events from public, anon, authenticated, worker_app, purge_app;
 
+-- D-011: restore the bootstrap session role. Supabase CLI records
+-- schema_migrations as that role after this file returns; migrator has no catalog access.
 reset role;

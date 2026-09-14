@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export async function applyCleanMigrations(client, root) {
+export async function applyCleanMigrations(client, root, { afterEach } = {}) {
   await client.query("reset role");
   await client.query("drop schema if exists commercial cascade");
   await client.query("drop schema if exists identity cascade");
@@ -31,6 +31,9 @@ export async function applyCleanMigrations(client, root) {
     .sort();
   for (const file of files) {
     await client.query(readFileSync(join(dir, file), "utf8"));
+    if (afterEach) {
+      await afterEach(file);
+    }
   }
   await client.query("reset role");
   return files.length;

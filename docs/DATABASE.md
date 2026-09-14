@@ -35,6 +35,13 @@
 
 Supabase `service_role` is forbidden as an application connection. Client roles `anon` and `authenticated` have no grants on `identity` or `commercial`. Hosted migrations must not `ALTER` or drop those platform roles; create them only when absent for local embedded Postgres. Application migrations contain no `ALTER ROLE`. `api_app`, `worker_app`, `purge_app`, and `migrator` are created with `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION` and must not have `BYPASSRLS`. If any of those four already exists with `LOGIN`, `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, or `BYPASSRLS`, bootstrap raises and does not rewrite the role. `migrator` is the object owner. Each FORCE RLS application table has a `FOR ALL TO migrator USING (true) WITH CHECK (true)` policy so definer functions and migration DML still work. Runtime roles never receive that unrestricted policy.
 
+## Migration authoring (D-011)
+
+- Later migrations may `SET ROLE migrator` so application schemas, tables, functions, and SECURITY DEFINER objects are owned by `migrator`.
+- Any migration that sets that role must `RESET ROLE` as its last executable statement. No DDL, grants, policies, or comments may follow it.
+- Supabase CLI inserts `supabase_migrations.schema_migrations` as the bootstrap session user after the file returns. `migrator` cannot write that catalog. Leaving `SET ROLE migrator` in effect prevents history from being recorded and rolls back the migration.
+- Do not `ALTER ROLE`. Do not change hosted `0001_foundation.sql`. Never use `service_role`.
+
 ## Schemas
 
 | Schema | Contents | Client access |
