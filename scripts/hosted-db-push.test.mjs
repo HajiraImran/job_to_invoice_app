@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -7,12 +7,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyHostedMigrations,
   assertSafeHostedMigrationUrl,
+  hostedCliLaunch,
   hostedDbPushArgv,
   isExecutedAsMain,
   readLinkedProjectRef,
   redactCapturedOutput,
+  resolveSupabaseJsEntry,
   runHostedDbPush,
-  supabaseCliExecutable,
+  splitSearchPath,
 } from "./hosted-db-push.mjs";
 
 const LINKED_REF = "abcdefghijklmnopabcd";
@@ -32,6 +34,23 @@ function sessionUrl({
   suffix = "",
 } = {}) {
   return `${protocol}://${user}:${password}@${host}${port}${database}${suffix}`;
+}
+
+function writeJsEntry() {
+  const dir = mkdtempSync(path.join(tmpdir(), "jti-js-"));
+  const filePath = path.join(dir, "supabase.js");
+  writeFileSync(filePath, "export {};\n");
+  return realpathSync(filePath);
+}
+
+function writeNpmShimLayout() {
+  const prefix = mkdtempSync(path.join(tmpdir(), "jti-shim-"));
+  writeFileSync(path.join(prefix, "supabase.cmd"), "@echo off\r\n");
+  const dist = path.join(prefix, "node_modules", "supabase", "dist");
+  mkdirSync(dist, { recursive: true });
+  const jsPath = path.join(dist, "supabase.js");
+  writeFileSync(jsPath, "export {};\n");
+  return { prefix, jsPath: realpathSync(jsPath) };
 }
 
 function writeRefFile(contents) {
@@ -124,6 +143,7 @@ test("does not accept an environment project ref that disagrees with the linked 
     const status = await applyHostedMigrations({
       env: { DATABASE_URL_MIGRATIONS: sessionUrl(), SUPABASE_PROJECT_REF: OTHER_REF },
       projectRefPath: writeRefFile(LINKED_REF),
+      platform: "linux",
       checkReachable: async () => {},
       spawn: () => {
         spawned += 1;
@@ -255,13 +275,18 @@ test("command-injection strings remain one inert argv value", () => {
   assertSafeHostedMigrationUrl(url, LINKED_REF);
   const argv = hostedDbPushArgv(url);
   assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+  const jsEntry = writeJsEntry();
   let spawned = 0;
   const captured = captureWriters();
   const status = runHostedDbPush(url, {
+    platform: "win32",
+    execPath: process.execPath,
+    requireResolve: () => jsEntry,
     spawn: (bin, receivedArgv, options) => {
       spawned += 1;
-      assert.equal(receivedArgv.length, 4);
-      assert.equal(receivedArgv[3], url);
+      assert.equal(bin, process.execPath);
+      assert.equal(receivedArgv.length, 5);
+      assert.equal(receivedArgv[4], url);
       assert.equal(options.shell, false);
       return { status: 0, stdout: "", stderr: "" };
     },
@@ -276,6 +301,7 @@ test("redacts credentials from stdout, stderr, and thrown errors", () => {
   const url = sessionUrl({ password: ENCODED_SPECIAL });
   const captured = captureWriters();
   runHostedDbPush(url, {
+    platform: "linux",
     spawn: () => ({
       status: 1,
       stdout: `connected ${url} password=${DECODED_SPECIAL}\n`,
@@ -311,10 +337,92 @@ test("omits output when credentials cannot be redacted safely", () => {
   );
 });
 
-test("selects Windows and non-Windows CLI executables", () => {
-  assert.equal(supabaseCliExecutable("win32"), "supabase.cmd");
-  assert.equal(supabaseCliExecutable("linux"), "supabase");
-  assert.equal(supabaseCliExecutable("darwin"), "supabase");
+test("Windows launches the resolved JS entry through process.execPath", () => {
+  const url = sessionUrl();
+  const jsEntry = writeJsEntry();
+  const launch = hostedCliLaunch(url, {
+    platform: "win32",
+    execPath: process.execPath,
+    requireResolve: () => jsEntry,
+  });
+  assert.equal(launch.command, process.execPath);
+  assert.doesNotMatch(launch.command, /supabase\.cmd|supabase\.ps1|cmd\.exe|powershell/i);
+  assert.deepEqual(launch.argv, [jsEntry, "db", "push", "--db-url", url]);
+  assert.equal(launch.spawnOptions.shell, false);
+  assert.equal(launch.spawnOptions.windowsHide, true);
+});
+
+test("non-Windows launch remains supabase with db push argv", () => {
+  const url = sessionUrl();
+  const launch = hostedCliLaunch(url, { platform: "linux" });
+  assert.equal(launch.command, "supabase");
+  assert.deepEqual(launch.argv, ["db", "push", "--db-url", url]);
+  assert.equal(launch.spawnOptions.shell, false);
+  const darwin = hostedCliLaunch(url, { platform: "darwin" });
+  assert.equal(darwin.command, "supabase");
+  assert.deepEqual(darwin.argv, ["db", "push", "--db-url", url]);
+});
+
+test("local package resolution is preferred over PATH shims", () => {
+  const localJs = writeJsEntry();
+  const shim = writeNpmShimLayout();
+  const resolved = resolveSupabaseJsEntry({
+    requireResolve: () => localJs,
+    pathEnv: shim.prefix,
+    pathDelimiter: path.delimiter,
+  });
+  assert.equal(resolved, localJs);
+});
+
+test("valid global npm shim layout is used when the package is not resolvable", () => {
+  const shim = writeNpmShimLayout();
+  const quoted = `"${shim.prefix}"`;
+  const resolved = resolveSupabaseJsEntry({
+    requireResolve: () => {
+      throw Object.assign(new Error("not found"), { code: "MODULE_NOT_FOUND" });
+    },
+    pathEnv: `${quoted}${path.delimiter}C:\\Windows\\System32`,
+    pathDelimiter: path.delimiter,
+  });
+  assert.equal(resolved, shim.jsPath);
+});
+
+test("missing JS entry fails closed without spawning", () => {
+  let spawned = 0;
+  const message = thrownMessage(() =>
+    runHostedDbPush(sessionUrl(), {
+      platform: "win32",
+      requireResolve: () => {
+        throw Object.assign(new Error("not found"), { code: "MODULE_NOT_FOUND" });
+      },
+      pathEnv: "",
+      spawn: () => {
+        spawned += 1;
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    }),
+  );
+  assert.match(message, /could not be resolved/);
+  assert.doesNotMatch(message, new RegExp(PASSWORD));
+  assert.doesNotMatch(message, /postgres:\/\//);
+  assert.equal(spawned, 0);
+});
+
+test("malformed PATH entries fail safely", () => {
+  assert.deepEqual(splitSearchPath(';;;"";;', ";"), []);
+  assert.deepEqual(splitSearchPath('"C:\\quoted', ";"), []);
+  const message = thrownMessage(() =>
+    resolveSupabaseJsEntry({
+      requireResolve: () => {
+        throw new Error("not found");
+      },
+      pathEnv: `;;;"C:\\nope;;${path.join(tmpdir(), "missing-shim")};;`,
+      pathDelimiter: ";",
+    }),
+  );
+  assert.match(message, /could not be resolved/);
+  assert.doesNotMatch(message, /C:\\nope/);
+  assert.doesNotMatch(message, /missing-shim/);
 });
 
 test("main guard matches resolved, relative, and Windows path forms", () => {
@@ -338,15 +446,43 @@ test("spawns exactly once with the validated URL and does not retry", async () =
   const status = await applyHostedMigrations({
     env: { DATABASE_URL_MIGRATIONS: url },
     projectRefPath: writeRefFile(LINKED_REF),
+    platform: "linux",
     checkReachable: async (hostname) => {
       assert.equal(hostname, HOST);
     },
     spawn: (bin, argv, options) => {
       spawned += 1;
-      assert.equal(bin, supabaseCliExecutable());
+      assert.equal(bin, "supabase");
       assert.deepEqual(argv, ["db", "push", "--db-url", url]);
       assert.equal(options.shell, false);
       assert.doesNotMatch(argv.join(" "), /include-all|include-roles|include-seed|--linked/);
+      return { status: 1, stdout: "failed once", stderr: "" };
+    },
+    stdout: captured.stdout,
+    stderr: captured.stderr,
+  });
+  assert.equal(status, 1);
+  assert.equal(spawned, 1);
+});
+
+test("Windows spawns node once with the JS entry and does not retry", async () => {
+  const url = sessionUrl();
+  const jsEntry = writeJsEntry();
+  const captured = captureWriters();
+  let spawned = 0;
+  const status = await applyHostedMigrations({
+    env: { DATABASE_URL_MIGRATIONS: url },
+    projectRefPath: writeRefFile(LINKED_REF),
+    platform: "win32",
+    execPath: process.execPath,
+    requireResolve: () => jsEntry,
+    checkReachable: async () => {},
+    spawn: (bin, argv, options) => {
+      spawned += 1;
+      assert.equal(bin, process.execPath);
+      assert.deepEqual(argv, [jsEntry, "db", "push", "--db-url", url]);
+      assert.equal(options.shell, false);
+      assert.equal(options.windowsHide, true);
       return { status: 1, stdout: "failed once", stderr: "" };
     },
     stdout: captured.stdout,
@@ -374,19 +510,39 @@ test("does not spawn when validation fails and reports spawn failures without ar
   );
   const message = thrownMessage(() =>
     runHostedDbPush(sessionUrl(), {
+      platform: "win32",
+      execPath: process.execPath,
+      requireResolve: () => writeJsEntry(),
       spawn: () => {
         spawned += 1;
-        const failure = new Error("ENOENT");
-        failure.spawnargs = ["supabase.cmd", "db", "push", "--db-url", sessionUrl()];
+        const failure = new Error("spawn EINVAL");
+        failure.code = "EINVAL";
+        failure.spawnargs = [process.execPath, "db", "push", "--db-url", sessionUrl()];
+        failure.path = process.execPath;
         return { error: failure, status: null, stdout: "", stderr: "" };
       },
     }),
   );
-  assert.match(message, /Failed to start the Supabase CLI/);
+  assert.match(message, /Failed to start the Supabase CLI for hosted apply \(EINVAL\)/);
   assert.doesNotMatch(message, /--db-url/);
+  assert.doesNotMatch(message, /spawnargs/);
   assert.doesNotMatch(message, new RegExp(PASSWORD));
   assert.doesNotMatch(message, /postgres:\/\//);
-  assert.equal(spawned, 1);
+  const enoent = thrownMessage(() =>
+    runHostedDbPush(sessionUrl(), {
+      platform: "linux",
+      spawn: () => {
+        spawned += 1;
+        const failure = new Error("spawn ENOENT");
+        failure.code = "ENOENT";
+        failure.spawnargs = ["supabase", "db", "push", "--db-url", sessionUrl()];
+        return { error: failure, status: null, stdout: "", stderr: "" };
+      },
+    }),
+  );
+  assert.match(enoent, /\(ENOENT\)/);
+  assert.doesNotMatch(enoent, new RegExp(PASSWORD));
+  assert.equal(spawned, 2);
 });
 
 test("does not spawn when the pooler is unreachable", async () => {

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -19,13 +20,151 @@ const DEFAULT_PROJECT_REF_PATH = path.join(
   ".temp",
   "project-ref",
 );
-
-export function supabaseCliExecutable(platform = process.platform) {
-  return platform === "win32" ? "supabase.cmd" : "supabase";
-}
+const JS_ENTRY_UNRESOLVED = "D-012: Supabase CLI JavaScript entry could not be resolved";
+const SAFE_SPAWN_CODES = new Set(["EINVAL", "ENOENT", "EACCES", "EPERM"]);
+const localRequire = createRequire(import.meta.url);
 
 export function hostedDbPushArgv(url) {
   return ["db", "push", "--db-url", url];
+}
+
+function isRegularNamedJsEntry(candidate) {
+  if (typeof candidate !== "string" || candidate.length === 0 || candidate.includes("\0")) {
+    return null;
+  }
+  let real;
+  try {
+    real = realpathSync(path.resolve(candidate));
+  } catch {
+    return null;
+  }
+  try {
+    if (!statSync(real).isFile()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  if (path.basename(real) !== "supabase.js") {
+    return null;
+  }
+  return real;
+}
+
+export function splitSearchPath(pathEnv, delimiter = path.delimiter) {
+  if (typeof pathEnv !== "string" || pathEnv.length === 0) {
+    return [];
+  }
+  const entries = [];
+  let current = "";
+  let inQuotes = false;
+  for (const char of pathEnv) {
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (char === delimiter && !inQuotes) {
+      const entry = current.trim();
+      if (entry && !entry.includes("\0")) {
+        entries.push(entry);
+      }
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (inQuotes) {
+    return entries;
+  }
+  const last = current.trim();
+  if (last && !last.includes("\0")) {
+    entries.push(last);
+  }
+  return entries;
+}
+
+function isRegularFile(candidate) {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function resolveFromNpmShimPath({ pathEnv = process.env.PATH, pathDelimiter = path.delimiter } = {}) {
+  for (const entry of splitSearchPath(pathEnv, pathDelimiter)) {
+    const shimDir = path.resolve(entry);
+    const shim = path.join(shimDir, "supabase.cmd");
+    if (!isRegularFile(shim)) {
+      continue;
+    }
+    const derived = path.join(shimDir, "node_modules", "supabase", "dist", "supabase.js");
+    const jsEntry = isRegularNamedJsEntry(derived);
+    if (jsEntry) {
+      return jsEntry;
+    }
+  }
+  return null;
+}
+
+export function resolveSupabaseJsEntry({
+  requireResolve = (id) => localRequire.resolve(id),
+  pathEnv = process.env.PATH,
+  pathDelimiter = path.delimiter,
+} = {}) {
+  try {
+    const fromPackage = isRegularNamedJsEntry(requireResolve("supabase/dist/supabase.js"));
+    if (fromPackage) {
+      return fromPackage;
+    }
+  } catch {
+    // Fall back to an on-PATH npm shim layout. Do not execute the shim.
+  }
+  const fromPath = resolveFromNpmShimPath({ pathEnv, pathDelimiter });
+  if (fromPath) {
+    return fromPath;
+  }
+  throw new Error(JS_ENTRY_UNRESOLVED);
+}
+
+export function hostedCliLaunch(
+  url,
+  {
+    platform = process.platform,
+    execPath = process.execPath,
+    requireResolve,
+    pathEnv,
+    pathDelimiter,
+  } = {},
+) {
+  const cliArgv = hostedDbPushArgv(url);
+  const spawnOptions = {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    shell: false,
+  };
+  if (platform === "win32") {
+    const jsEntry = resolveSupabaseJsEntry({ requireResolve, pathEnv, pathDelimiter });
+    return {
+      command: execPath,
+      argv: [jsEntry, ...cliArgv],
+      spawnOptions,
+    };
+  }
+  return {
+    command: "supabase",
+    argv: cliArgv,
+    spawnOptions,
+  };
+}
+
+function spawnFailureMessage(error) {
+  const code = error && typeof error.code === "string" && SAFE_SPAWN_CODES.has(error.code) ? error.code : null;
+  if (code) {
+    return `Failed to start the Supabase CLI for hosted apply (${code})`;
+  }
+  return "Failed to start the Supabase CLI for hosted apply";
 }
 
 export function isExecutedAsMain(metaUrl, argv1 = process.argv[1], platform = process.platform) {
@@ -225,20 +364,24 @@ export function runHostedDbPush(
   {
     spawn = spawnSync,
     platform = process.platform,
+    execPath = process.execPath,
+    requireResolve,
+    pathEnv,
+    pathDelimiter,
     stdout = process.stdout,
     stderr = process.stderr,
   } = {},
 ) {
-  const bin = supabaseCliExecutable(platform);
-  const argv = hostedDbPushArgv(url);
-  const result = spawn(bin, argv, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-    shell: false,
+  const launch = hostedCliLaunch(url, {
+    platform,
+    execPath,
+    requireResolve,
+    pathEnv,
+    pathDelimiter,
   });
+  const result = spawn(launch.command, launch.argv, launch.spawnOptions);
   if (result.error) {
-    throw new Error("Failed to start the Supabase CLI for hosted apply");
+    throw new Error(spawnFailureMessage(result.error));
   }
   const out = redactCapturedOutput(result.stdout, url);
   const err = redactCapturedOutput(result.stderr, url);
@@ -256,6 +399,10 @@ export async function applyHostedMigrations({
   projectRefPath = DEFAULT_PROJECT_REF_PATH,
   spawn = spawnSync,
   platform = process.platform,
+  execPath = process.execPath,
+  requireResolve,
+  pathEnv,
+  pathDelimiter,
   stdout = process.stdout,
   stderr = process.stderr,
   checkReachable = assertIpv4SessionPoolerReachable,
@@ -265,7 +412,16 @@ export async function applyHostedMigrations({
   const url = typeof rawUrl === "string" ? rawUrl.trim() : rawUrl;
   const parsed = assertSafeHostedMigrationUrl(url, expectedRef);
   await checkReachable(parsed.hostname);
-  return runHostedDbPush(url, { spawn, platform, stdout, stderr });
+  return runHostedDbPush(url, {
+    spawn,
+    platform,
+    execPath,
+    requireResolve,
+    pathEnv,
+    pathDelimiter,
+    stdout,
+    stderr,
+  });
 }
 
 if (isExecutedAsMain(import.meta.url, process.argv[1])) {

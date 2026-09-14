@@ -57,7 +57,7 @@ Required URL shape:
 - Do not add query parameters such as `pgbouncer=true`. Session mode is selected by port `5432`; those parameters are incompatible with session-level `SET ROLE` / `RESET ROLE`.
 - Never `service_role`. Never print, log, or commit the URL, username/password pair, or password.
 
-`pnpm hosted:db-push` validates that shape, checks IPv4 reachability to port `5432`, then runs exactly `supabase db push --db-url <validated URL>` once, with an argv array and the shell disabled. It does not pass `--linked`, `--include-all`, `--include-roles`, or `--include-seed`. Captured CLI output is redacted; spawn failures are reported without argv or credentials.
+`pnpm hosted:db-push` validates that shape, checks IPv4 reachability to port `5432`, then runs exactly `db push --db-url <validated URL>` once, with an argv array and the shell disabled. Windows invokes `node.exe` with the resolved `supabase/dist/supabase.js` entry; it does not spawn `supabase.cmd`, `supabase.ps1`, `cmd.exe`, or PowerShell, and it never sets `shell:true`. Non-Windows spawns `supabase`. It does not pass `--linked`, `--include-all`, `--include-roles`, or `--include-seed`. Captured CLI output is redacted; spawn failures report a generic message and a safe code such as `EINVAL` or `ENOENT`, without argv or credentials.
 
 Passing `--db-url` still exposes the URI on the local process list while the CLI runs. That residual exposure is unavoidable with this CLI interface. Unset the variable after apply.
 

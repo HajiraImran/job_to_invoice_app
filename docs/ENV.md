@@ -27,7 +27,7 @@ pnpm hosted:db-push
 Remove-Item Env:DATABASE_URL_MIGRATIONS
 ```
 
-`pnpm hosted:db-push` does not print the URL. Passing `--db-url` still exposes it on the local process list while the CLI runs.
+`pnpm hosted:db-push` does not print the URL. Windows launches the resolved Supabase JS entry through `node.exe`; `.cmd`/`.ps1` shims and `shell:true` are not used. Passing `--db-url` still exposes it on the local process list while the CLI runs.
 
 The API verifies owner access tokens with the project JWKS:
 
