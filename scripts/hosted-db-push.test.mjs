@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyHostedMigrations,
+  assertIpv4SessionPoolerReachable,
   assertSafeHostedMigrationUrl,
   classifyHostedCliOutput,
   extractPendingMigrationBasenames,
@@ -13,6 +14,7 @@ import {
   hostedCliLaunch,
   hostedDbPushArgv,
   isExecutedAsMain,
+  probeIpv4Tcp,
   readLinkedProjectRef,
   redactCapturedOutput,
   resolveSupabaseJsEntry,
@@ -759,4 +761,246 @@ test("malicious child output cannot inject additional reported fields", () => {
   assert.doesNotMatch(report, /pwned/);
   assert.doesNotMatch(report, /extra:/);
   assert.match(report, /pending: 0002_identity_tenancy.sql/);
+});
+
+const TEST_IPV4 = "192.0.2.10";
+
+function createFakeSocket() {
+  const handlers = new Map();
+  return {
+    cleared: false,
+    destroyed: false,
+    once(event, fn) {
+      handlers.set(event, fn);
+      return this;
+    },
+    emit(event, payload) {
+      const fn = handlers.get(event);
+      if (fn) {
+        fn(payload);
+      }
+    },
+    removeAllListeners() {
+      this.cleared = true;
+      handlers.clear();
+    },
+    destroy() {
+      this.destroyed = true;
+    },
+  };
+}
+
+test("IPv4 resolution and TCP success probe with family 4", async () => {
+  const socket = createFakeSocket();
+  let connectOpts;
+  await assertIpv4SessionPoolerReachable(HOST, {
+    resolve4: async () => [TEST_IPV4],
+    connect: (opts) => {
+      connectOpts = opts;
+      queueMicrotask(() => socket.emit("connect"));
+      return socket;
+    },
+  });
+  assert.deepEqual(connectOpts, { host: TEST_IPV4, port: 5432, family: 4 });
+  assert.equal(socket.cleared, true);
+  assert.equal(socket.destroyed, true);
+});
+
+test("resolver returning IPv6 only is reported as no IPv4", async () => {
+  await assert.rejects(
+    () =>
+      assertIpv4SessionPoolerReachable(HOST, {
+        resolve4: async () => {
+          throw Object.assign(new Error("no A"), { code: "ENODATA" });
+        },
+        connect: () => {
+          throw new Error("must not connect");
+        },
+      }),
+    /no IPv4 address/,
+  );
+  await assert.rejects(
+    () =>
+      assertIpv4SessionPoolerReachable(HOST, {
+        resolve4: async () => ["2001:db8::1"],
+        connect: () => {
+          throw new Error("must not connect");
+        },
+      }),
+    /no IPv4 address/,
+  );
+});
+
+test("DNS failure is distinct from TCP failure", async () => {
+  await assert.rejects(
+    () =>
+      assertIpv4SessionPoolerReachable(HOST, {
+        resolve4: async () => {
+          throw Object.assign(new Error("lookup"), { code: "ENOTFOUND" });
+        },
+        connect: () => {
+          throw new Error("must not connect");
+        },
+      }),
+    (error) => {
+      assert.match(error.message, /DNS lookup failed/);
+      assert.doesNotMatch(error.message, new RegExp(PASSWORD));
+      assert.doesNotMatch(error.message, /postgres:\/\//);
+      return true;
+    },
+  );
+});
+
+test("TCP timeout, refusal, and socket error are distinct", async () => {
+  let connects = 0;
+  await assert.rejects(
+    () =>
+      assertIpv4SessionPoolerReachable(HOST, {
+        resolve4: async () => [TEST_IPV4],
+        timeoutMs: 20,
+        connect: () => {
+          connects += 1;
+          return createFakeSocket();
+        },
+      }),
+    /timed out/,
+  );
+  assert.equal(connects, 1);
+  await assert.rejects(
+    () =>
+      assertIpv4SessionPoolerReachable(HOST, {
+        resolve4: async () => [TEST_IPV4],
+        connect: () => {
+          const socket = createFakeSocket();
+          queueMicrotask(() =>
+            socket.emit("error", Object.assign(new Error("refused"), { code: "ECONNREFUSED" })),
+          );
+          return socket;
+        },
+      }),
+    /refused the connection/,
+  );
+  await assert.rejects(
+    () =>
+      assertIpv4SessionPoolerReachable(HOST, {
+        resolve4: async () => [TEST_IPV4],
+        connect: () => {
+          const socket = createFakeSocket();
+          queueMicrotask(() =>
+            socket.emit("error", Object.assign(new Error("reset"), { code: "ECONNRESET" })),
+          );
+          return socket;
+        },
+      }),
+    /TCP probe failed/,
+  );
+});
+
+test("timer and socket are cleaned up after success, timeout, and error", async () => {
+  const success = createFakeSocket();
+  await probeIpv4Tcp(TEST_IPV4, {
+    timeoutMs: 50,
+    connect: () => {
+      queueMicrotask(() => success.emit("connect"));
+      return success;
+    },
+  });
+  assert.equal(success.cleared, true);
+  assert.equal(success.destroyed, true);
+
+  const timed = createFakeSocket();
+  await probeIpv4Tcp(TEST_IPV4, { timeoutMs: 15, connect: () => timed });
+  assert.equal(timed.cleared, true);
+  assert.equal(timed.destroyed, true);
+
+  const failed = createFakeSocket();
+  await probeIpv4Tcp(TEST_IPV4, {
+    timeoutMs: 50,
+    connect: () => {
+      queueMicrotask(() =>
+        failed.emit("error", Object.assign(new Error("reset"), { code: "ECONNRESET" })),
+      );
+      return failed;
+    },
+  });
+  assert.equal(failed.cleared, true);
+  assert.equal(failed.destroyed, true);
+});
+
+test("connectivity failure does not spawn the migration CLI", async () => {
+  let spawned = 0;
+  await assert.rejects(
+    () =>
+      applyHostedMigrations({
+        env: { DATABASE_URL_MIGRATIONS: sessionUrl() },
+        projectRefPath: writeRefFile(LINKED_REF),
+        platform: "linux",
+        checkReachable: (hostname) =>
+          assertIpv4SessionPoolerReachable(hostname, {
+            resolve4: async () => [TEST_IPV4],
+            timeoutMs: 20,
+            connect: () => createFakeSocket(),
+          }),
+        spawn: () => {
+          spawned += 1;
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      }),
+    /timed out/,
+  );
+  assert.equal(spawned, 0);
+});
+
+test("exactly one CLI spawn occurs after successful connectivity", async () => {
+  const url = sessionUrl();
+  let resolvedHost;
+  let spawned = 0;
+  const captured = captureWriters();
+  const status = await applyHostedMigrations({
+    env: { DATABASE_URL_MIGRATIONS: url },
+    projectRefPath: writeRefFile(LINKED_REF),
+    platform: "linux",
+    stdout: captured.stdout,
+    stderr: captured.stderr,
+    checkReachable: (hostname) => {
+      resolvedHost = hostname;
+      return assertIpv4SessionPoolerReachable(hostname, {
+        resolve4: async () => [TEST_IPV4],
+        connect: (opts) => {
+          assert.equal(opts.family, 4);
+          assert.equal(opts.port, 5432);
+          assert.equal(opts.host, TEST_IPV4);
+          const socket = createFakeSocket();
+          queueMicrotask(() => socket.emit("connect"));
+          return socket;
+        },
+      });
+    },
+    spawn: (_bin, argv) => {
+      spawned += 1;
+      assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+      return { status: 0, stdout: "Finished supabase db push.\n", stderr: "" };
+    },
+  });
+  assert.equal(resolvedHost, HOST);
+  assert.equal(status, 0);
+  assert.equal(spawned, 1);
+  assert.doesNotMatch(captured.stdoutText(), new RegExp(PASSWORD));
+  assert.doesNotMatch(captured.stdoutText(), /postgres:\/\//);
+});
+
+test("reachability errors do not leak secrets or connection details", async () => {
+  try {
+    await assertIpv4SessionPoolerReachable(HOST, {
+      resolve4: async () => {
+        throw Object.assign(new Error(`fail ${sessionUrl()}`), { code: "ENOTFOUND" });
+      },
+    });
+    assert.fail("expected DNS failure");
+  } catch (error) {
+    assert.doesNotMatch(error.message, new RegExp(PASSWORD));
+    assert.doesNotMatch(error.message, /postgres:\/\//);
+    assert.doesNotMatch(error.message, /192\.0\.2\.10/);
+    assert.doesNotMatch(error.message, /--db-url/);
+  }
 });
