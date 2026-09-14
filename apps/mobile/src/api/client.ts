@@ -1,6 +1,6 @@
 export type OwnerBootstrap = {
   user: { id: string; status: string; display_email: string };
-  workspace: { id: string; setup_completed: boolean };
+  workspace: { id: string; version: number; setup_completed: boolean };
   entitlement: { source: string; can_publish: boolean };
   first_sign_in: boolean;
   analytics_alias_id: string;
@@ -11,6 +11,7 @@ export type ApiError = {
   code: string;
   message: string;
   retryable: boolean;
+  field_errors?: { field: string; message: string }[];
 };
 
 export async function ownerRequest<T>(options: {
@@ -20,6 +21,7 @@ export async function ownerRequest<T>(options: {
   method?: string;
   body?: unknown;
   idempotencyKey?: string;
+  ifMatch?: string | number;
 }): Promise<{ ok: true; data: T } | { ok: false; error: ApiError }> {
   const headers: Record<string, string> = {
     accept: "application/json",
@@ -31,6 +33,9 @@ export async function ownerRequest<T>(options: {
   if (options.idempotencyKey) {
     headers["idempotency-key"] = options.idempotencyKey;
   }
+  if (options.ifMatch !== undefined) {
+    headers["if-match"] = String(options.ifMatch);
+  }
   try {
     const response = await fetch(`${options.apiBaseUrl}${options.path}`, {
       method: options.method ?? "GET",
@@ -39,7 +44,12 @@ export async function ownerRequest<T>(options: {
     });
     const json = (await response.json()) as {
       data?: T;
-      error?: { code?: string; message?: string; retryable?: boolean };
+      error?: {
+        code?: string;
+        message?: string;
+        retryable?: boolean;
+        field_errors?: { field: string; message: string }[];
+      };
     };
     if (!response.ok) {
       return {
@@ -49,6 +59,7 @@ export async function ownerRequest<T>(options: {
           code: json.error?.code ?? "UNAVAILABLE",
           message: json.error?.message ?? "Request failed.",
           retryable: json.error?.retryable === true,
+          field_errors: json.error?.field_errors,
         },
       };
     }
@@ -60,3 +71,5 @@ export async function ownerRequest<T>(options: {
     };
   }
 }
+
+export type OwnerRequestOptions = Omit<Parameters<typeof ownerRequest>[0], "apiBaseUrl" | "accessToken">;

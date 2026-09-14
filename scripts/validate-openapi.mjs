@@ -19,6 +19,9 @@ if (!spec.paths?.["/v1/me"]?.get) {
 if (!spec.paths?.["/v1/analytics/batch"]?.post) {
   errors.push("POST /v1/analytics/batch is required");
 }
+if (!spec.paths?.["/v1/workspace"]?.post) {
+  errors.push("POST /v1/workspace is required");
+}
 if (spec.paths?.["/v1/jobs"] || spec.paths?.["/v1/drafts"]) {
   errors.push("commercial routes must not be declared until they are implemented");
 }
@@ -28,4 +31,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log("OpenAPI 3.1 authentication contract is valid.");
+console.log("OpenAPI 3.1 owner setup contract is valid.");

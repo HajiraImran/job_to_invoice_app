@@ -2,6 +2,7 @@ export const ANALYTICS_SCHEMA_VERSION = 1;
 
 export const SERVER_ONLY_EVENTS = [
   "signup_verified",
+  "onboarding_completed",
   "document_published",
   "request_delivery_result",
   "approval_completed",
@@ -14,7 +15,6 @@ export const SERVER_ONLY_EVENTS = [
 ] as const;
 
 export const CLIENT_EVENTS = [
-  "onboarding_completed",
   "job_created",
   "change_started",
   "paywall_viewed",

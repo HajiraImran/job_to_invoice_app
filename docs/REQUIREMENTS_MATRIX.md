@@ -11,8 +11,8 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | DEC01 | iPhone first; iOS 17+ unless raised and documented; Apple SDK overrides | apps/mobile | All owner screens | EAS iOS | — | — | NFR02 device matrix | REL01 | PENDING | Android operator app deferred |
 | DEC02 | Customer browser portal; no customer app or account | apps/portal | S25–S27 | Portal routes | approval_requests purpose | — | QA18 | APR01 | PENDING | |
-| DEC03 | US English USD; US business address; browsers may be elsewhere | all | S04 VAL02 | — | workspaces.currency USD | — | QA64 | — | PENDING | |
-| DEC04 | One owner, one workspace; two iPhones OK; no staff seats or transfer | apps/mobile apps/api | S04 | memberships | memberships | — | pnpm test:db duplicate provisioning (2026-09-14) | ACC03 | PENDING | Unique owner + one active owner membership enforced in provision_owner; S04 UI pending |
+| DEC03 | US English USD; US business address; browsers may be elsewhere | all | S04 VAL02 | — | workspaces.currency USD | — | packages/schemas/src/workspace-setup.test.ts; pnpm test:db currency | — | IMPLEMENTED | USD locked; US address + IANA TZ. Device locale QA unverified |
+| DEC04 | One owner, one workspace; two iPhones OK; no staff seats or transfer | apps/mobile apps/api | S04 | memberships | memberships | — | pnpm test:db duplicate provisioning + setup complete (2026-09-14) | ACC03 | IMPLEMENTED | Unique owner + one workspace enforced; S04 completes that row. Two-device unverified |
 | DEC05 | Record external payments only; no card collection | apps/mobile apps/api | S17 | payments/refunds | ledger_entries | payment_recorded | QA37 | BIL05 | PENDING | |
 | DEC06 | 3 free jobs; optional 14-day app trial; monthly/annual Apple subs | apps/mobile apps/api | S21 | entitlements | job_allowances entitlement_snapshots | trial_started purchase_verified | QA10 QA45 | SUB01–SUB03 | PENDING | |
 | DEC07 | Email code then explicit approval of immutable revision; no notarization claim | apps/portal | S26 | TX02 | approval_decisions | approval_completed | QA24 | APR04 | PENDING | |
@@ -31,7 +31,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | MET06 | Paying owner = verified sub, first txn not refunded; after trial | apps/api | S21 | TX05 | entitlement_snapshots | purchase_verified | QA45 | SUB07 | PENDING | |
 | MET07 | CAC = media / non-refunded new paying; unknown separate; $40–50 hypothesis | ops | — | spend import | — | — | Report | ANA03 | PENDING | Business hypothesis |
 | MET08 | Monthly renewal by cohort; weekly activity; annual buy ≠ annual retention | analytics | S21 | reports | entitlement_snapshots | purchase_verified | Cohort job | — | PENDING | |
-| AUTHZ01 | Auth from verified identity; workspace ID not auth; cross-tenant 404; portal ≠ owner; staff MFA | apps/api | all | JWT + RLS | memberships staff_users | — | QA03; pnpm test:db 18 passed (2026-09-14); apps/api/src/auth.test.ts staff 401 | ARC02 | PENDING | Owner JWT + provision + DB isolation verified; portal/staff still pending |
+| AUTHZ01 | Auth from verified identity; workspace ID not auth; cross-tenant 404; portal ≠ owner; staff MFA | apps/api | all | JWT + RLS | memberships staff_users | — | QA03; pnpm test:db; apps/api/src/workspace.test.ts injection 422 | ARC02 | IMPLEMENTED | Owner JWT + provision + setup identity-only mutation. Portal/staff still pending |
 | INV01 | Integer cents; qty 3-decimal string; no binary float; server authoritative; shared package | packages/domain | S10 S11 | calculate | document_lines | — | packages/domain fixtures.test.ts F01–F12; 40 passing domain tests | FIN01 | VERIFIED | Shared BigInt engine; mobile/API/PDF must import this package |
 | INV01 | Integer cents; qty 3-decimal string; no binary float; server authoritative; shared package | packages/domain | S10 S11 | calculate | document_lines | — | packages/domain fixtures.test.ts F01–F12; 40 passing domain tests | FIN01 | VERIFIED | Shared BigInt engine; mobile/API/PDF must import this package |
 | INV02 | Accepted commercial facts immutable; corrections via new version/reversal/credit | apps/api | S08 | triggers | documents ledger_entries | — | QA26 | DB04 | PENDING | |
@@ -42,7 +42,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | INV07 | Payment status derived; Mark paid is an entry flow | apps/api | S16 S17 | TX04 | ledger_entries | payment_recorded | QA37 | BIL08 | PENDING | |
 | INV08 | Archive hides; expiry keeps access/completion; deletion separate | apps/mobile | S05 S21 S24 | — | jobs.archived_at | — | QA13 | SUB05 PRV | PENDING | |
 | INV09 | Published job counts once; retries/changes do not; delete does not replenish | apps/api | S11 S21 | TX01 | job_allowances | document_published | QA10 QA11 | SUB02 | PENDING | |
-| INV10 | Server UTC authoritative; display workspace TZ; date-only no UTC midnight | packages/domain | S11 S15 | — | expires_at issue_date | — | QA64 | QUO01 | PENDING | |
+| INV10 | Server UTC authoritative; display workspace TZ; date-only no UTC midnight | packages/domain packages/schemas | S04 S11 S15 | — | workspaces.timezone | — | packages/schemas/src/workspace-setup.test.ts NY/LA DST | QUO01 | IMPLEMENTED | IANA store + date-only helper tests. Quote/invoice display still later |
 | JRN01 | First useful job: setup, quote, publish, delivery indicator | apps/mobile | S01–S11 | TX01 | documents | document_published | QA01 QA09 | Stage 2 | PENDING | |
 | JRN02 | Customer verifies and approves exact revision; refresh cannot re-approve | apps/portal | S25–S27 | TX02 | approval_decisions | approval_completed | QA20 QA24 | Stage 2 | PENDING | |
 | JRN03 | Extra work; old/change/new totals; original quote unchanged | apps/mobile apps/portal | S13 S26 | TX02 | scope_entries | change_started | QA27 | Stage 3 | PENDING | |
@@ -57,7 +57,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | S01 | Welcome; no paywall; demo cannot send | apps/mobile | S01 | — | — | — | Design+QA | JRN01 | PENDING | |
 | S02 | Email sign in; generic sent; throttle | apps/mobile | S02 | Auth | — | — | packages/schemas/src/index.test.ts; apps/mobile/src/auth/auth.test.ts | ACC01 | IMPLEMENTED | UI + validation + non-enumerating send. Real mailbox OTP unverified |
 | S03 | Verify code; paste/autofill; limits | apps/mobile | S03 | Auth | — | signup_verified | apps/mobile/src/auth/auth.test.ts | ACC01 | IMPLEMENTED | Code UI, cooldown, 5-fail client stop. Provider caps unverified |
-| S04 | Three-step setup; back keeps data; optional logo | apps/mobile | S04 | POST /workspace | workspaces | onboarding_completed | QA01 | VAL01 | PENDING | |
+| S04 | Three-step setup; back keeps data; optional logo | apps/mobile | S04 | POST /workspace | workspaces | onboarding_completed | packages/schemas 24 passed; mobile 8 passed; api 20 passed; pnpm test:db 23 passed (2026-09-14) | VAL01 | IMPLEMENTED | Form + API + DB. Live OTP, VoiceOver, Maestro, physical SecureStore unverified. Logo skip only. S05 not implemented |
 | S05 | Jobs list search filters New job sync badges pagination | apps/mobile | S05 | GET /jobs | jobs | — | QA05 | SYNC06 | PENDING | |
 | S06 | Create job Quote or Direct invoice; no forced contacts | apps/mobile | S06 | POST /jobs | jobs | job_created | QA44 | JRN06 | PENDING | |
 | S07 | Customer form; duplicate warn; archive restore | apps/mobile | S07 | customers | customers | — | CUS01 | VAL01 | PENDING | |
@@ -82,8 +82,8 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | S26 | Review; PDF ready; consent; approve/decline | apps/portal | S26 | TX02 | approval_decisions | approval_completed | QA24 | APR04 | PENDING | |
 | S27 | Receipt; no payment claim | apps/portal | S27 | portal receipt | artifacts | — | QA20 | API05 | PENDING | |
 | S28 | Support console MFA grant expiry audit | apps/admin | S28 | admin | staff_users staff_access_grants | — | QA59 QA60 | SEC05 | PENDING | |
-| VAL01 | Name/email/phone lengths; no enumeration rewrite | packages/domain apps/api | S04 S07 | validation | customers workspaces | — | QA02 | — | PENDING | |
-| VAL02 | US address; distinct billing/site; TZ confirm; MM/DD/YYYY | packages/domain | S04 S06 | validation | address_json | — | QA64 | — | PENDING | |
+| VAL01 | Name/email/phone lengths; no enumeration rewrite | packages/schemas apps/api apps/mobile | S04 S07 | validation | customers workspaces | — | packages/schemas/src/workspace-setup.test.ts; apps/api/src/workspace.test.ts 422 | — | IMPLEMENTED | Workspace setup bounds client+server. Customer form later |
+| VAL02 | US address; distinct billing/site; TZ confirm; MM/DD/YYYY | packages/schemas | S04 S06 | validation | address_json | — | packages/schemas/src/workspace-setup.test.ts ZIP/state/TZ | QA64 | IMPLEMENTED | Business address + TZ confirm. Site address and date presentation later |
 | VAL03 | Line limits; USD only; quote needs one positive net | packages/domain | S10 | validation | document_lines | — | F01 VAL boundaries.test.ts | — | PENDING | Qty/price/discount/100-line/total/positive-net calc limits verified; description/unit validation still pending |
 | VAL04 | Notes/terms/reason/name; plain text; client+server | packages/domain | S09 S26 | validation | snapshots | — | QA24 | — | PENDING | |
 | ACC01 | Supabase OTP 6-digit 10m 60s 5 fails; no second code store; secure tokens | apps/mobile apps/api | S02 S03 | Supabase Auth | app_users | signup_verified | packages/schemas/src/index.test.ts; docs/ENV.md | SREF06 | IMPLEMENTED | SDK OTP path; dashboard 6/600s/60s/5 documented. No second OTP table. Mailbox unverified |
@@ -114,7 +114,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | APR07 | Decline comment 1000; no chat/price edit | apps/portal | S26 | TX02 | approval_decisions.comment | — | QA25 | — | PENDING | |
 | APR08 | Owner+customer emails; failed receipt does not undo | apps/worker | S12 S27 | outbox | delivery_attempts | request_delivery_result | QA34 | EMAIL04 EMAIL05 | PENDING | |
 | FIN01 | q*p half-up − d; tax half-up net*r/10000; no inclusive/compound | packages/domain | S10 | calculate | — | — | fixtures.test.ts F01–F03 | INV01 | VERIFIED | BigInt half-up; no Math.round |
-| FIN02 | Operator rates; default 0 with confirm copy; group by rate | apps/mobile | S04 S10 | — | workspaces.default_tax_bp | — | FIN02 | DEC09 | PENDING | Domain groups tax_by_rate; setup copy/UI still pending |
+| FIN02 | Operator rates; default 0 with confirm copy; group by rate | apps/mobile | S04 S10 | — | workspaces.default_tax_bp | — | packages/schemas/src/workspace-setup.test.ts; setup.tsx tax confirm | DEC09 | IMPLEMENTED | Setup default 0 + confirm copy. Line grouping already VERIFIED in domain |
 | FIN03 | Cumulative tax reduction formula; cap C+x≤N | packages/domain | S14 S18 | calculate | scope_entries | — | fixtures.test.ts F05 F06 | — | VERIFIED | |
 | FIN04 | Invoice lines from accepted residual; credits same method; three totals | packages/domain | S15 S18 | TX03 TX04 | document_lines | — | fixtures.test.ts F08 F12 | — | VERIFIED | Residual snapshot; TX03 issue still pending |
 | FIN05 | Balance = invoice − credits − pays + refunds; never max(0) | packages/domain | S16 | TX04 | ledger_entries | — | fixtures.test.ts F07–F11 | — | VERIFIED | Signed balance; TX04 persistence still pending |
@@ -177,17 +177,17 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | EMAIL11 | Deletion receipt | apps/worker | S24 | outbox | deletion_requests | — | QA57 | PRV06 | PENDING | |
 | ARC01 | TS monorepo mobile/portal/admin/api/worker/domain; Supabase; Render; Resend; RC; Sentry; 1P analytics | repo | — | all | — | — | DEL01 | D-001 D-003 | PENDING | |
 | ARC02 | No commercial Supabase REST writes; private schema; FORCE RLS | apps/api | — | RLS | all tenant tables | — | pnpm test:db 15 passed (2026-09-14); supabase/tests/0002_rls_force.sql | SREF07 | VERIFIED | identity+commercial schemas, FORCE RLS, role revokes, isolation tests. Client REST ban remains app architecture. |
-| ARC03 | JWT → tenant context per txn; portal/staff separate; no pool leak | apps/api | — | Fastify | — | — | pnpm test:db 18 passed; apps/api/src/auth.test.ts GET /me | AUTHZ01 | PENDING | JWT + provision_owner + SET LOCAL on analytics writes; remaining owner commands later |
+| ARC03 | JWT → tenant context per txn; portal/staff separate; no pool leak | apps/api | — | Fastify | — | — | pnpm test:db; apps/api/src/workspace.test.ts POST /workspace | AUTHZ01 | IMPLEMENTED | JWT + provision_owner + complete_workspace_setup. Portal/staff later |
 | ARC04 | Transactional outbox; SKIP LOCKED; no provider I/O in txn | apps/worker | — | outbox | outbox_tasks | — | QA33 QA65 | — | PENDING | |
 | ARC05 | Pin versions; lockfile CI; no invented patch numbers | repo | — | CI | — | — | QA68 | D-005 | PENDING | Stage 0 pin |
 | DB01 | UUID, cents, numeric qty, composite tenant FKs, no cascade published | supabase | — | migrations | all | — | db-test.mjs logo_asset_id FK | — | PENDING | Identity/tenancy tables follow UUID + UNIQUE(workspace_id,id) + composite logo FK; remaining entities later |
-| DB02 | Required fields; version; schema-validated JSON; enum constraints | supabase | — | migrations | all | — | 0002_identity_tenancy.sql | — | PENDING | Enum/version checks exist for identity/tenancy; JSON schema validation later |
+| DB02 | Required fields; version; schema-validated JSON; enum constraints | supabase | — | migrations | all | — | 0004_workspace_setup.sql completed-setup check | — | IMPLEMENTED | Completed workspace bounds + USD/tax/due/TZ format. Remaining JSON entities later |
 | DB03 | Indexes; pending unique; active invoice unique | supabase | — | migrations | approval_requests jobs | — | QA16 QA43 | INV04 | PENDING | |
 | DB04 | Immutable triggers; reversal checks; DB authz tests | supabase | — | triggers | documents ledger_entries | — | QA26 scripts/db-test.mjs | INV02 | PENDING | Identity/tenancy authorization tests exist; commercial immutability triggers later |
 | DB05 | Privileged purge; deletion ledger on restore | apps/worker | S24 | purge | deletion_requests | — | QA58 | PRV | PENDING | |
-| API01 | /v1 HTTPS JSON; Bearer/cookie; Idempotency-Key; If-Match | apps/api | — | Fastify | idempotency_records | — | apps/api/src/auth.test.ts | — | IMPLEMENTED | Bearer + Idempotency-Key on analytics. Portal cookie and If-Match later |
-| API02 | Envelope; cursor lists; error shape; status mapping | apps/api | — | Fastify | — | — | apps/api/src/auth.test.ts 401/403/422 | — | IMPLEMENTED | Auth envelope. Lists/cursors later |
-| API03 | Reject unknown fields; server-owned calculated fields | apps/api | — | schemas | — | — | apps/api/src/auth.test.ts analytics unknown fields | — | IMPLEMENTED | Enforced on /analytics/batch. Remaining commands later |
+| API01 | /v1 HTTPS JSON; Bearer/cookie; Idempotency-Key; If-Match | apps/api | — | Fastify | idempotency_records | — | apps/api/src/workspace.test.ts If-Match + Idempotency-Key | — | IMPLEMENTED | Bearer + Idempotency-Key + If-Match on POST /workspace. Portal cookie later |
+| API02 | Envelope; cursor lists; error shape; status mapping | apps/api | — | Fastify | — | — | apps/api/src/workspace.test.ts 401/403/409/422 | — | IMPLEMENTED | Auth and setup envelope. Lists/cursors later |
+| API03 | Reject unknown fields; server-owned calculated fields | apps/api | — | schemas | — | — | apps/api/src/workspace.test.ts owner_user_id/workspace_id/currency | — | IMPLEMENTED | Enforced on analytics batch and POST /workspace |
 | API04 | Direct invoice via generic draft routes | apps/api | S06 S15 | drafts | document_drafts | invoice_issued | QA44 | JRN06 | PENDING | |
 | API05 | view_only purpose; no decision; access expiry | apps/api apps/portal | S25–S27 | portal | approval_requests | — | API05 | EMAIL06 | PENDING | |
 | TX01 | Publish algorithm | apps/api | S11 | publish | documents outbox_tasks | document_published | QA09 | QUO02 | PENDING | |
@@ -215,7 +215,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | NFR04 | 99.9% API/portal; RPO 15m RTO 4h; object restore verified | ops | — | backups | — | — | QA66 | OPS06 | PENDING | |
 | NFR05 | Drafts survive terminate after Saved; no fake empty/success | apps/mobile apps/api | S09 S11 | — | — | — | QA05 QA06 | SYNC | PENDING | |
 | NFR06 | Timeouts and no non-idempotent auto-retry | apps/mobile apps/api apps/worker | — | — | — | — | QA34 | ARC04 | PENDING | |
-| ANA01 | First-party schema; forbid PII list | apps/api | — | batch | analytics_events | all events | packages/schemas/src/index.test.ts redaction; auth.test.ts email properties 422 | DEC12 | IMPLEMENTED | signup_verified server-side; client PII rejected. Full catalogue later |
+| ANA01 | First-party schema; forbid PII list | apps/api | — | batch | analytics_events | all events | packages/schemas/src/workspace-setup.test.ts; workspace.test.ts onboarding PII absent | DEC12 | IMPLEMENTED | signup_verified + onboarding_completed server-side; client PII and client onboarding_completed rejected |
 | ANA02 | Server authoritative; batch 50/7d; exclude sandbox | apps/api | — | analytics | analytics_events | — | ANA02 | — | PENDING | |
 | ANA03 | No ad SDK; experiments not on money/consent/entitlement | all | S21 | — | — | paywall_viewed | ANA03 | DEC12 | PENDING | |
 | DEL01 | Owner-controlled repo lockfiles env templates Dockerfiles migrations | repo | — | — | — | — | Handover | ARC05 | PENDING | |

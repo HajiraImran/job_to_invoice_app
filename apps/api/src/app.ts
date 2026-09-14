@@ -11,6 +11,7 @@ import { withApiRole, withTenant } from "./db.ts";
 import { API_ERROR_CODES, fail, requestId, success } from "./envelope.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
 import { RateLimiter } from "./rate-limit.ts";
+import { registerWorkspaceRoutes } from "./workspace.ts";
 
 export type AppDeps = {
   env: LoadedEnv;
@@ -26,6 +27,7 @@ type ProvisionRow = {
   setup_completed: boolean;
   first_sign_in: boolean;
   analytics_alias_id: string;
+  workspace_version: number;
 };
 
 const GENERIC_AUTH = "Could not verify your session.";
@@ -116,7 +118,7 @@ export function buildApp(deps: AppDeps) {
     try {
       const row = await withApiRole(deps.pool, async (client) => {
         const result = await client.query<ProvisionRow>(
-          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id
+          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
            from identity.provision_owner($1::uuid, $2, $3)`,
           [access.sub, parsed.display, parsed.normalized],
         );
@@ -136,6 +138,7 @@ export function buildApp(deps: AppDeps) {
         },
         workspace: {
           id: row.workspace_id,
+          version: row.workspace_version,
           setup_completed: row.setup_completed,
         },
         entitlement: {
@@ -281,6 +284,10 @@ export function buildApp(deps: AppDeps) {
     } catch {
       return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
     }
+  });
+
+  registerWorkspaceRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
   });
 
   return app;

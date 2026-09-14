@@ -22,7 +22,7 @@ Approval email hrefs are `{PORTAL_ORIGIN}/review#{token}`. Fragment tokens must 
 
 Pseudonymous owner IDs are random mapped identifiers, not raw email hashes. Exports and deletion must account for the mapping.
 
-Server business events are authoritative. Clients must not emit a second `purchase_verified` or `document_published`. Offline UI events batch at most 50 and expire after seven days (`POST /analytics/batch`).
+Server business events are authoritative. Clients must not emit `onboarding_completed`, `purchase_verified`, or `document_published`. Offline UI events batch at most 50 and expire after seven days (`POST /analytics/batch`).
 
 Conversion reports exclude demo/test/staff accounts and sandbox transactions. Cohort start: signup for activation; first verified paid transaction for subscription retention. Store invoices paid by operators' customers are unrelated to app subscription revenue.
 
@@ -35,7 +35,7 @@ Sentry is error monitoring, not product analytics. Session replay and screenshot
 | Event | Emit when | Allowed properties | Screen / flow | MET |
 | --- | --- | --- | --- | --- |
 | signup_verified | Provider verification and app bootstrap succeed | acquisition_source self_reported/unknown, app_version | S03 | MET01 denominator |
-| onboarding_completed | Required setup saved | trade, setup_duration_bucket | S04 | MET01 |
+| onboarding_completed | Required setup saved (server) | trade, setup_duration_bucket | S04 | MET01 |
 | job_created | Server draft job created | mode quote/direct | S06 | — |
 | document_published | Snapshot commit succeeds | kind, entitlement_origin, line_count_bucket | S11 TX01 | MET01, MET03 |
 | request_delivery_result | Verified provider event | result, template_id | S12 NTF03 | — |

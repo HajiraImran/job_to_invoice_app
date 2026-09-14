@@ -194,3 +194,22 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | Additive `setup_completed_at`, `analytics_alias_id`, `analytics_events`, `provision_owner`. |
 | Reversible | No for JWKS + SecureStore; setup column nullability only |
 | Escalation category | architecture |
+
+### D-009 — POST /workspace completes the provisioned workspace
+
+| Field | Value |
+| --- | --- |
+| ID | D-009 |
+| Date | 2026-09-14 |
+| Status | Resolved |
+| Decision | `GET /v1/me` keeps provisioning one empty workspace (D-008). `POST /v1/workspace` completes that row in place. It does not insert a second workspace. The client cannot send `workspace_id`, `owner_user_id`, `currency`, `version`, or `setup_completed_at`. If-Match is the current workspace version. Logo upload is skipped in S04; the owner must confirm skip. Local setup drafts use a separate SecureStore key (`jti.setup.draft`), not the session blob and not SQLCipher (SYNC01 remains a later spike). `onboarding_completed` is a server event. `job_allowances` is created with zeroed counters so POST /workspace stays atomic without implementing entitlements. |
+| Reason | Unique `owner_user_id` forbids a second workspace. API_CONTRACT lists POST /workspace as the setup command. Encrypted SQLite is still TBD; onboarding form state still must survive restart without storing tokens. |
+| Evidence | `supabase/migrations/0004_workspace_setup.sql`, `apps/api/src/workspace.ts`, `apps/mobile/app/(onboarding)/setup.tsx` |
+| Owner | Engineering lead |
+| PRD implication | PATCH /workspace remains Settings/future drafts. S05 is a navigation shell only. Physical-device VoiceOver, SecureStore, and live OTP remain unverified. |
+| Impacted requirement IDs | S04, VAL01, VAL02, FIN02, INV10, AUTHZ01, API01–API03, ANA01, DEC03, DEC04, ACC01 (onboarding entry), ACC02 (session/offline on setup) |
+| Impacted test IDs | QA01, QA61, QA64 |
+| Migration implications | Additive tables `job_allowances`, `audit_events`, `idempotency_records`; completed-setup check; `complete_workspace_setup`. |
+| Reversible | No for completing setup in place; logo skip is slice timing only |
+| Escalation category | architecture |
+

@@ -15,6 +15,19 @@ const SENSITIVE_KEYS = new Set([
   "email",
   "password",
   "apikey",
+  "phone",
+  "contact_phone",
+  "contact_email",
+  "business_name",
+  "legal_name",
+  "contact_name",
+  "address",
+  "address_json",
+  "line1",
+  "line2",
+  "city",
+  "postal_code",
+  "zip",
 ]);
 
 export function redactText(value: string): string {

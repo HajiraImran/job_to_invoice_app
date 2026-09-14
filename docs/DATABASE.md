@@ -78,7 +78,10 @@ Every relationship to a **non-root** tenant row is composite `(workspace_id, ref
 | Table | Domain fields beyond common fields |
 | --- | --- |
 | app_users | auth_user_id unique, normalized_email, display_email, status active/suspended/deleting/deleted, last_authenticated_at, deletion_requested_at?, terms_version, privacy_version |
-| workspaces | owner_user_id unique, business_name, legal_name, contact_name, contact_email, contact_phone?, address_json, timezone, currency USD, trade handyman/other, logo_asset_id?, default_tax_bp, default_due_days, default_terms, setup_completed_at?, version |
+| workspaces | owner_user_id unique, business_name, legal_name, contact_name, contact_email, contact_phone?, address_json, timezone IANA, currency USD, trade handyman/other, logo_asset_id?, default_tax_bp 0–2500, default_due_days 0–365, default_terms, setup_completed_at?, version |
+
+Provisioning (`identity.provision_owner`) inserts empty names, `timezone=UTC`, `trade=other`, `setup_completed_at` null. Completed setup (`commercial.complete_workspace_setup` in `0004_workspace_setup.sql`) requires VAL01/VAL02 field bounds, sets `setup_completed_at` as migrator-only, increments `version`, inserts `job_allowances` if missing, appends `audit_events`, and emits server `onboarding_completed`. `api_app` cannot assign `setup_completed_at` or change `currency` away from USD.
+
 | memberships | user_id, role owner, status active; unique workspace/user; v1 exactly one active owner |
 | action_grants | id, user_id, action, token_hash, expires_at, used_at? — restricted identity schema (ACC02A). Actions: export, deletion, email_change, replace_link. Five-minute expiry after fresh OTP. Single use. |
 
@@ -183,7 +186,7 @@ Composite FKs:
 | assets | job_id?, draft_id?, visibility internal/customer, bucket_key, upload_state pending/processing/ready/rejected, media_type, source_size, stored_size?, width?, height?, sha256?, rejection_code?, uploaded_by |
 | document_assets | document_id, asset_id, position; append-only after document issue |
 | artifacts | document_id?, export_id?, type original_pdf/status_pdf/receipt_pdf/statement_pdf/export_zip, object_key, sha256, bytes, template_version, generated_at, state ready/failed |
-| job_allowances | PRIMARY KEY (workspace_id). Exactly one row per workspace. free_jobs_consumed default 0, trial_started_at?, trial_ends_at?, trial_jobs_consumed default 0, retained_bytes, version |
+| job_allowances | PRIMARY KEY (workspace_id). Exactly one row per workspace. free_jobs_consumed default 0, trial_started_at?, trial_ends_at?, trial_jobs_consumed default 0, retained_bytes default 0, version. Created on provision/setup; slot increments remain a later slice. |
 | entitlement_snapshots | user_id unique, provider_customer_id unique, entitlement pro, status, product_id?, expires_at?, will_renew?, verified_at, source_event_id?, environment sandbox/production |
 | provider_events | provider, external_event_id unique per provider, received_at, payload_encrypted?, processing_state, processed_at?, attempts, last_error_code? |
 
@@ -205,8 +208,8 @@ Composite FKs:
 | --- | --- |
 | outbox_tasks | event_id unique, task_type, aggregate_id, payload_json, schema_version, available_at, lease_until?, attempts, status pending/running/done/dead, effect_key unique, last_error_code? |
 | delivery_attempts | document_id?, request_id?, template_id, recipient_email_encrypted, state, provider_message_id?, effect_key unique, last_event_at, retry_count |
-| idempotency_records | actor_scope, key, route, request_hash, operation_id unique, status, response_code?, response_json?, created_at, expires_at, permanence financial/ephemeral; unique actor_scope/key |
-| audit_events | actor_type, actor_id?, action, entity_type, entity_id, occurred_at, request_id, before_version?, after_version?, reason?, safe_metadata_json; append-only |
+| idempotency_records | actor_scope, key, route, request_hash, operation_id unique, status, response_code?, response_json?, created_at, expires_at, permanence financial/ephemeral; unique actor_scope/key. Workspace setup uses ephemeral 30-day rows (`0004_workspace_setup.sql`). |
+| audit_events | workspace_id tenant key, actor_type, actor_id?, action, entity_type, entity_id, occurred_at, request_id, before_version?, after_version?, reason?, safe_metadata_json; append-only. Setup writes `workspace_setup_completed` without names or addresses. |
 | exports | workspace_id NOT NULL, owner_id, cutoff_at, status queued/running/ready/failed/expired, manifest_json?, expires_at?, error_code? |
 | support_cases | workspace_id NOT NULL, owner_id, category, message, state, content_access_granted_at?, content_access_expires_at?, assigned_staff_id? |
 | analytics_events | event_id unique, pseudonymous_owner_id?, job_id?, event_name, schema_version, occurred_at, received_at, safe_properties_json |

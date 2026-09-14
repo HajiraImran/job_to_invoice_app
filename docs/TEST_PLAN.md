@@ -184,4 +184,14 @@ pnpm test:db
 pnpm migrate:clean
 ```
 
-QA01 mailbox E2E and physical SecureStore checks require `EXPO_PUBLIC_AUTH_PROJECT_URL` plus dashboard OTP settings from `docs/ENV.md`. They are not satisfied by unit mocks.
+QA01 mailbox E2E, Maestro `.maestro/setup-onboarding.yaml`, VoiceOver, and physical SecureStore checks require `EXPO_PUBLIC_AUTH_PROJECT_URL` plus dashboard OTP settings from `docs/ENV.md`. They are not satisfied by unit mocks.
+
+## Setup slice commands
+
+```sh
+pnpm --filter @job-to-invoice/schemas test
+pnpm --filter @job-to-invoice/api test
+pnpm --filter @job-to-invoice/mobile test
+pnpm test:db
+pnpm validate:openapi
+```

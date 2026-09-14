@@ -435,6 +435,163 @@ try {
     assert(rows.length === 0, "missing GUC must hide app_users");
   });
 
+  const setupAuth = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const otherAuth = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const setupKey = "77777777-7777-4777-8777-777777777777";
+  const setupHash = "a".repeat(64);
+  const setupRequest = "88888888-8888-4888-8888-888888888888";
+
+  async function provision(authId, email) {
+    await admin.query("begin");
+    try {
+      await admin.query("set local role api_app");
+      const row = await admin.query(
+        `select actor_id, workspace_id, workspace_version from identity.provision_owner($1, $2, $3)`,
+        [authId, email, email.toLowerCase()],
+      );
+      await admin.query("commit");
+      return row.rows[0];
+    } catch (error) {
+      try {
+        await admin.query("rollback");
+      } catch {
+        /* already aborted */
+      }
+      throw error;
+    }
+  }
+
+  async function completeSetup(actorId, version, key, hash, requestId, name = "Setup Biz") {
+    await admin.query("begin");
+    try {
+      await admin.query("set local role api_app");
+      const row = await admin.query(
+        `select actor_id, workspace_id, setup_completed, workspace_version, replayed
+         from commercial.complete_workspace_setup(
+           $1::uuid, $2::integer, $3::uuid, $4, $5::uuid,
+           $6, $6, 'Owner Name', 'owner@example.com', null,
+           $7::jsonb, 'America/New_York', 'handyman', 0, 14, 'Net 14'
+         )`,
+        [
+          actorId,
+          version,
+          key,
+          hash,
+          requestId,
+          name,
+          JSON.stringify({ line1: "1 Main St", city: "Miami", state: "FL", postal_code: "33101" }),
+        ],
+      );
+      await admin.query("commit");
+      return row.rows[0];
+    } catch (error) {
+      try {
+        await admin.query("rollback");
+      } catch {
+        /* already aborted */
+      }
+      throw error;
+    }
+  }
+
+  await test("owner completes their workspace and increments version once", async () => {
+    const owner = await provision(setupAuth, "setup.e@example.com");
+    const first = await completeSetup(owner.actor_id, owner.workspace_version, setupKey, setupHash, setupRequest);
+    assert(first.setup_completed === true, "setup should complete");
+    assert(first.workspace_version === owner.workspace_version + 1, "version should increment");
+    assert(first.replayed === false, "first complete is not a replay");
+    const replay = await completeSetup(owner.actor_id, owner.workspace_version, setupKey, setupHash, setupRequest);
+    assert(replay.replayed === true, "same key should replay");
+    assert(replay.workspace_version === first.workspace_version, "replay must not increment again");
+    const audit = await admin.query(
+      "select count(*)::int as n from commercial.audit_events where entity_id = $1 and action = 'workspace_setup_completed'",
+      [owner.workspace_id],
+    );
+    assert(audit.rows[0].n === 1, "one audit event");
+    const completedAt = await admin.query(
+      "select setup_completed_at, currency from commercial.workspaces where id = $1",
+      [owner.workspace_id],
+    );
+    assert(completedAt.rows[0].setup_completed_at, "server assigns setup_completed_at");
+    assert(completedAt.rows[0].currency === "USD", "currency remains USD");
+  });
+
+  await test("idempotency key mismatch and stale versions fail", async () => {
+    const owner = await provision(setupAuth, "setup.e@example.com");
+    await expectFail(
+      () => completeSetup(owner.actor_id, owner.workspace_version, setupKey, "b".repeat(64), setupRequest),
+      /IDEMPOTENCY_MISMATCH/i,
+      "idempotency mismatch",
+    );
+    await expectFail(
+      () =>
+        completeSetup(
+          owner.actor_id,
+          99,
+          "99999999-9999-4999-8999-999999999999",
+          "c".repeat(64),
+          "aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        ),
+      /VERSION_CONFLICT/i,
+      "stale version",
+    );
+  });
+
+  await test("owner cannot complete another workspace and forged ids do not grant access", async () => {
+    const owner = await provision(setupAuth, "setup.e@example.com");
+    const other = await provision(otherAuth, "setup.f@example.com");
+    const otherBefore = await admin.query(
+      "select business_name, setup_completed_at from commercial.workspaces where id = $1",
+      [other.workspace_id],
+    );
+    await withApi(admin, async () => {
+      await admin.query("select identity.set_local_tenant_context($1, $2)", [owner.workspace_id, owner.actor_id]);
+      const updated = await admin.query("update commercial.workspaces set business_name = 'hijack' where id = $1", [
+        other.workspace_id,
+      ]);
+      assert(updated.rowCount === 0, "owner must not update another workspace");
+    });
+    const otherAfter = await admin.query(
+      "select business_name, setup_completed_at from commercial.workspaces where id = $1",
+      [other.workspace_id],
+    );
+    assert(otherAfter.rows[0].business_name === otherBefore.rows[0].business_name, "other workspace name unchanged");
+    assert(
+      otherAfter.rows[0].setup_completed_at === otherBefore.rows[0].setup_completed_at,
+      "other workspace setup unchanged",
+    );
+  });
+
+  await test("invalid currency and client-assigned setup_completed_at are rejected", async () => {
+    await expectFail(
+      () => admin.query("update commercial.workspaces set currency = 'EUR' where id = $1", [A.ws]),
+      /USD|currency/i,
+      "non-USD currency",
+    );
+    await expectFail(
+      () =>
+        withApi(admin, async () => {
+          await admin.query("select identity.set_local_tenant_context($1, $2)", [A.ws, A.user]);
+          await admin.query("update commercial.workspaces set setup_completed_at = now() where id = $1", [A.ws]);
+        }),
+      /server-assigned|setup_completed_at/i,
+      "client setup_completed_at",
+    );
+  });
+
+  await test("invalid tax and due-day values fail", async () => {
+    await expectFail(
+      () => admin.query("update commercial.workspaces set default_tax_bp = 2501 where id = $1", [A.ws]),
+      /check|tax/i,
+      "tax over 2500bp",
+    );
+    await expectFail(
+      () => admin.query("update commercial.workspaces set default_due_days = 366 where id = $1", [A.ws]),
+      /check|due/i,
+      "due days over 365",
+    );
+  });
+
   console.log(`${passed} passed, ${failed} failed`);
   if (failed > 0) {
     process.exitCode = 1;

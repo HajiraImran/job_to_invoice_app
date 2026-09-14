@@ -86,9 +86,12 @@ States: expired, incorrect, attempt limit.
 
 ### S04 Business setup
 
-Three steps: name/trade; contact/address; timezone and document defaults. Back preserves data. Logo optional skip.
+Three steps: name/trade; contact/address; timezone and document defaults. Back preserves data. Logo optional skip (upload is not in this slice; the owner must skip).
 
-VAL01–VAL02. Default tax zero with “Confirm tax treatment for your business” (FIN02).
+VAL01–VAL02. Default tax zero with “Confirm tax treatment for your business” (FIN02). Device IANA timezone is suggested and must be confirmed. Currency USD is displayed and not editable.
+
+Implemented route: `/(onboarding)/setup`. Successful POST `/v1/workspace` routes to the S05 jobs shell. S05 list/search/new-job is not implemented.
+
 
 ### S05 Jobs
 

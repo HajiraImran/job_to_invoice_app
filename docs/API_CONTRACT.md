@@ -123,8 +123,8 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 
 | Method and route | Access | Input and result |
 | --- | --- | --- |
-| GET /me | Owner | User/workspace/bootstrap and entitlement summary |
-| POST /workspace | Owner | Setup fields; workspace, memberships, allowances atomically |
+| GET /me | Owner | User/workspace/bootstrap, workspace version, and entitlement summary |
+| POST /workspace | Owner | Completes the already-provisioned workspace. Setup fields; Idempotency-Key UUID; If-Match current version. Does not create a second workspace. Creates `job_allowances` if missing. Server sets `setup_completed_at`. |
 | PATCH /workspace | Owner | Defaults with If-Match; future drafts only |
 | POST /account/email-change | Owner + X-Action-Grant email_change | New email; provider verification; revoke prior refresh tokens |
 | GET /customers | Owner | Search/filter/page |

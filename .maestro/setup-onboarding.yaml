@@ -1,0 +1,10 @@
+# QA01 S04 business setup. Requires a live authenticated owner with setup_completed_at null.
+# Do not commit mailboxes, codes, or tokens. Skip in CI until a staging Auth project is configured.
+
+appId: com.jobtoinvoice.app
+---
+- launchApp
+- assertVisible: "Business setup"
+- assertVisible: "Name and trade"
+- assertVisible: "Business display name"
+- assertVisible: "Skip logo for now"

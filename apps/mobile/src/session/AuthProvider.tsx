@@ -2,7 +2,7 @@ import { OTP_MAX_FAILURES, remainingResendSeconds, type AuthSnapshot } from "@jo
 import type { Session } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AppState } from "react-native";
-import { ownerRequest, type OwnerBootstrap } from "../api/client.ts";
+import { ownerRequest, type OwnerBootstrap, type OwnerRequestOptions } from "../api/client.ts";
 import { publicConfig } from "../config.ts";
 import { discardLocalDrafts, getDraftSyncStatus } from "../drafts/sync.ts";
 import { mapAuthError } from "../auth/errors.ts";
@@ -31,6 +31,7 @@ type AuthContextValue = {
   signOut: (mode: "confirm" | "discard") => Promise<void>;
   draftStatus: () => ReturnType<typeof getDraftSyncStatus>;
   refreshBootstrap: () => Promise<void>;
+  runOwnerRequest: <T>(options: OwnerRequestOptions) => ReturnType<typeof ownerRequest<T>>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -249,6 +250,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [client, loadMe]);
 
+  const runOwnerRequest = useCallback(
+    async <T,>(options: OwnerRequestOptions) => {
+      const unavailable = {
+        ok: false as const,
+        error: {
+          status: 0,
+          code: "UNAVAILABLE",
+          message: "Could not reach the network. Try again.",
+          retryable: true,
+        },
+      };
+      if (!client) {
+        return unavailable;
+      }
+      const existing = await client.auth.getSession();
+      const accessToken = existing.data.session?.access_token;
+      if (!accessToken) {
+        return {
+          ok: false as const,
+          error: { status: 401, code: "AUTHENTICATION_REQUIRED", message: "Sign in required.", retryable: false },
+        };
+      }
+      const first = await ownerRequest<T>({
+        ...options,
+        apiBaseUrl: config.apiBaseUrl,
+        accessToken,
+      });
+      if (first.ok || first.error.status !== 401) {
+        return first;
+      }
+      const refreshed = await client.auth.refreshSession();
+      const next = refreshed.data.session?.access_token;
+      if (!next) {
+        return first;
+      }
+      return ownerRequest<T>({
+        ...options,
+        apiBaseUrl: config.apiBaseUrl,
+        accessToken: next,
+      });
+    },
+    [client, config.apiBaseUrl],
+  );
+
   const value: AuthContextValue = {
     snapshot,
     bootstrap,
@@ -266,6 +311,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signOut,
     draftStatus: getDraftSyncStatus,
     refreshBootstrap,
+    runOwnerRequest,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -6,6 +6,7 @@ export const API_ERROR_CODES = {
   VALIDATION_FAILED: "VALIDATION_FAILED",
   RATE_LIMITED: "RATE_LIMITED",
   IDEMPOTENCY_MISMATCH: "IDEMPOTENCY_MISMATCH",
+  VERSION_CONFLICT: "VERSION_CONFLICT",
 } as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];
@@ -38,6 +39,7 @@ export function httpStatusForCode(code: string): number {
     case API_ERROR_CODES.VALIDATION_FAILED:
       return 422;
     case API_ERROR_CODES.IDEMPOTENCY_MISMATCH:
+    case API_ERROR_CODES.VERSION_CONFLICT:
       return 409;
     case API_ERROR_CODES.RATE_LIMITED:
       return 429;
