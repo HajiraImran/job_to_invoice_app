@@ -24,10 +24,11 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "22.20.2",
+    "embedded-postgres": "16.14.0-beta.17",
     "eslint": "10.10.0",
     "pg": "8.16.3",
     "prettier": "3.9.6",
-    "embedded-postgres": "16.14.0-beta.17",
+    "supabase": "2.117.0",
     "turbo": "2.10.12",
     "typescript": "5.9.3",
     "typescript-eslint": "8.70.0",

@@ -131,7 +131,6 @@ export function resolveSupabaseJsEntry({
 export function hostedCliLaunch(
   url,
   {
-    platform = process.platform,
     execPath = process.execPath,
     requireResolve,
     pathEnv,
@@ -146,17 +145,10 @@ export function hostedCliLaunch(
     windowsHide: true,
     shell: false,
   };
-  if (platform === "win32") {
-    const jsEntry = resolveSupabaseJsEntry({ requireResolve, pathEnv, pathDelimiter });
-    return {
-      command: execPath,
-      argv: [jsEntry, ...cliArgv],
-      spawnOptions,
-    };
-  }
+  const jsEntry = resolveSupabaseJsEntry({ requireResolve, pathEnv, pathDelimiter });
   return {
-    command: "supabase",
-    argv: cliArgv,
+    command: execPath,
+    argv: [jsEntry, ...cliArgv],
     spawnOptions,
   };
 }

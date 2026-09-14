@@ -46,6 +46,17 @@ function writeJsEntry() {
   return realpathSync(filePath);
 }
 
+function pinnedSupabaseJsEntry() {
+  return realpathSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "supabase", "dist", "supabase.js"),
+  );
+}
+
+function expectedHostedArgv(url, { dryRun = false, jsEntry = pinnedSupabaseJsEntry() } = {}) {
+  const argv = [jsEntry, ...hostedDbPushArgv(url, { dryRun })];
+  return argv;
+}
+
 function writeNpmShimLayout() {
   const prefix = mkdtempSync(path.join(tmpdir(), "jti-shim-"));
   writeFileSync(path.join(prefix, "supabase.cmd"), "@echo off\r\n");
@@ -368,15 +379,17 @@ test("Windows launches the resolved JS entry through process.execPath", () => {
   assert.equal(launch.spawnOptions.windowsHide, true);
 });
 
-test("non-Windows launch remains supabase with db push argv", () => {
+test("non-Windows launch uses the pinned local JS entry through process.execPath", () => {
   const url = sessionUrl();
-  const launch = hostedCliLaunch(url, { platform: "linux" });
-  assert.equal(launch.command, "supabase");
-  assert.deepEqual(launch.argv, ["db", "push", "--db-url", url]);
+  const expected = pinnedSupabaseJsEntry();
+  const launch = hostedCliLaunch(url, { platform: "linux", execPath: "/usr/bin/node" });
+  assert.equal(launch.command, "/usr/bin/node");
+  assert.deepEqual(launch.argv, expectedHostedArgv(url, { jsEntry: expected }));
   assert.equal(launch.spawnOptions.shell, false);
-  const darwin = hostedCliLaunch(url, { platform: "darwin" });
-  assert.equal(darwin.command, "supabase");
-  assert.deepEqual(darwin.argv, ["db", "push", "--db-url", url]);
+  const darwin = hostedCliLaunch(url, { platform: "darwin", execPath: "/usr/local/bin/node" });
+  assert.equal(darwin.command, "/usr/local/bin/node");
+  assert.deepEqual(darwin.argv, expectedHostedArgv(url, { jsEntry: expected }));
+  assert.equal(darwin.spawnOptions.shell, false);
 });
 
 test("local package resolution is preferred over PATH shims", () => {
@@ -388,6 +401,38 @@ test("local package resolution is preferred over PATH shims", () => {
     pathDelimiter: path.delimiter,
   });
   assert.equal(resolved, localJs);
+});
+
+test("pinned repository supabase package is resolved before a global PATH shim", () => {
+  const shim = writeNpmShimLayout();
+  const expected = pinnedSupabaseJsEntry();
+  const resolved = resolveSupabaseJsEntry({
+    pathEnv: `${shim.prefix}${path.delimiter}${process.env.PATH ?? ""}`,
+    pathDelimiter: path.delimiter,
+  });
+  assert.equal(resolved, expected);
+  assert.notEqual(resolved, shim.jsPath);
+  assert.match(resolved.replaceAll("\\", "/"), /\/node_modules\/supabase\/dist\/supabase\.js$/);
+  const url = sessionUrl();
+  const launch = hostedCliLaunch(url, {
+    platform: "win32",
+    execPath: process.execPath,
+    pathEnv: `${shim.prefix}${path.delimiter}${process.env.PATH ?? ""}`,
+  });
+  assert.equal(launch.command, process.execPath);
+  assert.equal(launch.argv[0], expected);
+  assert.deepEqual(launch.argv.slice(1), hostedDbPushArgv(url));
+  assert.equal(launch.spawnOptions.shell, false);
+  assert.doesNotMatch(launch.command, /supabase\.cmd|supabase\.ps1|cmd\.exe|powershell/i);
+  const linux = hostedCliLaunch(url, {
+    platform: "linux",
+    execPath: "/usr/bin/node",
+    pathEnv: `${shim.prefix}${path.delimiter}${process.env.PATH ?? ""}`,
+  });
+  assert.equal(linux.command, "/usr/bin/node");
+  assert.equal(linux.argv[0], expected);
+  assert.deepEqual(linux.argv.slice(1), hostedDbPushArgv(url));
+  assert.equal(linux.spawnOptions.shell, false);
 });
 
 test("valid global npm shim layout is used when the package is not resolvable", () => {
@@ -465,8 +510,8 @@ test("spawns exactly once with the validated URL and does not retry", async () =
     platform: "linux",
     spawn: (bin, argv, options) => {
       spawned += 1;
-      assert.equal(bin, "supabase");
-      assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+      assert.equal(bin, process.execPath);
+      assert.deepEqual(argv, expectedHostedArgv(url));
       assert.equal(options.shell, false);
       assert.doesNotMatch(argv.join(" "), /include-all|include-roles|include-seed|--linked|--dry-run/);
       return { status: 1, stdout: "failed once", stderr: "" };
@@ -591,7 +636,7 @@ test("does not probe DNS or TCP before spawning the CLI", async () => {
     platform: "linux",
     spawn: (_bin, argv, options) => {
       spawned += 1;
-      assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+      assert.deepEqual(argv, expectedHostedArgv(url));
       assert.equal(options.shell, false);
       return { status: 0, stdout: "Finished supabase db push.\n", stderr: "" };
     },
@@ -628,7 +673,7 @@ test("db-check always includes --dry-run and live push never does", async () => 
     dryRun: false,
     spawn: (_bin, argv, options) => {
       liveSpawned += 1;
-      assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+      assert.deepEqual(argv, expectedHostedArgv(url));
       assert.ok(!argv.includes("--dry-run"));
       assert.equal(options.shell, false);
       assertNoExtraCliFlags(argv);
@@ -648,7 +693,7 @@ test("db-check always includes --dry-run and live push never does", async () => 
     dryRun: true,
     spawn: (_bin, argv, options) => {
       checkSpawned += 1;
-      assert.deepEqual(argv, ["db", "push", "--db-url", url, "--dry-run"]);
+      assert.deepEqual(argv, expectedHostedArgv(url, { dryRun: true }));
       assert.equal(argv.filter((part) => part === "--dry-run").length, 1);
       assert.equal(options.shell, false);
       assertNoExtraCliFlags(argv);
@@ -834,7 +879,7 @@ test("classifies CLI DNS timeout refusal TLS and auth failures without echoing r
       platform: "linux",
       spawn: (_bin, argv, options) => {
         spawned += 1;
-        assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+        assert.deepEqual(argv, expectedHostedArgv(url));
         assert.equal(options.shell, false);
         return { status: 1, stdout: "", stderr };
       },
