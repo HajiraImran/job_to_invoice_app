@@ -76,6 +76,16 @@ function captureWriters() {
   };
 }
 
+function assertNoExtraCliFlags(argv) {
+  assert.ok(!argv.includes("--debug"));
+  assert.ok(!argv.includes("--experimental"));
+  assert.ok(!argv.some((part) => String(part).startsWith("--log-level")));
+  assert.ok(!argv.includes("--output-format"));
+  assert.ok(!argv.includes("--output"));
+  assert.ok(!argv.includes("stream-json"));
+  assert.ok(!argv.includes("json"));
+}
+
 test("rejects missing url", () => {
   assert.throws(() => assertSafeHostedMigrationUrl(undefined, LINKED_REF), /required/);
   assert.throws(() => assertSafeHostedMigrationUrl("", LINKED_REF), /required/);
@@ -621,6 +631,7 @@ test("db-check always includes --dry-run and live push never does", async () => 
       assert.deepEqual(argv, ["db", "push", "--db-url", url]);
       assert.ok(!argv.includes("--dry-run"));
       assert.equal(options.shell, false);
+      assertNoExtraCliFlags(argv);
       return {
         status: 0,
         stdout: "Finished supabase db push.\nRemote database is up to date.\n",
@@ -640,6 +651,7 @@ test("db-check always includes --dry-run and live push never does", async () => 
       assert.deepEqual(argv, ["db", "push", "--db-url", url, "--dry-run"]);
       assert.equal(argv.filter((part) => part === "--dry-run").length, 1);
       assert.equal(options.shell, false);
+      assertNoExtraCliFlags(argv);
       return {
         status: 0,
         stdout:
@@ -666,6 +678,7 @@ test("Windows dry-run check uses node.exe and one --dry-run argument", () => {
   assert.equal(launch.command, process.execPath);
   assert.deepEqual(launch.argv, [jsEntry, "db", "push", "--db-url", url, "--dry-run"]);
   assert.equal(launch.spawnOptions.shell, false);
+  assertNoExtraCliFlags(launch.argv);
 });
 
 test("classifies every safe failure category", () => {
@@ -678,6 +691,11 @@ test("classifies every safe failure category", () => {
     [
       "LegacyDbPushApplyError ERROR: permission denied at character 13 SQLSTATE 42501",
       "migration_sql_error",
+      "42501",
+    ],
+    [
+      "Initialising login role... ERROR: 42501: permission denied to alter role LegacyDbConfigLoginRoleStatusError",
+      "login_role_failure",
       "42501",
     ],
   ];
@@ -842,5 +860,89 @@ test("classifies CLI DNS timeout refusal TLS and auth failures without echoing r
     assert.doesNotMatch(report, /getaddrinfo/);
     assert.doesNotMatch(report, /certificate verify/);
     assert.equal(captured.stderrText(), "");
+  }
+});
+
+test("extracts stage migration statement SQLSTATE and cli tag without echoing secrets", () => {
+  const classified = classifyHostedCliOutput({
+    status: 1,
+    stdout: "Connecting to remote database...\nApplying migration 0002_identity_tenancy.sql\n",
+    stderr: `LegacyDbPushApplyError INSERT INTO supabase_migrations.schema_migrations statement 82 SQLSTATE 55000 --db-url ${sessionUrl()}`,
+  });
+  assert.equal(classified.stage, "applying");
+  assert.equal(classified.migration, "0002_identity_tenancy.sql");
+  assert.equal(classified.statement, 82);
+  assert.equal(classified.code, "55000");
+  assert.equal(classified.cliTag, "LegacyDbPushApplyError");
+  assert.equal(classified.category, "migration_sql_error");
+  const report = formatSanitizedReport(classified);
+  assert.match(report, /^stage: applying$/m);
+  assert.match(report, /^migration: 0002_identity_tenancy.sql$/m);
+  assert.match(report, /^statement: 82$/m);
+  assert.match(report, /^code: 55000$/m);
+  assert.match(report, /^cli_tag: LegacyDbPushApplyError$/m);
+  assert.doesNotMatch(report, /INSERT INTO/);
+  assert.doesNotMatch(report, /schema_migrations/);
+  assert.doesNotMatch(report, /--db-url/);
+  assert.doesNotMatch(report, new RegExp(PASSWORD));
+  assert.doesNotMatch(report, /postgres:\/\//);
+});
+
+test("generic Error and login-role alter-role denial are not migration SQL failures", () => {
+  const generic = classifyHostedCliOutput({
+    status: 1,
+    stdout: "Connecting to remote database...\n",
+    stderr: "Error: failed to read project config",
+  });
+  assert.equal(generic.category, "unknown_failure");
+  assert.equal(generic.stage, "connecting");
+  assert.doesNotMatch(formatSanitizedReport(generic), /migration_sql_error/);
+
+  const loginRole = classifyHostedCliOutput({
+    status: 1,
+    stdout: "Initialising login role...\n",
+    stderr:
+      'LegacyDbConfigConnectTempRoleError failed to connect as temp role: permission denied to alter role',
+  });
+  assert.equal(loginRole.category, "login_role_failure");
+  assert.equal(loginRole.stage, "login_role");
+  assert.equal(loginRole.cliTag, "LegacyDbConfigConnectTempRoleError");
+  const loginReport = formatSanitizedReport(loginRole);
+  assert.match(loginReport, /category: login_role_failure/);
+  assert.doesNotMatch(loginReport, /migration_sql_error/);
+  assert.doesNotMatch(loginReport, /alter role/);
+});
+
+test("stage advances to the furthest observed banner", () => {
+  const classified = classifyHostedCliOutput({
+    status: 0,
+    stdout:
+      "Initialising login role...\nConnecting to remote database...\nWould apply the following migrations:\n  - 0002_identity_tenancy.sql\n  - 0003_owner_provisioning.sql\n",
+    stderr: "",
+  });
+  assert.equal(classified.ok, true);
+  assert.equal(classified.stage, "listing_pending");
+  assert.equal(classified.migration, null);
+  const report = formatSanitizedReport(classified);
+  assert.match(report, /^stage: listing_pending$/m);
+  assert.doesNotMatch(report, /^migration:/m);
+  assert.doesNotMatch(report, /^cli_tag:/m);
+});
+
+test("does not spawn debug or machine-readable CLI flags", () => {
+  const url = sessionUrl();
+  const jsEntry = writeJsEntry();
+  for (const dryRun of [false, true]) {
+    const linux = hostedCliLaunch(url, { platform: "linux", dryRun });
+    const windows = hostedCliLaunch(url, {
+      platform: "win32",
+      execPath: process.execPath,
+      requireResolve: () => jsEntry,
+      dryRun,
+    });
+    assertNoExtraCliFlags(linux.argv);
+    assertNoExtraCliFlags(windows.argv);
+    assert.equal(linux.spawnOptions.shell, false);
+    assert.equal(windows.spawnOptions.shell, false);
   }
 });

@@ -167,9 +167,17 @@ const FAILURE_CATEGORIES = new Set([
   "connection_refused",
   "dns_failure",
   "tls_failure",
+  "login_role_failure",
   "migration_sql_error",
   "cli_start_failure",
   "unknown_failure",
+]);
+const REPORT_STAGES = new Set([
+  "login_role",
+  "connecting",
+  "listing_pending",
+  "applying",
+  "unknown",
 ]);
 const SAFE_ERROR_CODES = new Set([
   "28P01",
@@ -192,7 +200,10 @@ const SAFE_ERROR_CODES = new Set([
   "ECONNRESET",
 ]);
 const MIGRATION_BASENAME = /^\d{4}_[a-z0-9_]+\.sql$/;
+const SQLSTATE = /^[0-9A-Z]{5}$/;
 const SAFE_CODE_PATTERN = new RegExp(`\\b(${[...SAFE_ERROR_CODES].join("|")})\\b`);
+const CLI_TAG_PATTERN = /LegacyDb[A-Za-z]+/g;
+const MAX_STATEMENT = 100_000;
 
 export function extractPendingMigrationBasenames(text) {
   const found = new Set();
@@ -207,17 +218,85 @@ export function extractPendingMigrationBasenames(text) {
   return [...found].sort();
 }
 
+function isReportableCode(value) {
+  return typeof value === "string" && (SAFE_ERROR_CODES.has(value) || SQLSTATE.test(value));
+}
+
+function extractSqlstate(text) {
+  const source = String(text ?? "");
+  const prefixed = source.match(/SQLSTATE\s+([0-9A-Z]{5})\b/i) ?? source.match(/ERROR:\s+([0-9A-Z]{5})\b/i);
+  if (prefixed && SQLSTATE.test(prefixed[1])) {
+    return prefixed[1];
+  }
+  return null;
+}
+
 function extractSafeErrorCode(text, spawnError) {
   const spawnCode = spawnError && typeof spawnError.code === "string" ? spawnError.code : "";
-  if (SAFE_ERROR_CODES.has(spawnCode)) {
+  if (isReportableCode(spawnCode)) {
     return spawnCode;
+  }
+  const sqlstate = extractSqlstate(text);
+  if (sqlstate) {
+    return sqlstate;
   }
   const source = String(text ?? "");
   const match = source.match(SAFE_CODE_PATTERN);
-  if (match && SAFE_ERROR_CODES.has(match[1])) {
+  if (match && isReportableCode(match[1])) {
     return match[1];
   }
   return null;
+}
+
+function extractStage(text) {
+  const source = String(text ?? "");
+  let stage = "unknown";
+  if (/initialis(?:e|ing) login role/i.test(source)) {
+    stage = "login_role";
+  }
+  if (/connecting to remote database/i.test(source)) {
+    stage = "connecting";
+  }
+  if (/would apply the following|remote database is up to date/i.test(source)) {
+    stage = "listing_pending";
+  }
+  if (/applying migration/i.test(source)) {
+    stage = "applying";
+  }
+  return stage;
+}
+
+function extractCliTag(text) {
+  const source = String(text ?? "");
+  let tag = null;
+  for (const match of source.matchAll(CLI_TAG_PATTERN)) {
+    if (match[0].length <= 80) {
+      tag = match[0];
+    }
+  }
+  return tag;
+}
+
+function extractStatementNumber(text) {
+  const source = String(text ?? "");
+  let statement = null;
+  for (const match of source.matchAll(/\bstatement\s+(\d+)\b/gi)) {
+    const n = Number(match[1]);
+    if (Number.isInteger(n) && n >= 1 && n <= MAX_STATEMENT) {
+      statement = n;
+    }
+  }
+  return statement;
+}
+
+function extractFailedMigrationBasename(text) {
+  const source = String(text ?? "");
+  const applying = source.match(/applying migration\s+[:\-]?\s*(\d{4}_[a-z0-9_]+\.sql)/i);
+  if (applying && MIGRATION_BASENAME.test(applying[1])) {
+    return applying[1];
+  }
+  const pending = extractPendingMigrationBasenames(source);
+  return pending.length === 1 ? pending[0] : null;
 }
 
 function classifyFailureCategory(text, spawnError) {
@@ -243,9 +322,14 @@ function classifyFailureCategory(text, spawnError) {
     return "connection_timeout";
   }
   if (
-    /LegacyDbPushApplyError|SQLSTATE|syntax error|permission denied|ERROR:|at character \d+/i.test(
+    /permission denied to alter role|failed to connect as temp role|failed to initialise login role|LegacyDbConfigLoginRole|LegacyDbConfigConnectTempRole/i.test(
       source,
     )
+  ) {
+    return "login_role_failure";
+  }
+  if (
+    /LegacyDbPushApplyError|SQLSTATE|syntax error|at character \d+|permission denied/i.test(source)
   ) {
     return "migration_sql_error";
   }
@@ -275,6 +359,10 @@ export function classifyHostedCliOutput({
     connectionInit,
     connectionSucceeded,
     pending,
+    stage: extractStage(text),
+    migration: extractFailedMigrationBasename(text),
+    statement: extractStatementNumber(text),
+    cliTag: extractCliTag(text),
     category: category && FAILURE_CATEGORIES.has(category) ? category : ok ? null : "unknown_failure",
     code,
   };
@@ -285,18 +373,29 @@ export function formatSanitizedReport(result) {
   const pending = Array.isArray(result.pending)
     ? result.pending.filter((name) => MIGRATION_BASENAME.test(name))
     : [];
+  const stage = REPORT_STAGES.has(result.stage) ? result.stage : "unknown";
   const lines = [
     `ok: ${result.ok ? "true" : "false"}`,
     `exit: ${exitCode}`,
     `connection_init: ${result.connectionInit ? "true" : "false"}`,
     `connection: ${result.connectionSucceeded ? "true" : "false"}`,
     `pending: ${pending.length > 0 ? pending.join(",") : "(none)"}`,
+    `stage: ${stage}`,
   ];
   if (!result.ok) {
     const category = FAILURE_CATEGORIES.has(result.category) ? result.category : "unknown_failure";
     lines.push(`category: ${category}`);
-    if (typeof result.code === "string" && SAFE_ERROR_CODES.has(result.code)) {
+    if (MIGRATION_BASENAME.test(result.migration)) {
+      lines.push(`migration: ${result.migration}`);
+    }
+    if (Number.isInteger(result.statement) && result.statement >= 1 && result.statement <= MAX_STATEMENT) {
+      lines.push(`statement: ${result.statement}`);
+    }
+    if (isReportableCode(result.code)) {
       lines.push(`code: ${result.code}`);
+    }
+    if (typeof result.cliTag === "string" && /^LegacyDb[A-Za-z]{1,80}$/.test(result.cliTag)) {
+      lines.push(`cli_tag: ${result.cliTag}`);
     }
   }
   return `${lines.join("\n")}\n`;
