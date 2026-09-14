@@ -1,0 +1,104 @@
+name: Hosted development migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type APPLY_0002_0004 to apply pending hosted development migrations
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-development-migrations
+  cancel-in-progress: false
+
+jobs:
+  confirm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require confirmation phrase
+        env:
+          CONFIRMATION: ${{ github.event.inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRMATION" != "APPLY_0002_0004" ]; then
+            echo "Confirmation phrase did not match. Hosted apply aborted."
+            exit 1
+          fi
+
+  apply:
+    needs: confirm
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Write ignored linked project-ref
+        run: |
+          set -euo pipefail
+          mkdir -p supabase/.temp
+          printf '%s' 'fhgacxkpgjdcjuvanesv' > supabase/.temp/project-ref
+
+      - name: Check pending hosted migrations
+        env:
+          DATABASE_URL_MIGRATIONS: ${{ secrets.DATABASE_URL_MIGRATIONS }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${DATABASE_URL_MIGRATIONS}"
+          if [ -z "${DATABASE_URL_MIGRATIONS}" ]; then
+            echo "hosted apply secret is not configured"
+            exit 1
+          fi
+          pnpm hosted:db-check
+
+      - name: Apply hosted migrations
+        env:
+          DATABASE_URL_MIGRATIONS: ${{ secrets.DATABASE_URL_MIGRATIONS }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${DATABASE_URL_MIGRATIONS}"
+          if [ -z "${DATABASE_URL_MIGRATIONS}" ]; then
+            echo "hosted apply secret is not configured"
+            exit 1
+          fi
+          pnpm hosted:db-push
+
+      - name: Verify no pending hosted migrations
+        env:
+          DATABASE_URL_MIGRATIONS: ${{ secrets.DATABASE_URL_MIGRATIONS }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${DATABASE_URL_MIGRATIONS}"
+          if [ -z "${DATABASE_URL_MIGRATIONS}" ]; then
+            echo "hosted apply secret is not configured"
+            exit 1
+          fi
+          report="$(pnpm hosted:db-check)"
+          printf '%s\n' "$report"
+          printf '%s\n' "$report" | grep -qx 'ok: true'
+          printf '%s\n' "$report" | grep -qx 'pending: (none)'
+
+      - name: Clean hosted apply metadata
+        if: always()
+        run: |
+          set -euo pipefail
+          unset DATABASE_URL_MIGRATIONS || true
+          rm -f supabase/.temp/project-ref
+          rmdir supabase/.temp 2>/dev/null || true

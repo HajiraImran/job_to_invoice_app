@@ -14,7 +14,7 @@
     "lint": "turbo run lint",
     "test": "turbo run test",
     "test:db": "node scripts/db-test.mjs",
-    "test:hosted-push": "node --test scripts/hosted-db-push.test.mjs",
+    "test:hosted-push": "node --test scripts/hosted-db-push.test.mjs scripts/hosted-development-migrations.workflow.test.mjs",
     "hosted:db-push": "node scripts/hosted-db-push.mjs",
     "hosted:db-check": "node scripts/hosted-db-push.mjs --check",
     "validate:openapi": "node scripts/validate-openapi.mjs",
