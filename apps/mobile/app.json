@@ -13,7 +13,7 @@
     "android": {
       "package": "com.jobtoinvoice.app"
     },
-    "plugins": ["expo-router", "expo-dev-client"],
+    "plugins": ["expo-router", "expo-dev-client", "expo-secure-store"],
     "experiments": {
       "typedRoutes": false
     }

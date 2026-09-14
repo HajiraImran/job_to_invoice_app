@@ -2,6 +2,49 @@
 export const SNAPSHOT_SCHEMA_VERSION = 0;
 
 export {
+  EMAIL_MAX_LENGTH,
+  maskEmail,
+  parseOwnerEmail,
+  type EmailParseResult,
+} from "./email.ts";
+export {
+  API_ERROR_CODES,
+  httpStatusForCode,
+  type ApiErrorBody,
+  type ApiErrorCode,
+  type ApiFieldError,
+  type ApiSuccessBody,
+} from "./envelope.ts";
+export { analyticsPropertiesAreSafe, redactRecord, redactText } from "./redact.ts";
+export {
+  EMPTY_DRAFT_SYNC,
+  OFFLINE_READ_WINDOW_MS,
+  OTP_LENGTH,
+  OTP_MAX_FAILURES,
+  RESEND_COOLDOWN_MS,
+  canResend,
+  isOfflineReadPermitted,
+  publicRouteAllowed,
+  remainingResendSeconds,
+  resendAvailableAt,
+  routeGroupFor,
+  signOutClears,
+  type AuthSnapshot,
+  type AuthStatus,
+  type DraftSyncStatus,
+  type RouteGroup,
+} from "./auth-state.ts";
+export {
+  ALL_ANALYTICS_EVENTS,
+  ANALYTICS_SCHEMA_VERSION,
+  CLIENT_EVENTS,
+  SERVER_ONLY_EVENTS,
+  isClientAnalyticsEvent,
+  isServerOnlyAnalyticsEvent,
+  type AnalyticsEventName,
+} from "./analytics.ts";
+
+export {
   MONEY_ERROR_CODES,
   MONEY_SCHEMA_VERSION,
   type ChangeOrderInputV1,

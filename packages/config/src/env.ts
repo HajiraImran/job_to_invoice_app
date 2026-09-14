@@ -55,6 +55,10 @@ const developmentSchema = z.object({
   APP_ENV: z.literal("development"),
   API_BASE_URL: z.string().default("http://localhost:3001"),
   PORTAL_ORIGIN: z.string().default("http://localhost:3000"),
+  AUTH_ISSUER: z.string().optional(),
+  AUTH_AUDIENCE: z.string().optional(),
+  AUTH_JWKS_JSON: z.string().optional(),
+  DATABASE_URL_API: z.string().optional(),
 });
 
 const stagingSchema = z.object({

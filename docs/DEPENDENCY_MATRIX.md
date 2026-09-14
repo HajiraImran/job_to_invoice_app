@@ -20,7 +20,7 @@ Substitution requires an architecture decision that preserves behaviour and acce
 | Node runtime | API and worker | ARC01 ARC05 | Node | 22.23.2 (engines >=22.13 <23) | api worker | — | Same LTS in all envs |
 | packages/domain | Money, schemas, state | INV01 FIN* | first-party | repo | mobile api worker | — | No alternate money lib |
 | PostgreSQL | Tenant schema, RLS, triggers | DB* ARC02 | Supabase Postgres | 16 (CI image) | all envs separate | DATABASE_URL_API, DATABASE_URL_WORKER, DATABASE_URL_PURGE, DATABASE_URL_MIGRATIONS | FORCE RLS; no service_role in apps |
-| Supabase Auth | Owner email OTP | ACC01 | Supabase Auth | TBD | separate per env | AUTH_* | Verify SDK limits staging |
+| Supabase Auth | Owner email OTP | ACC01 | Supabase Auth | hosted project + JWKS | separate per env | AUTH_* ; dashboard OTP 6 / 600s / 60s / 5 fails (docs/ENV.md) | Verify SDK limits staging |
 | Supabase Storage | Private objects; API-minted signed URLs only | DOC05 | Supabase Storage | TBD | separate | server-only signing via api_app/worker_app | No client Storage/Realtime/Edge; no user JWT |
 | Encrypted SQLite | Per-owner local drafts | SYNC01 | SQLCipher or supported module | TBD spike | mobile | OS-secured key | Plaintext forbidden |
 | HTML-to-PDF | DOC01 layout | DOC01 | TBD spike | TBD | worker | licensed fonts | Must pass QA54 |

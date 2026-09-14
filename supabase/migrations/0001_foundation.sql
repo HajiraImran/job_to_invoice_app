@@ -43,6 +43,7 @@ comment on role anon is 'Supabase anonymous client role. No commercial grants.';
 comment on role authenticated is 'Supabase authenticated client role. No commercial grants.';
 
 grant migrator to current_user;
+grant api_app to current_user;
 
 create schema if not exists identity authorization migrator;
 create schema if not exists commercial authorization migrator;

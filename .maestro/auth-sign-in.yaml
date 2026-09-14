@@ -1,0 +1,9 @@
+# QA01 / ACC02 owner authentication. Requires EXPO_PUBLIC_AUTH_PROJECT_URL and a reachable inbox.
+# Do not commit mailboxes, codes, or tokens. Skip in CI until a staging Auth project is configured.
+
+appId: com.jobtoinvoice.app
+---
+- launchApp
+- assertVisible: "Job to Invoice"
+- tapOn: "Sign in"
+- assertVisible: "We'll email a one-time code"

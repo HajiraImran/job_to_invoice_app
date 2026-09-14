@@ -176,3 +176,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | Additive. `assets.job_id` / `draft_id` FKs must be added when those tables ship. |
 | Reversible | No for schema split and FORCE RLS; logo table timing only |
 | Escalation category | architecture |
+
+### D-008 — Owner OTP session, SecureStore, and GET /me provisioning
+
+| Field | Value |
+| --- | --- |
+| ID | D-008 |
+| Date | 2026-09-14 |
+| Status | Resolved |
+| Decision | Verify owner access tokens with `jose` against the Supabase JWKS (`AUTH_ISSUER` + `AUTH_AUDIENCE=authenticated`). After a valid JWT, `GET /v1/me` calls `identity.provision_owner` (SECURITY DEFINER, `api_app` EXECUTE only) to map `auth.sub` to `app_users` and create one workspace/membership if needed. The function never accepts `workspace_id`. Persist the Supabase session with `expo-secure-store`, not AsyncStorage. S04 business fields stay for the next slice; new workspaces have empty setup fields and `setup_completed_at` null. Sign-out uses a typed draft-sync port that currently reports no unsynced drafts. Hosted OTP length/expiry/cooldown/attempt limits are dashboard settings documented in `docs/ENV.md`. |
+| Reason | ACC01 forbids a second OTP store. ACC02 requires JWKS verification, secure refresh storage, and one refresh then sign-in. AUTHZ01 forbids treating a client workspace ID as authorization. FORCE RLS prevents `api_app` from looking up `auth_user_id` without a definer function. |
+| Evidence | `apps/api/src/jwt.ts`, `supabase/migrations/0003_owner_provisioning.sql`, `apps/mobile/src/session/supabase.ts`, `docs/ENV.md` |
+| Owner | Engineering lead |
+| PRD implication | S02/S03/S22 sign-out ship in this slice. Real mailbox OTP, dashboard attempt caps, and Keychain behaviour on a physical iPhone remain staging/device evidence. |
+| Impacted requirement IDs | ACC01, ACC02, AUTHZ01, API01–API03, ANA01, S02, S03, S22, ARC03, NFR01, SEC01, SEC04, OPS03 |
+| Impacted test IDs | QA01, QA02, QA19, QA61, QA63 |
+| Migration implications | Additive `setup_completed_at`, `analytics_alias_id`, `analytics_events`, `provision_owner`. |
+| Reversible | No for JWKS + SecureStore; setup column nullability only |
+| Escalation category | architecture |

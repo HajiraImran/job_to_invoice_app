@@ -12,7 +12,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | DEC01 | iPhone first; iOS 17+ unless raised and documented; Apple SDK overrides | apps/mobile | All owner screens | EAS iOS | — | — | NFR02 device matrix | REL01 | PENDING | Android operator app deferred |
 | DEC02 | Customer browser portal; no customer app or account | apps/portal | S25–S27 | Portal routes | approval_requests purpose | — | QA18 | APR01 | PENDING | |
 | DEC03 | US English USD; US business address; browsers may be elsewhere | all | S04 VAL02 | — | workspaces.currency USD | — | QA64 | — | PENDING | |
-| DEC04 | One owner, one workspace; two iPhones OK; no staff seats or transfer | apps/mobile apps/api | S04 | memberships | memberships | — | QA01 QA07 db-test.mjs | ACC03 | PENDING | Unique owner_user_id and one active owner membership enforced; onboarding UI pending |
+| DEC04 | One owner, one workspace; two iPhones OK; no staff seats or transfer | apps/mobile apps/api | S04 | memberships | memberships | — | pnpm test:db duplicate provisioning (2026-09-14) | ACC03 | PENDING | Unique owner + one active owner membership enforced in provision_owner; S04 UI pending |
 | DEC05 | Record external payments only; no card collection | apps/mobile apps/api | S17 | payments/refunds | ledger_entries | payment_recorded | QA37 | BIL05 | PENDING | |
 | DEC06 | 3 free jobs; optional 14-day app trial; monthly/annual Apple subs | apps/mobile apps/api | S21 | entitlements | job_allowances entitlement_snapshots | trial_started purchase_verified | QA10 QA45 | SUB01–SUB03 | PENDING | |
 | DEC07 | Email code then explicit approval of immutable revision; no notarization claim | apps/portal | S26 | TX02 | approval_decisions | approval_completed | QA24 | APR04 | PENDING | |
@@ -31,7 +31,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | MET06 | Paying owner = verified sub, first txn not refunded; after trial | apps/api | S21 | TX05 | entitlement_snapshots | purchase_verified | QA45 | SUB07 | PENDING | |
 | MET07 | CAC = media / non-refunded new paying; unknown separate; $40–50 hypothesis | ops | — | spend import | — | — | Report | ANA03 | PENDING | Business hypothesis |
 | MET08 | Monthly renewal by cohort; weekly activity; annual buy ≠ annual retention | analytics | S21 | reports | entitlement_snapshots | purchase_verified | Cohort job | — | PENDING | |
-| AUTHZ01 | Auth from verified identity; workspace ID not auth; cross-tenant 404; portal ≠ owner; staff MFA | apps/api | all | JWT + RLS | memberships staff_users | — | QA03; pnpm test:db 15 passed (2026-09-14) | ARC02 | PENDING | DB isolation + forged GUC verified; JWT/portal/staff still pending |
+| AUTHZ01 | Auth from verified identity; workspace ID not auth; cross-tenant 404; portal ≠ owner; staff MFA | apps/api | all | JWT + RLS | memberships staff_users | — | QA03; pnpm test:db 18 passed (2026-09-14); apps/api/src/auth.test.ts staff 401 | ARC02 | PENDING | Owner JWT + provision + DB isolation verified; portal/staff still pending |
 | INV01 | Integer cents; qty 3-decimal string; no binary float; server authoritative; shared package | packages/domain | S10 S11 | calculate | document_lines | — | packages/domain fixtures.test.ts F01–F12; 40 passing domain tests | FIN01 | VERIFIED | Shared BigInt engine; mobile/API/PDF must import this package |
 | INV01 | Integer cents; qty 3-decimal string; no binary float; server authoritative; shared package | packages/domain | S10 S11 | calculate | document_lines | — | packages/domain fixtures.test.ts F01–F12; 40 passing domain tests | FIN01 | VERIFIED | Shared BigInt engine; mobile/API/PDF must import this package |
 | INV02 | Accepted commercial facts immutable; corrections via new version/reversal/credit | apps/api | S08 | triggers | documents ledger_entries | — | QA26 | DB04 | PENDING | |
@@ -55,8 +55,8 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | UI03 | Light only; portal 720/320/200% | apps/mobile apps/portal | all | — | — | — | QA61 | — | PENDING | |
 | UI04 | Loading empty loaded refresh-fail offline access-expired | all apps | all data screens | — | — | — | Screen QA | SCREEN_MAP | PENDING | |
 | S01 | Welcome; no paywall; demo cannot send | apps/mobile | S01 | — | — | — | Design+QA | JRN01 | PENDING | |
-| S02 | Email sign in; generic sent; throttle | apps/mobile | S02 | Auth | — | — | QA02 | ACC01 | PENDING | |
-| S03 | Verify code; paste/autofill; limits | apps/mobile | S03 | Auth | — | signup_verified | QA01 QA02 | ACC01 | PENDING | |
+| S02 | Email sign in; generic sent; throttle | apps/mobile | S02 | Auth | — | — | packages/schemas/src/index.test.ts; apps/mobile/src/auth/auth.test.ts | ACC01 | IMPLEMENTED | UI + validation + non-enumerating send. Real mailbox OTP unverified |
+| S03 | Verify code; paste/autofill; limits | apps/mobile | S03 | Auth | — | signup_verified | apps/mobile/src/auth/auth.test.ts | ACC01 | IMPLEMENTED | Code UI, cooldown, 5-fail client stop. Provider caps unverified |
 | S04 | Three-step setup; back keeps data; optional logo | apps/mobile | S04 | POST /workspace | workspaces | onboarding_completed | QA01 | VAL01 | PENDING | |
 | S05 | Jobs list search filters New job sync badges pagination | apps/mobile | S05 | GET /jobs | jobs | — | QA05 | SYNC06 | PENDING | |
 | S06 | Create job Quote or Direct invoice; no forced contacts | apps/mobile | S06 | POST /jobs | jobs | job_created | QA44 | JRN06 | PENDING | |
@@ -75,7 +75,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | S19 | Customers list/detail | apps/mobile | S19 | customers | customers | — | CUS02 | — | PENDING | |
 | S20 | Items list; archive; no live link to docs | apps/mobile | S20 | items | catalogue_items | — | QA15 | CAT01 | PENDING | |
 | S21 | Subscription all billing states | apps/mobile | S21 | TX05 | entitlement_snapshots | paywall_viewed | QA45 QA46 QA47 QA48 QA49 QA50 QA51 | SUB | PENDING | |
-| S22 | Settings; reauth; future-only profile updates | apps/mobile | S22 | workspace | workspaces | support_opened | ACC03 | — | PENDING | |
+| S22 | Settings; reauth; future-only profile updates | apps/mobile | S22 | workspace | workspaces | support_opened | apps/mobile/app/(tabs)/settings.tsx; src/drafts/sync.ts | ACC03 | IMPLEMENTED | Sign-out + unsynced-draft port (empty). Business defaults, reauth, support not in this slice |
 | S23 | Conflict; keep server or local copy; no auto replace sent | apps/mobile | S23 | If-Match | document_drafts | sync_conflict | QA07 | SYNC03 | PENDING | |
 | S24 | Export and deletion | apps/mobile | S24 | exports deletion | exports deletion_requests | export_completed | QA56 QA57 | PRV EXP | PENDING | |
 | S25 | Access; no private data before verify | apps/portal | S25 | portal exchange | approval_sessions | — | QA18 | APR02 | PENDING | |
@@ -86,8 +86,8 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | VAL02 | US address; distinct billing/site; TZ confirm; MM/DD/YYYY | packages/domain | S04 S06 | validation | address_json | — | QA64 | — | PENDING | |
 | VAL03 | Line limits; USD only; quote needs one positive net | packages/domain | S10 | validation | document_lines | — | F01 VAL boundaries.test.ts | — | PENDING | Qty/price/discount/100-line/total/positive-net calc limits verified; description/unit validation still pending |
 | VAL04 | Notes/terms/reason/name; plain text; client+server | packages/domain | S09 S26 | validation | snapshots | — | QA24 | — | PENDING | |
-| ACC01 | Supabase OTP 6-digit 10m 60s 5 fails; no second code store; secure tokens | apps/mobile apps/api | S02 S03 | Supabase Auth | app_users | signup_verified | QA01 QA02 | SREF06 | PENDING | |
-| ACC02 | JWT verify; refresh once; 7-day offline read; sign-out unsynced warn | apps/mobile apps/api | S02 S05 | JWT | app_users | — | QA05 ACC | SREF06 | PENDING | |
+| ACC01 | Supabase OTP 6-digit 10m 60s 5 fails; no second code store; secure tokens | apps/mobile apps/api | S02 S03 | Supabase Auth | app_users | signup_verified | packages/schemas/src/index.test.ts; docs/ENV.md | SREF06 | IMPLEMENTED | SDK OTP path; dashboard 6/600s/60s/5 documented. No second OTP table. Mailbox unverified |
+| ACC02 | JWT verify; refresh once; 7-day offline read; sign-out unsynced warn | apps/mobile apps/api | S02 S05 | JWT | app_users | — | pnpm --filter @job-to-invoice/api test 12 passed (2026-09-14) | SREF06 | IMPLEMENTED | JWKS verify + 401 cases verified. SecureStore/device/OTP E2E unverified |
 | ACC02A | Fresh OTP + action grant 5m X-Action-Grant; action_grants table | apps/api | S24 S12 | action-grants | action_grants | — | QA56 QA57 | D-002 Resolved | PENDING | identity.action_grants table exists; issuer route still pending |
 | ACC03 | Email change reauth; UUID stable; no ownership transfer | apps/api | S22 | email-change | app_users | — | ACC03 | ACC02A | PENDING | |
 | CUS01 | Duplicate email warn; snapshots frozen; apply-current explicit | apps/api | S07 S11 | customers | customers | — | QA15 | — | PENDING | |
@@ -177,7 +177,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | EMAIL11 | Deletion receipt | apps/worker | S24 | outbox | deletion_requests | — | QA57 | PRV06 | PENDING | |
 | ARC01 | TS monorepo mobile/portal/admin/api/worker/domain; Supabase; Render; Resend; RC; Sentry; 1P analytics | repo | — | all | — | — | DEL01 | D-001 D-003 | PENDING | |
 | ARC02 | No commercial Supabase REST writes; private schema; FORCE RLS | apps/api | — | RLS | all tenant tables | — | pnpm test:db 15 passed (2026-09-14); supabase/tests/0002_rls_force.sql | SREF07 | VERIFIED | identity+commercial schemas, FORCE RLS, role revokes, isolation tests. Client REST ban remains app architecture. |
-| ARC03 | JWT → tenant context per txn; portal/staff separate; no pool leak | apps/api | — | Fastify | — | — | pnpm test:db pool-leak + GUC-clear cases (2026-09-14) | AUTHZ01 | PENDING | SET LOCAL + pool-leak verified in PostgreSQL; Fastify JWT wiring still pending |
+| ARC03 | JWT → tenant context per txn; portal/staff separate; no pool leak | apps/api | — | Fastify | — | — | pnpm test:db 18 passed; apps/api/src/auth.test.ts GET /me | AUTHZ01 | PENDING | JWT + provision_owner + SET LOCAL on analytics writes; remaining owner commands later |
 | ARC04 | Transactional outbox; SKIP LOCKED; no provider I/O in txn | apps/worker | — | outbox | outbox_tasks | — | QA33 QA65 | — | PENDING | |
 | ARC05 | Pin versions; lockfile CI; no invented patch numbers | repo | — | CI | — | — | QA68 | D-005 | PENDING | Stage 0 pin |
 | DB01 | UUID, cents, numeric qty, composite tenant FKs, no cascade published | supabase | — | migrations | all | — | db-test.mjs logo_asset_id FK | — | PENDING | Identity/tenancy tables follow UUID + UNIQUE(workspace_id,id) + composite logo FK; remaining entities later |
@@ -185,9 +185,9 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | DB03 | Indexes; pending unique; active invoice unique | supabase | — | migrations | approval_requests jobs | — | QA16 QA43 | INV04 | PENDING | |
 | DB04 | Immutable triggers; reversal checks; DB authz tests | supabase | — | triggers | documents ledger_entries | — | QA26 scripts/db-test.mjs | INV02 | PENDING | Identity/tenancy authorization tests exist; commercial immutability triggers later |
 | DB05 | Privileged purge; deletion ledger on restore | apps/worker | S24 | purge | deletion_requests | — | QA58 | PRV | PENDING | |
-| API01 | /v1 HTTPS JSON; Bearer/cookie; Idempotency-Key; If-Match | apps/api | — | Fastify | idempotency_records | — | API tests | — | PENDING | |
-| API02 | Envelope; cursor lists; error shape; status mapping | apps/api | — | Fastify | — | — | API tests | — | PENDING | |
-| API03 | Reject unknown fields; server-owned calculated fields | apps/api | — | schemas | — | — | API tests | — | PENDING | |
+| API01 | /v1 HTTPS JSON; Bearer/cookie; Idempotency-Key; If-Match | apps/api | — | Fastify | idempotency_records | — | apps/api/src/auth.test.ts | — | IMPLEMENTED | Bearer + Idempotency-Key on analytics. Portal cookie and If-Match later |
+| API02 | Envelope; cursor lists; error shape; status mapping | apps/api | — | Fastify | — | — | apps/api/src/auth.test.ts 401/403/422 | — | IMPLEMENTED | Auth envelope. Lists/cursors later |
+| API03 | Reject unknown fields; server-owned calculated fields | apps/api | — | schemas | — | — | apps/api/src/auth.test.ts analytics unknown fields | — | IMPLEMENTED | Enforced on /analytics/batch. Remaining commands later |
 | API04 | Direct invoice via generic draft routes | apps/api | S06 S15 | drafts | document_drafts | invoice_issued | QA44 | JRN06 | PENDING | |
 | API05 | view_only purpose; no decision; access expiry | apps/api apps/portal | S25–S27 | portal | approval_requests | — | API05 | EMAIL06 | PENDING | |
 | TX01 | Publish algorithm | apps/api | S11 | publish | documents outbox_tasks | document_published | QA09 | QUO02 | PENDING | |
@@ -196,7 +196,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | TX04 | Credit/payment/refund/reversal algorithm | apps/api | S16–S18 | ledger | ledger_entries | payment_recorded | QA37–QA41 | BIL | PENDING | |
 | TX05 | Billing webhook/reconcile algorithm | apps/worker | S21 | webhooks | provider_events | purchase_verified | QA48 | SUB07 | PENDING | |
 | TX06 | Public link compromise | apps/api apps/admin | S12 S28 | revoke | approval_sessions | — | QA17 | APR03 | PENDING | |
-| SEC01 | TLS HSTS CORS CSP; no tokens in storage/URL/logs; no 3p scripts on portal | all web | S25 | headers | — | — | QA63 | APR01 | PENDING | |
+| SEC01 | TLS HSTS CORS CSP; no tokens in storage/URL/logs; no 3p scripts on portal | all web | S25 | headers | — | — | packages/schemas/src/index.test.ts redaction; auth.test.ts | APR01 | PENDING | API redaction + no tokens in error bodies verified. HSTS/CSP/portal later |
 | SEC02 | Tenant object checks; 120/min; 20 pub/h; email caps | apps/api | — | rate limit | — | — | QA03 QA04 | — | PENDING | |
 | SEC03 | Isolated file validation; webhook fail-closed | apps/worker | — | assets webhooks | assets | — | QA52 | — | PENDING | |
 | SEC04 | No secrets in git; public keys only on device | repo | — | secrets | — | — | QA68 | §33 | PENDING | |
@@ -215,7 +215,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | NFR04 | 99.9% API/portal; RPO 15m RTO 4h; object restore verified | ops | — | backups | — | — | QA66 | OPS06 | PENDING | |
 | NFR05 | Drafts survive terminate after Saved; no fake empty/success | apps/mobile apps/api | S09 S11 | — | — | — | QA05 QA06 | SYNC | PENDING | |
 | NFR06 | Timeouts and no non-idempotent auto-retry | apps/mobile apps/api apps/worker | — | — | — | — | QA34 | ARC04 | PENDING | |
-| ANA01 | First-party schema; forbid PII list | apps/api | — | batch | analytics_events | all events | ANA01 | DEC12 | PENDING | |
+| ANA01 | First-party schema; forbid PII list | apps/api | — | batch | analytics_events | all events | packages/schemas/src/index.test.ts redaction; auth.test.ts email properties 422 | DEC12 | IMPLEMENTED | signup_verified server-side; client PII rejected. Full catalogue later |
 | ANA02 | Server authoritative; batch 50/7d; exclude sandbox | apps/api | — | analytics | analytics_events | — | ANA02 | — | PENDING | |
 | ANA03 | No ad SDK; experiments not on money/consent/entitlement | all | S21 | — | — | paywall_viewed | ANA03 | DEC12 | PENDING | |
 | DEL01 | Owner-controlled repo lockfiles env templates Dockerfiles migrations | repo | — | — | — | — | Handover | ARC05 | PENDING | |
@@ -225,7 +225,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | DEL05 | Staging TestFlight runbooks secrets transfer demo | ops | — | — | — | — | Handover | REL | PENDING | |
 | OPS01 | Separate env; sandbox≠prod; TEST watermark; no prod PII in dev | ops | — | — | — | — | OPS01 | — | PENDING | |
 | OPS02 | CI gates + flags for publication/purchases | repo | — | CI | — | — | QA68 | — | PENDING | |
-| OPS03 | Structured redacted logs; Sentry no replay; dashboards | all | — | Sentry | — | — | OPS03 | — | PENDING | |
+| OPS03 | Structured redacted logs; Sentry no replay; dashboards | all | — | Sentry | — | — | packages/schemas/src/index.test.ts redactText | — | PENDING | Redaction helpers exist. Sentry wiring and dashboards later |
 | OPS04 | Sev1 alerts; staffed on-call | ops | — | alerts | — | — | OPS04 | §34 | PENDING | Owner staffing |
 | OPS05 | Sev1 30m / Sev2 4h; no invented breach deadlines | ops | — | incidents | — | — | Runbook | — | PENDING | |
 | OPS06 | Restore runbook; quarterly drill | ops | — | restore | — | — | QA58 QA66 | PRV05 | PENDING | |

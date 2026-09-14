@@ -44,6 +44,8 @@ Supabase `service_role` is forbidden as an application connection. Client roles 
 
 `action_grants` lives in `identity` (ACC02A). It is not workspace-scoped; RLS matches `user_id` to `app.actor_id`.
 
+`identity.provision_owner(auth_user_id, display_email, normalized_email)` is `SECURITY DEFINER` owned by `migrator`, executable only by `api_app`. It creates or returns the application user, the single owner workspace, and membership. Callers never pass `workspace_id`. First successful provision emits `signup_verified` with a random `analytics_alias_id`, not an email hash.
+
 ## Tenant context (ARC03)
 
 Session `SET` of tenant GUCs is forbidden. Inside an already-open transaction the API/worker must call:
@@ -76,7 +78,7 @@ Every relationship to a **non-root** tenant row is composite `(workspace_id, ref
 | Table | Domain fields beyond common fields |
 | --- | --- |
 | app_users | auth_user_id unique, normalized_email, display_email, status active/suspended/deleting/deleted, last_authenticated_at, deletion_requested_at?, terms_version, privacy_version |
-| workspaces | owner_user_id unique, business_name, legal_name, contact_name, contact_email, contact_phone?, address_json, timezone, currency USD, trade handyman/other, logo_asset_id?, default_tax_bp, default_due_days, default_terms, version |
+| workspaces | owner_user_id unique, business_name, legal_name, contact_name, contact_email, contact_phone?, address_json, timezone, currency USD, trade handyman/other, logo_asset_id?, default_tax_bp, default_due_days, default_terms, setup_completed_at?, version |
 | memberships | user_id, role owner, status active; unique workspace/user; v1 exactly one active owner |
 | action_grants | id, user_id, action, token_hash, expires_at, used_at? — restricted identity schema (ACC02A). Actions: export, deletion, email_change, replace_link. Five-minute expiry after fresh OTP. Single use. |
 

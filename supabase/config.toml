@@ -1,0 +1,10 @@
+# Auth profile required by ACC01.
+# Hosted projects must also be set in the Supabase dashboard; see docs/ENV.md.
+# This file is not a full local Supabase stack.
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+otp_length = 6
+otp_expiry = 600
+max_frequency = "1m0s"

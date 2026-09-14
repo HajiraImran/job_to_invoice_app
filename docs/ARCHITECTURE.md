@@ -90,7 +90,7 @@ Normative tenant-context algorithm. Session-level `SET` is forbidden. GUC must n
 Owner command:
 
 1. Verify JWT signature, issuer, audience, expiry, account status (ACC02, SREF06).
-2. Resolve workspace membership from verified identity. A route/body `workspace_id` is ignored as evidence.
+2. Resolve workspace membership from verified identity via `identity.provision_owner`. A route/body `workspace_id` is ignored as evidence.
 3. Checkout one pool client.
 4. `BEGIN`.
 5. `SET LOCAL app.workspace_id` and `SET LOCAL app.actor_id` from that verified identity only.

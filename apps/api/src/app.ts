@@ -1,10 +1,287 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import type { LoadedEnv } from "@job-to-invoice/config";
+import {
+  ANALYTICS_SCHEMA_VERSION,
+  analyticsPropertiesAreSafe,
+  isClientAnalyticsEvent,
+  parseOwnerEmail,
+} from "@job-to-invoice/schemas";
+import type { Pool } from "pg";
+import { withApiRole, withTenant } from "./db.ts";
+import { API_ERROR_CODES, fail, requestId, success } from "./envelope.ts";
+import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
+import { RateLimiter } from "./rate-limit.ts";
 
-export function buildApp() {
-  const app = Fastify({ logger: false });
-  app.get("/v1/health", async () => ({
-    data: { status: "ok", product: false },
-    meta: { note: "Foundation scaffold. Commercial routes are not implemented." },
-  }));
+export type AppDeps = {
+  env: LoadedEnv;
+  verifyJwt?: JwtVerifier;
+  pool?: Pool;
+};
+
+type ProvisionRow = {
+  actor_id: string;
+  workspace_id: string;
+  account_status: string;
+  display_email: string;
+  setup_completed: boolean;
+  first_sign_in: boolean;
+  analytics_alias_id: string;
+};
+
+const GENERIC_AUTH = "Could not verify your session.";
+const SIGN_IN_REQUIRED = "Sign in required.";
+
+function sendFail(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  code: string,
+  message: string,
+  extra?: { field_errors?: { field: string; message: string }[]; retryAfter?: number },
+) {
+  const result = fail(request.id, code, message, { field_errors: extra?.field_errors });
+  if (extra?.retryAfter !== undefined) {
+    void reply.header("Retry-After", String(extra.retryAfter));
+  }
+  return reply.status(result.status).send(result.body);
+}
+
+async function readJson(request: FastifyRequest): Promise<unknown> {
+  if (request.body === undefined || request.body === null) {
+    return {};
+  }
+  return request.body;
+}
+
+function idempotencyKey(request: FastifyRequest): string | undefined {
+  const raw = request.headers["idempotency-key"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value?.trim() || undefined;
+}
+
+export function buildApp(deps: AppDeps) {
+  const app = Fastify({ logger: false, genReqId: requestId });
+  const limiter = new RateLimiter(120, 60_000);
+  const idempotency = new Map<string, { hash: string; status: number; body: unknown }>();
+
+  app.addHook("onRequest", async (request, reply) => {
+    const origin = request.headers.origin;
+    if (origin && origin !== deps.env.PORTAL_ORIGIN) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    if (origin) {
+      void reply.header("Access-Control-Allow-Origin", origin);
+      void reply.header("Vary", "Origin");
+    }
+    return undefined;
+  });
+
+  app.setErrorHandler((_error, request, reply) => {
+    return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+  });
+
+  app.get("/v1/health", async (request) =>
+    success(request.id, {
+      status: "ok",
+      auth_configured: Boolean(deps.verifyJwt && deps.pool),
+    }),
+  );
+
+  app.get("/v1/me", async (request, reply) => {
+    const token = bearerToken(request.headers.authorization);
+    if (!token) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+    }
+    if (!deps.verifyJwt || !deps.pool) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    let access: VerifiedAccess;
+    try {
+      access = await deps.verifyJwt(token);
+    } catch (error) {
+      if (error instanceof JwtVerificationError) {
+        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      }
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const parsed = parseOwnerEmail(access.email);
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const limited = limiter.allow(access.sub);
+    if (!limited.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.", {
+        retryAfter: limited.retryAfterSec,
+      });
+    }
+    try {
+      const row = await withApiRole(deps.pool, async (client) => {
+        const result = await client.query<ProvisionRow>(
+          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id
+           from identity.provision_owner($1::uuid, $2, $3)`,
+          [access.sub, parsed.display, parsed.normalized],
+        );
+        return result.rows[0];
+      });
+      if (!row) {
+        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      }
+      if (row.account_status === "deleted" || row.account_status === "deleting") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+      }
+      return success(request.id, {
+        user: {
+          id: row.actor_id,
+          status: row.account_status,
+          display_email: row.display_email,
+        },
+        workspace: {
+          id: row.workspace_id,
+          setup_completed: row.setup_completed,
+        },
+        entitlement: {
+          source: "unverified",
+          can_publish: false,
+        },
+        first_sign_in: row.first_sign_in,
+        analytics_alias_id: row.analytics_alias_id,
+      });
+    } catch {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+  });
+
+  app.post("/v1/analytics/batch", async (request, reply) => {
+    const token = bearerToken(request.headers.authorization);
+    if (!token) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+    }
+    if (!deps.verifyJwt || !deps.pool) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    const key = idempotencyKey(request);
+    if (!key || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    let access: VerifiedAccess;
+    try {
+      access = await deps.verifyJwt(token);
+    } catch {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const parsedEmail = parseOwnerEmail(access.email);
+    if (!parsedEmail.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const body = await readJson(request);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Invalid request.");
+    }
+    const record = body as Record<string, unknown>;
+    if (Object.keys(record).some((field) => field !== "events")) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Unknown fields are not allowed.");
+    }
+    const events = record.events;
+    if (!Array.isArray(events) || events.length === 0 || events.length > 50) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "events must contain 1–50 items.", {
+        field_errors: [{ field: "events", message: "1–50 events required" }],
+      });
+    }
+    const hash = JSON.stringify(body);
+    const prior = idempotency.get(`${access.sub}:${key}`);
+    if (prior) {
+      if (prior.hash !== hash) {
+        return sendFail(request, reply, API_ERROR_CODES.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with a different body.");
+      }
+      return reply.status(prior.status).send(prior.body);
+    }
+    try {
+      const owner = await withApiRole(deps.pool, async (client) => {
+        const result = await client.query<ProvisionRow>(
+          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id
+           from identity.provision_owner($1::uuid, $2, $3)`,
+          [access.sub, parsedEmail.display, parsedEmail.normalized],
+        );
+        return result.rows[0];
+      });
+      if (!owner) {
+        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      }
+      if (owner.account_status === "suspended") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_SUSPENDED, "This account cannot make changes.");
+      }
+      if (owner.account_status !== "active") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+      }
+      const now = Date.now();
+      const rows: unknown[][] = [];
+      for (const item of events) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Invalid event.");
+        }
+        const event = item as Record<string, unknown>;
+        const allowed = new Set(["event_id", "event_name", "occurred_at", "schema_version", "job_id", "properties"]);
+        if (Object.keys(event).some((field) => !allowed.has(field))) {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Unknown fields are not allowed.");
+        }
+        if (typeof event.event_name !== "string" || !isClientAnalyticsEvent(event.event_name)) {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Event is not allowed.");
+        }
+        if (typeof event.event_id !== "string") {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "event_id is required.", {
+            field_errors: [{ field: "event_id", message: "UUID required" }],
+          });
+        }
+        if (event.schema_version !== ANALYTICS_SCHEMA_VERSION) {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Unsupported schema_version.");
+        }
+        if (typeof event.occurred_at !== "string") {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "occurred_at is required.");
+        }
+        const occurred = Date.parse(event.occurred_at);
+        if (Number.isNaN(occurred) || now - occurred > 7 * 24 * 60 * 60 * 1000) {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Event expired.");
+        }
+        const properties =
+          event.properties === undefined
+            ? {}
+            : event.properties && typeof event.properties === "object" && !Array.isArray(event.properties)
+              ? (event.properties as Record<string, unknown>)
+              : null;
+        if (!properties || !analyticsPropertiesAreSafe(properties)) {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Event properties are not allowed.");
+        }
+        rows.push([
+          owner.workspace_id,
+          event.event_id,
+          event.event_name,
+          ANALYTICS_SCHEMA_VERSION,
+          event.occurred_at,
+          owner.analytics_alias_id,
+          event.job_id ?? null,
+          JSON.stringify(properties),
+        ]);
+      }
+      await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
+        for (const row of rows) {
+          await client.query(
+            `insert into commercial.analytics_events (
+              workspace_id, event_id, event_name, schema_version, occurred_at,
+              pseudonymous_owner_id, job_id, safe_properties_json
+            ) values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+            on conflict (event_id) do nothing`,
+            row,
+          );
+        }
+      });
+      const bodyOut = success(request.id, { accepted: rows.length });
+      idempotency.set(`${access.sub}:${key}`, { hash, status: 202, body: bodyOut });
+      return reply.status(202).send(bodyOut);
+    } catch {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
   return app;
 }

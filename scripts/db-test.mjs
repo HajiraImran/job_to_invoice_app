@@ -398,6 +398,43 @@ try {
     );
   });
 
+  await test("duplicate provisioning is idempotent and creates one workspace", async () => {
+    const authId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    await admin.query("begin");
+    await admin.query("set local role api_app");
+    const first = await admin.query(
+      `select actor_id, workspace_id, first_sign_in from identity.provision_owner($1, $2, $3)`,
+      [authId, "Owner.C@Example.com", "owner.c@example.com"],
+    );
+    const second = await admin.query(
+      `select actor_id, workspace_id, first_sign_in from identity.provision_owner($1, $2, $3)`,
+      [authId, "Owner.C@Example.com", "owner.c@example.com"],
+    );
+    await admin.query("commit");
+    assert(first.rows[0]?.actor_id === second.rows[0]?.actor_id, "actor must be stable");
+    assert(first.rows[0]?.workspace_id === second.rows[0]?.workspace_id, "workspace must be stable");
+    assert(first.rows[0]?.first_sign_in === true, "first call is first sign-in");
+    assert(second.rows[0]?.first_sign_in === false, "retry is not first sign-in");
+    const workspaces = await admin.query(
+      "select count(*)::int as n from commercial.workspaces where owner_user_id = $1",
+      [first.rows[0]?.actor_id],
+    );
+    assert(workspaces.rows[0]?.n === 1, "exactly one workspace");
+    const owners = await admin.query(
+      "select count(*)::int as n from commercial.memberships where workspace_id = $1 and role = 'owner' and status = 'active'",
+      [first.rows[0]?.workspace_id],
+    );
+    assert(owners.rows[0]?.n === 1, "exactly one active owner");
+  });
+
+  await test("provisioned owner cannot read another identity without tenant context", async () => {
+    const rows = await withApi(admin, async () => {
+      const users = await admin.query("select id from identity.app_users");
+      return users.rows;
+    });
+    assert(rows.length === 0, "missing GUC must hide app_users");
+  });
+
   console.log(`${passed} passed, ${failed} failed`);
   if (failed > 0) {
     process.exitCode = 1;

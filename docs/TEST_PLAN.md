@@ -47,7 +47,7 @@ Each QA ID is a developer/QA requirement, not a claim that the unbuilt app has p
 | Direct invoice | JRN06 | QA44 |
 | Invoice issue after approved change | JRN05 | QA31 |
 | Paywall on fourth free job | SUB02 | QA10 |
-| Settings logout | ACC02 | — |
+| Settings logout | ACC02 | Maestro `.maestro/auth-sign-in.yaml` is the public-screen smoke; full logout E2E needs a staging Auth project |
 
 Do not automate every cosmetic case. Portal approval races stay in integration/E2E, not Maestro-only.
 
@@ -174,4 +174,14 @@ Merge to `main` must run, not skip:
 - Dependency and secret scans (`service_role` banned)
 - Signed mobile build smoke on release candidates
 
-Missing named on-call contact blocks Stage 6 checklist only (owner §34 input). It is not invented here.
+## Auth slice commands
+
+```sh
+pnpm --filter @job-to-invoice/schemas test
+pnpm --filter @job-to-invoice/api test
+pnpm --filter @job-to-invoice/mobile test
+pnpm test:db
+pnpm migrate:clean
+```
+
+QA01 mailbox E2E and physical SecureStore checks require `EXPO_PUBLIC_AUTH_PROJECT_URL` plus dashboard OTP settings from `docs/ENV.md`. They are not satisfied by unit mocks.

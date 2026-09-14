@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Job to Invoice API",
-    "version": "0.0.0",
-    "description": "Foundation contract. Commercial endpoints are not implemented."
+    "version": "0.1.0",
+    "description": "Owner authentication bootstrap. Commercial job routes are not implemented."
   },
   "paths": {
     "/v1/health": {
@@ -14,6 +14,60 @@
             "description": "API process is running"
           }
         }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "summary": "Owner bootstrap",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Verified identity, workspace, and setup state" },
+          "401": { "description": "Missing or invalid access token" }
+        }
+      }
+    },
+    "/v1/analytics/batch": {
+      "post": {
+        "summary": "Client analytics batch",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["events"],
+                "properties": {
+                  "events": { "type": "array", "minItems": 1, "maxItems": 50 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Accepted" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended or locked account" },
+          "422": { "description": "Validation failed" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
       }
     }
   }

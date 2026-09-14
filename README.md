@@ -1,6 +1,6 @@
 # Job to Invoice
 
-Production iPhone app and customer approval website for US solo service businesses. This repository currently contains the **ARC01 foundation scaffold only**. Product screens, commercial tables, and billing are not implemented.
+Production iPhone app and customer approval website for US solo service businesses. This repository currently contains the ARC01 foundation plus owner email authentication. Jobs, quotes, approvals, and invoices are not implemented.
 
 ## Authority
 
@@ -39,4 +39,4 @@ Portal and admin Next.js builds do not require production credentials. EAS produ
 | `apps/api` | Fastify `/v1` |
 | `apps/worker` | Background worker |
 
-Copy `.env.example` to `.env.local` for local development. Production configuration must not contain placeholder values (QA68).
+Copy `.env.example` to `.env.local` for local development. Auth OTP settings are in `docs/ENV.md`. Production configuration must not contain placeholder values (QA68).

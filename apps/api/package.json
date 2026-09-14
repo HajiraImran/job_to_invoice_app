@@ -14,9 +14,14 @@
   "dependencies": {
     "@job-to-invoice/config": "workspace:*",
     "@job-to-invoice/domain": "workspace:*",
-    "fastify": "5.12.4"
+    "@job-to-invoice/schemas": "workspace:*",
+    "fastify": "5.12.4",
+    "jose": "6.2.12",
+    "pg": "8.16.3"
   },
   "devDependencies": {
+    "@job-to-invoice/testing": "workspace:*",
+    "@types/pg": "8.23.1",
     "typescript": "5.9.3",
     "vitest": "5.0.0"
   }

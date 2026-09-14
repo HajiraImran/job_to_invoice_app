@@ -1,0 +1,111 @@
+import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
+import type { LoadedEnv } from "@job-to-invoice/config";
+
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export type VerifiedAccess = {
+  sub: string;
+  email: string;
+  role: string;
+};
+
+export class JwtVerificationError extends Error {
+  constructor(message = "Could not verify your session.") {
+    super(message);
+    this.name = "JwtVerificationError";
+  }
+}
+
+export type JwtVerifier = (token: string) => Promise<VerifiedAccess>;
+
+function readEmail(payload: JWTPayload): string | undefined {
+  if (typeof payload.email === "string" && payload.email.length > 0) {
+    return payload.email;
+  }
+  const claims = payload as Record<string, unknown>;
+  const meta = claims.user_metadata;
+  if (meta && typeof meta === "object" && "email" in meta && typeof meta.email === "string") {
+    return meta.email;
+  }
+  return undefined;
+}
+
+function asAccess(payload: JWTPayload): VerifiedAccess {
+  if (typeof payload.sub !== "string" || !UUID.test(payload.sub)) {
+    throw new JwtVerificationError();
+  }
+  const role = typeof payload.role === "string" ? payload.role : "";
+  if (role !== "authenticated") {
+    throw new JwtVerificationError();
+  }
+  const email = readEmail(payload);
+  if (!email) {
+    throw new JwtVerificationError();
+  }
+  return { sub: payload.sub, email, role };
+}
+
+export function createJwtVerifier(options: {
+  issuer: string;
+  audience: string;
+  jwks?: { keys: object[] };
+  jwksUrl?: string;
+}): JwtVerifier {
+  const keySet = options.jwksUrl
+    ? createRemoteJWKSet(new URL(options.jwksUrl))
+    : createLocalJWKSet(options.jwks as Parameters<typeof createLocalJWKSet>[0]);
+
+  return async (token: string) => {
+    try {
+      const { payload } = await jwtVerify(token, keySet, {
+        issuer: options.issuer,
+        audience: options.audience,
+        clockTolerance: 5,
+      });
+      return asAccess(payload);
+    } catch (error) {
+      if (error instanceof JwtVerificationError) {
+        throw error;
+      }
+      throw new JwtVerificationError();
+    }
+  };
+}
+
+export function jwtVerifierFromEnv(env: LoadedEnv): JwtVerifier | undefined {
+  const issuer =
+    "AUTH_ISSUER" in env && env.AUTH_ISSUER
+      ? env.AUTH_ISSUER
+      : env.AUTH_PROJECT_URL
+        ? `${env.AUTH_PROJECT_URL.replace(/\/$/, "")}/auth/v1`
+        : undefined;
+  const audience = "AUTH_AUDIENCE" in env && env.AUTH_AUDIENCE ? env.AUTH_AUDIENCE : "authenticated";
+  const jwksJson = "AUTH_JWKS_JSON" in env ? env.AUTH_JWKS_JSON : undefined;
+  if (!issuer) {
+    return undefined;
+  }
+  if (jwksJson) {
+    return createJwtVerifier({
+      issuer,
+      audience,
+      jwks: JSON.parse(jwksJson) as { keys: object[] },
+    });
+  }
+  if (env.AUTH_PROJECT_URL) {
+    return createJwtVerifier({
+      issuer,
+      audience,
+      jwksUrl: `${env.AUTH_PROJECT_URL.replace(/\/$/, "")}/auth/v1/.well-known/jwks.json`,
+    });
+  }
+  return undefined;
+}
+
+export function bearerToken(header: string | undefined): string | undefined {
+  if (!header) {
+    return undefined;
+  }
+  const match = /^Bearer\s+(\S+)$/i.exec(header.trim());
+  return match?.[1];
+}

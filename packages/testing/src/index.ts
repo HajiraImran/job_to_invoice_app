@@ -1,3 +1,5 @@
+export { createJwtFixture, type JwtFixture } from "./jwt.ts";
+
 const ROLE_TOKEN = ["service", "role"].join("_");
 const BYPASS_TOKEN = ["BYPASS", "RLS"].join("");
 const SUPABASE_SERVICE_TOKEN = ["SUPABASE", "SERVICE", "ROLE"].join("_");
