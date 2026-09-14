@@ -1,8 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { resolve4 as dnsResolve4 } from "node:dns/promises";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import net from "node:net";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -460,127 +458,6 @@ export function assertSafeHostedMigrationUrl(urlString, expectedProjectRef) {
   return parsed;
 }
 
-const IPV4_ADDRESS = /^(?:\d{1,3}\.){3}\d{1,3}$/;
-
-function isIpv4Address(value) {
-  if (typeof value !== "string" || !IPV4_ADDRESS.test(value)) {
-    return false;
-  }
-  return value.split(".").every((part) => {
-    const n = Number(part);
-    return n >= 0 && n <= 255 && String(n) === part;
-  });
-}
-
-function boundedTimeoutMs(timeoutMs, fallback = 8000) {
-  const ms = Number(timeoutMs);
-  if (!Number.isFinite(ms) || ms <= 0) {
-    return fallback;
-  }
-  return Math.min(ms, 30_000);
-}
-
-function isNoIpv4DnsCode(code) {
-  return code === "ENODATA" || code === "EAI_NODATA";
-}
-
-export function probeIpv4Tcp(
-  address,
-  {
-    port = 5432,
-    timeoutMs = 8000,
-    connect = net.connect,
-  } = {},
-) {
-  if (!isIpv4Address(address) || port !== 5432) {
-    return Promise.resolve({ kind: "error" });
-  }
-  const limit = boundedTimeoutMs(timeoutMs);
-  return new Promise((resolve) => {
-    let settled = false;
-    let socket = null;
-    let timer = null;
-    function finish(outcome) {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (socket) {
-        socket.removeAllListeners();
-        socket.destroy();
-        socket = null;
-      }
-      resolve(outcome);
-    }
-    timer = setTimeout(() => finish({ kind: "timeout" }), limit);
-    try {
-      socket = connect({ host: address, port: 5432, family: 4 });
-    } catch {
-      finish({ kind: "error" });
-      return;
-    }
-    if (!socket || typeof socket.once !== "function") {
-      finish({ kind: "error" });
-      return;
-    }
-    socket.once("connect", () => finish({ kind: "connect" }));
-    socket.once("error", (error) => {
-      const code = error && typeof error.code === "string" ? error.code : "";
-      if (code === "ECONNREFUSED") {
-        finish({ kind: "refused" });
-        return;
-      }
-      if (code === "ETIMEDOUT") {
-        finish({ kind: "timeout" });
-        return;
-      }
-      finish({ kind: "error" });
-    });
-  });
-}
-
-export async function assertIpv4SessionPoolerReachable(
-  hostname,
-  {
-    resolve4 = dnsResolve4,
-    connect = net.connect,
-    timeoutMs = 8000,
-  } = {},
-) {
-  if (!SESSION_POOLER_HOST.test(String(hostname ?? "").toLowerCase())) {
-    throw new Error("D-012: hosted apply must use aws-0-<region>.pooler.supabase.com:5432");
-  }
-  let addresses;
-  try {
-    addresses = await resolve4(hostname);
-  } catch (error) {
-    const code = error && typeof error.code === "string" ? error.code : "";
-    if (isNoIpv4DnsCode(code)) {
-      throw new Error("D-012: session pooler has no IPv4 address");
-    }
-    throw new Error("D-012: session pooler DNS lookup failed");
-  }
-  const ipv4 = Array.isArray(addresses) ? addresses.find((row) => isIpv4Address(row)) : null;
-  if (!ipv4) {
-    throw new Error("D-012: session pooler has no IPv4 address");
-  }
-  const outcome = await probeIpv4Tcp(ipv4, { connect, timeoutMs, port: 5432 });
-  if (outcome.kind === "connect") {
-    return;
-  }
-  if (outcome.kind === "timeout") {
-    throw new Error("D-012: IPv4 session pooler port 5432 timed out");
-  }
-  if (outcome.kind === "refused") {
-    throw new Error("D-012: IPv4 session pooler port 5432 refused the connection");
-  }
-  throw new Error("D-012: IPv4 session pooler TCP probe failed");
-}
-
 function safeErrorMessage(error) {
   if (!(error instanceof Error) || looksLikeCredential(error.message)) {
     return GENERIC_APPLY_FAILURE;
@@ -633,13 +510,11 @@ export async function applyHostedMigrations({
   dryRun = false,
   stdout = process.stdout,
   stderr = process.stderr,
-  checkReachable = assertIpv4SessionPoolerReachable,
 } = {}) {
   const expectedRef = readLinkedProjectRef(projectRefPath);
   const rawUrl = env.DATABASE_URL_MIGRATIONS;
   const url = typeof rawUrl === "string" ? rawUrl.trim() : rawUrl;
-  const parsed = assertSafeHostedMigrationUrl(url, expectedRef);
-  await checkReachable(parsed.hostname);
+  assertSafeHostedMigrationUrl(url, expectedRef);
   return runHostedDbPush(url, {
     spawn,
     platform,
