@@ -28,7 +28,7 @@ pnpm hosted:db-push
 Remove-Item Env:DATABASE_URL_MIGRATIONS
 ```
 
-`pnpm hosted:db-check` is `--dry-run` only. `pnpm hosted:db-push` applies. Neither prints the URL, password, argv, or raw CLI text; failures are an allowlisted category. Hosted migration commands use the root-pinned `supabase` 2.117.0 CLI. The wrapper resolves repository `supabase/dist/supabase.js` before any global npm PATH shim and launches it through `process.execPath` with `shell:false`. `.cmd`/`.ps1` shims are not used. Passing `--db-url` still exposes it on the local process list while the CLI runs.
+`pnpm hosted:db-check` is `--dry-run` only and does not pass `--yes`. `pnpm hosted:db-push` applies with `--yes` so the CLI does not wait for a confirmation prompt. Neither prints the URL, password, argv, or raw CLI text; failures are an allowlisted category. Hosted migration commands use the root-pinned `supabase` 2.117.0 CLI. The wrapper resolves repository `supabase/dist/supabase.js` before any global npm PATH shim and launches it through `process.execPath` with `shell:false`. `.cmd`/`.ps1` shims are not used. Passing `--db-url` still exposes it on the local process list while the CLI runs.
 
 The API verifies owner access tokens with the project JWKS:
 

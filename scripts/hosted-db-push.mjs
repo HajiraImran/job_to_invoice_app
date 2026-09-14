@@ -25,6 +25,8 @@ export function hostedDbPushArgv(url, { dryRun = false } = {}) {
   const argv = ["db", "push", "--db-url", url];
   if (dryRun) {
     argv.push("--dry-run");
+  } else {
+    argv.push("--yes");
   }
   return argv;
 }

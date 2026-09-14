@@ -296,8 +296,9 @@ test("command-injection strings remain one inert argv value", () => {
   const url = sessionUrl({ password: encodeURIComponent(injection) });
   assertSafeHostedMigrationUrl(url, LINKED_REF);
   const argv = hostedDbPushArgv(url);
-  assert.deepEqual(argv, ["db", "push", "--db-url", url]);
+  assert.deepEqual(argv, ["db", "push", "--db-url", url, "--yes"]);
   assert.ok(!argv.includes("--dry-run"));
+  assert.equal(argv.filter((part) => part === "--yes").length, 1);
   const jsEntry = writeJsEntry();
   let spawned = 0;
   const captured = captureWriters();
@@ -308,9 +309,10 @@ test("command-injection strings remain one inert argv value", () => {
     spawn: (bin, receivedArgv, options) => {
       spawned += 1;
       assert.equal(bin, process.execPath);
-      assert.equal(receivedArgv.length, 5);
+      assert.equal(receivedArgv.length, 6);
       assert.equal(receivedArgv[4], url);
       assert.ok(!receivedArgv.includes("--dry-run"));
+      assert.equal(receivedArgv.filter((part) => part === "--yes").length, 1);
       assert.equal(options.shell, false);
       return { status: 0, stdout: "", stderr: "" };
     },
@@ -374,7 +376,7 @@ test("Windows launches the resolved JS entry through process.execPath", () => {
   });
   assert.equal(launch.command, process.execPath);
   assert.doesNotMatch(launch.command, /supabase\.cmd|supabase\.ps1|cmd\.exe|powershell/i);
-  assert.deepEqual(launch.argv, [jsEntry, "db", "push", "--db-url", url]);
+  assert.deepEqual(launch.argv, [jsEntry, "db", "push", "--db-url", url, "--yes"]);
   assert.equal(launch.spawnOptions.shell, false);
   assert.equal(launch.spawnOptions.windowsHide, true);
 });
@@ -513,6 +515,7 @@ test("spawns exactly once with the validated URL and does not retry", async () =
       assert.equal(bin, process.execPath);
       assert.deepEqual(argv, expectedHostedArgv(url));
       assert.equal(options.shell, false);
+      assert.equal(argv.filter((part) => part === "--yes").length, 1);
       assert.doesNotMatch(argv.join(" "), /include-all|include-roles|include-seed|--linked|--dry-run/);
       return { status: 1, stdout: "failed once", stderr: "" };
     },
@@ -537,9 +540,10 @@ test("Windows spawns node once with the JS entry and does not retry", async () =
     spawn: (bin, argv, options) => {
       spawned += 1;
       assert.equal(bin, process.execPath);
-      assert.deepEqual(argv, [jsEntry, "db", "push", "--db-url", url]);
+      assert.deepEqual(argv, [jsEntry, "db", "push", "--db-url", url, "--yes"]);
       assert.equal(options.shell, false);
       assert.ok(!argv.includes("--dry-run"));
+      assert.equal(argv.filter((part) => part === "--yes").length, 1);
       assert.equal(options.windowsHide, true);
       return { status: 1, stdout: "failed once", stderr: "" };
     },
@@ -656,7 +660,9 @@ test("does not probe DNS or TCP before spawning the CLI", async () => {
 
 test("db-check always includes --dry-run and live push never does", async () => {
   const url = sessionUrl();
-  assert.deepEqual(hostedDbPushArgv(url), ["db", "push", "--db-url", url]);
+  assert.deepEqual(hostedDbPushArgv(url), ["db", "push", "--db-url", url, "--yes"]);
+  assert.equal(hostedDbPushArgv(url).filter((part) => part === "--yes").length, 1);
+  assert.ok(!hostedDbPushArgv(url).includes("--dry-run"));
   assert.deepEqual(hostedDbPushArgv(url, { dryRun: true }), [
     "db",
     "push",
@@ -664,6 +670,7 @@ test("db-check always includes --dry-run and live push never does", async () => 
     url,
     "--dry-run",
   ]);
+  assert.ok(!hostedDbPushArgv(url, { dryRun: true }).includes("--yes"));
   let liveSpawned = 0;
   let checkSpawned = 0;
   await applyHostedMigrations({
@@ -675,6 +682,7 @@ test("db-check always includes --dry-run and live push never does", async () => 
       liveSpawned += 1;
       assert.deepEqual(argv, expectedHostedArgv(url));
       assert.ok(!argv.includes("--dry-run"));
+      assert.equal(argv.filter((part) => part === "--yes").length, 1);
       assert.equal(options.shell, false);
       assertNoExtraCliFlags(argv);
       return {
@@ -695,6 +703,7 @@ test("db-check always includes --dry-run and live push never does", async () => 
       checkSpawned += 1;
       assert.deepEqual(argv, expectedHostedArgv(url, { dryRun: true }));
       assert.equal(argv.filter((part) => part === "--dry-run").length, 1);
+      assert.ok(!argv.includes("--yes"));
       assert.equal(options.shell, false);
       assertNoExtraCliFlags(argv);
       return {
@@ -722,6 +731,7 @@ test("Windows dry-run check uses node.exe and one --dry-run argument", () => {
   });
   assert.equal(launch.command, process.execPath);
   assert.deepEqual(launch.argv, [jsEntry, "db", "push", "--db-url", url, "--dry-run"]);
+  assert.ok(!launch.argv.includes("--yes"));
   assert.equal(launch.spawnOptions.shell, false);
   assertNoExtraCliFlags(launch.argv);
 });
@@ -987,6 +997,10 @@ test("does not spawn debug or machine-readable CLI flags", () => {
     });
     assertNoExtraCliFlags(linux.argv);
     assertNoExtraCliFlags(windows.argv);
+    assert.equal(linux.argv.filter((part) => part === "--yes").length, dryRun ? 0 : 1);
+    assert.equal(windows.argv.filter((part) => part === "--yes").length, dryRun ? 0 : 1);
+    assert.equal(linux.argv.includes("--dry-run"), dryRun);
+    assert.equal(windows.argv.includes("--dry-run"), dryRun);
     assert.equal(linux.spawnOptions.shell, false);
     assert.equal(windows.spawnOptions.shell, false);
   }
