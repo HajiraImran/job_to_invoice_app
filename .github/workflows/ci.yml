@@ -41,6 +41,9 @@ jobs:
       - run: pnpm migrate:clean
         env:
           DATABASE_URL_MIGRATIONS: postgres://postgres:postgres@localhost:5432/postgres
+      - run: pnpm test:db
+        env:
+          DATABASE_URL_MIGRATIONS: postgres://postgres:postgres@localhost:5432/postgres
       - run: pnpm --filter @job-to-invoice/portal build
       - run: pnpm --filter @job-to-invoice/admin build
       - run: pnpm --filter @job-to-invoice/api build

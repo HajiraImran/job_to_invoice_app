@@ -1,41 +1,28 @@
-import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+import { applyCleanMigrations } from "./db-admin.mjs";
+import { resolveMigrationsUrl } from "./postgres-url.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const url = process.env.DATABASE_URL_MIGRATIONS;
-
-if (!url) {
-  console.error("DATABASE_URL_MIGRATIONS is required for migrate:clean");
-  process.exit(1);
-}
-
-const forbiddenRole = ["service", "role"].join("_");
-if (url.toLowerCase().includes(forbiddenRole)) {
-  console.error("migrate:clean refuses a privileged Supabase connection string");
-  process.exit(1);
-}
-
-const dir = join(root, "supabase", "migrations");
-const files = readdirSync(dir)
-  .filter((name) => name.endsWith(".sql"))
-  .sort();
+const { url, stop } = await resolveMigrationsUrl();
 
 const client = new Client({ connectionString: url });
 await client.connect();
+
 try {
-  await client.query("drop schema if exists commercial cascade");
-  for (const file of files) {
-    const sql = readFileSync(join(dir, file), "utf8");
-    await client.query(sql);
+  const count = await applyCleanMigrations(client, root);
+  console.log(`Applied ${count} migration(s) on a clean database.`);
+  const smoke = await client.query(`
+    select
+      (select count(*)::int from information_schema.schemata where schema_name in ('commercial', 'identity')) as schemas,
+      (select count(*)::int from pg_roles where rolname in ('migrator', 'api_app', 'worker_app', 'purge_app')) as roles
+  `);
+  const row = smoke.rows[0];
+  if (row.schemas !== 2 || row.roles !== 4) {
+    throw new Error(`foundation smoke failed: schemas=${row.schemas} roles=${row.roles}`);
   }
-  const testSql = readFileSync(join(root, "supabase", "tests", "0001_foundation.sql"), "utf8");
-  const result = await client.query(testSql);
-  if (result.rowCount !== 1) {
-    throw new Error("foundation schema test failed");
-  }
-  console.log(`Applied ${files.length} migration(s) on a clean database.`);
 } finally {
   await client.end();
+  await stop();
 }

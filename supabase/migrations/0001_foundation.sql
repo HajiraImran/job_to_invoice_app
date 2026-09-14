@@ -1,7 +1,62 @@
--- Foundation only. No commercial tables (Stage 1).
--- Roles are documented in docs/DATABASE.md and must be created by the owner-controlled project.
+-- Identity and tenancy foundation. Jobs, quotes, approvals and invoices are later migrations.
+-- Runtime roles are nologin; CI/tests SET ROLE from the migration bootstrap user.
 
-create schema if not exists commercial;
+do $roles$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'migrator') then
+    create role migrator nologin;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'api_app') then
+    create role api_app nologin;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'worker_app') then
+    create role worker_app nologin;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'purge_app') then
+    create role purge_app nologin;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'anon') then
+    create role anon nologin;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+    create role authenticated nologin;
+  end if;
+end
+$roles$;
 
+alter role migrator with nologin nosuperuser nocreatedb nocreaterole noreplication bypassrls;
+alter role api_app with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
+alter role worker_app with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
+alter role purge_app with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
+alter role anon with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
+alter role authenticated with nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
+
+alter role api_app set search_path = commercial, identity, pg_temp;
+alter role worker_app set search_path = commercial, identity, pg_temp;
+alter role purge_app set search_path = commercial, identity, pg_temp;
+
+comment on role migrator is 'Object owner. Migrations only. Not a runtime pool.';
+comment on role api_app is 'FORCE RLS API runtime. Not owner, not superuser, not BYPASSRLS.';
+comment on role worker_app is 'FORCE RLS worker. EXECUTE named functions only. Separate from API.';
+comment on role purge_app is 'Scheduled deletion job only. Never in Fastify or outbox pools.';
+comment on role anon is 'Supabase anonymous client role. No commercial grants.';
+comment on role authenticated is 'Supabase authenticated client role. No commercial grants.';
+
+grant migrator to current_user;
+
+create schema if not exists identity authorization migrator;
+create schema if not exists commercial authorization migrator;
+
+comment on schema identity is
+  'Restricted identity schema (ACC02A). Client grants remain revoked.';
 comment on schema commercial is
-  'Private commercial schema. Client grants remain revoked. Product tables are not created in foundation.';
+  'Private commercial schema (ARC02). Client grants remain revoked. FORCE RLS on tenant tables.';
+
+revoke create on schema public from public;
+revoke all on schema identity from public;
+revoke all on schema commercial from public;
+revoke all on schema identity from anon, authenticated;
+revoke all on schema commercial from anon, authenticated;
+
+grant usage on schema identity to api_app, worker_app, purge_app;
+grant usage on schema commercial to api_app, worker_app, purge_app;

@@ -158,3 +158,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | Compiler major only. |
 | Reversible | Yes |
 | Escalation category | none |
+
+### D-007 — Identity schema, migrator BYPASSRLS, and deferred asset FKs
+
+| Field | Value |
+| --- | --- |
+| ID | D-007 |
+| Date | 2026-09-14 |
+| Status | Resolved |
+| Decision | Put `app_users` and `action_grants` in schema `identity`. Put tenant tables in schema `commercial`. Give `migrator` `BYPASSRLS` and object ownership so `FORCE ROW LEVEL SECURITY` does not block migrations. Runtime roles `api_app`, `worker_app`, and `purge_app` stay `NOBYPASSRLS`, nologin, and non-superuser. Create `assets` in this slice only so `workspaces.logo_asset_id` can use a composite tenant FK; defer `job_id`/`draft_id` FKs until jobs and drafts exist. Local `pnpm migrate:clean` / `pnpm test:db` start embedded PostgreSQL 16 when `DATABASE_URL_MIGRATIONS` is unset. |
+| Reason | ACC02A requires a restricted identity schema. ARC02 requires FORCE RLS and a non-bypass API role. Root `workspace_id` FKs cannot be two copies of the same column. The logo FK is the first non-root composite tenant FK and unblocks isolation tests without jobs, quotes, approvals, or invoices. |
+| Evidence | `supabase/migrations/0001_foundation.sql`, `0002_identity_tenancy.sql`, `scripts/db-test.mjs` |
+| Owner | Engineering lead |
+| PRD implication | Authorization still comes from verified identity plus `SET LOCAL`. Workspace IDs in routes/bodies remain non-authoritative. Jobs/quotes/approvals/invoices remain later migrations. |
+| Impacted requirement IDs | ARC02, ARC03, AUTHZ01, ACC02A, DB01, DEC04, SREF07 |
+| Impacted test IDs | QA03; isolation suite pool-leak and role tests |
+| Migration implications | Additive. `assets.job_id` / `draft_id` FKs must be added when those tables ship. |
+| Reversible | No for schema split and FORCE RLS; logo table timing only |
+| Escalation category | architecture |

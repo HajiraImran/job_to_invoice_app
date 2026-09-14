@@ -33,7 +33,43 @@
 | `worker_app` | `DATABASE_URL_WORKER` | FORCE RLS. EXECUTE named outbox/PDF/billing functions only. Separate pool from API. |
 | `purge_app` | `DATABASE_URL_PURGE` | Scheduled deletion job only. Never in Fastify or outbox pools. No role-level `BYPASSRLS`. Calls named `purge_*` SECURITY DEFINER functions owned by `migrator`. |
 
-Supabase `service_role` is forbidden as an application connection. Client roles have no grants on the commercial schema. `api_app` and `worker_app` must not be `BYPASSRLS`.
+Supabase `service_role` is forbidden as an application connection. Client roles `anon` and `authenticated` have no grants on `identity` or `commercial`. `api_app`, `worker_app`, and `purge_app` must not be `BYPASSRLS`, superuser, or table owner. `migrator` is the object owner and is the only role that may hold `BYPASSRLS`, solely so FORCE RLS does not block migrations.
+
+## Schemas
+
+| Schema | Contents | Client access |
+| --- | --- | --- |
+| `identity` | `app_users`, `action_grants` | Revoked |
+| `commercial` | Tenant commercial tables | Revoked |
+
+`action_grants` lives in `identity` (ACC02A). It is not workspace-scoped; RLS matches `user_id` to `app.actor_id`.
+
+## Tenant context (ARC03)
+
+Session `SET` of tenant GUCs is forbidden. Inside an already-open transaction the API/worker must call:
+
+```sql
+select identity.set_local_tenant_context(workspace_id, actor_id);
+```
+
+which uses `set_config(..., true)` (`SET LOCAL`). `COMMIT`/`ROLLBACK` clears `app.workspace_id` and `app.actor_id`. Connection pooling must not reuse a session-level tenant GUC.
+
+A route or body `workspace_id` is never passed into that function. The values come from verified identity (owner membership lookup, portal request lock, or worker locked aggregate row).
+
+RLS for tenant tables requires both:
+
+1. `workspace_id = identity.current_workspace_id()`
+2. an active `memberships` row for `identity.current_actor_id()` on that workspace
+
+A forged GUC for another workspace therefore yields zero rows, not an existence leak.
+
+## Root versus composite foreign keys
+
+`workspaces.workspace_id` is the tenant key (`workspace_id = id`). Child tables point at the tenant root with `FOREIGN KEY (workspace_id) REFERENCES commercial.workspaces (workspace_id)`. That is the tenant key itself, not a cross-row reference.
+
+Every relationship to a **non-root** tenant row is composite `(workspace_id, referenced_id)`. Example in this slice: `workspaces (workspace_id, logo_asset_id) → assets (workspace_id, id)`.
+
+`assets.job_id` and `assets.draft_id` are nullable and have **no foreign keys** until `jobs` and `document_drafts` exist. Do not write those columns until those migrations land.
 
 ## Identity and workspace
 
@@ -46,10 +82,12 @@ Supabase `service_role` is forbidden as an application connection. Client roles 
 
 `action_grants` is required even though it is absent from the §20 inventory table.
 
-Composite FKs:
+Foreign keys:
 
-- `memberships (workspace_id, user_id)` → `workspaces` / `app_users` as specified by identity mapping
-- `workspaces.logo_asset_id` if tenant-scoped: `(workspace_id, logo_asset_id)` → `assets (workspace_id, id)`
+- `memberships.workspace_id` → `workspaces(workspace_id)` (tenant root)
+- `memberships.user_id` → `app_users(id)` (global identity, not a tenant row)
+- `workspaces.owner_user_id` → `app_users(id)`
+- `workspaces (workspace_id, logo_asset_id)` → `assets (workspace_id, id)` (composite tenant FK)
 
 ## Catalogue and jobs
 
@@ -151,8 +189,8 @@ Slot increments occur in the same transaction as the document insert (TX01/TX03)
 
 Composite FKs:
 
-- `assets (workspace_id, job_id)` → `jobs (workspace_id, id)`
-- `assets (workspace_id, draft_id)` → `document_drafts (workspace_id, id)`
+- `assets (workspace_id, job_id)` → `jobs (workspace_id, id)` — deferred until `jobs` exists
+- `assets (workspace_id, draft_id)` → `document_drafts (workspace_id, id)` — deferred until `document_drafts` exists
 - `document_assets (workspace_id, document_id)` → `documents (workspace_id, id)`
 - `document_assets (workspace_id, asset_id)` → `assets (workspace_id, id)`
 - `artifacts (workspace_id, document_id)` → `documents (workspace_id, id)`
@@ -240,7 +278,8 @@ Pointer-only or index-only is insufficient.
 ## Entity groups
 
 ```
-identity:     app_users, workspaces, memberships, action_grants
+identity:     app_users, action_grants
+workspace:    workspaces, memberships
 catalogue:    customers, catalogue_items
 job:          jobs, job_allowances
 documents:    document_drafts, documents, document_lines, document_counters, document_assets

@@ -12,7 +12,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | DEC01 | iPhone first; iOS 17+ unless raised and documented; Apple SDK overrides | apps/mobile | All owner screens | EAS iOS | — | — | NFR02 device matrix | REL01 | PENDING | Android operator app deferred |
 | DEC02 | Customer browser portal; no customer app or account | apps/portal | S25–S27 | Portal routes | approval_requests purpose | — | QA18 | APR01 | PENDING | |
 | DEC03 | US English USD; US business address; browsers may be elsewhere | all | S04 VAL02 | — | workspaces.currency USD | — | QA64 | — | PENDING | |
-| DEC04 | One owner, one workspace; two iPhones OK; no staff seats or transfer | apps/mobile apps/api | S04 | memberships | memberships | — | QA01 QA07 | ACC03 | PENDING | |
+| DEC04 | One owner, one workspace; two iPhones OK; no staff seats or transfer | apps/mobile apps/api | S04 | memberships | memberships | — | QA01 QA07 db-test.mjs | ACC03 | PENDING | Unique owner_user_id and one active owner membership enforced; onboarding UI pending |
 | DEC05 | Record external payments only; no card collection | apps/mobile apps/api | S17 | payments/refunds | ledger_entries | payment_recorded | QA37 | BIL05 | PENDING | |
 | DEC06 | 3 free jobs; optional 14-day app trial; monthly/annual Apple subs | apps/mobile apps/api | S21 | entitlements | job_allowances entitlement_snapshots | trial_started purchase_verified | QA10 QA45 | SUB01–SUB03 | PENDING | |
 | DEC07 | Email code then explicit approval of immutable revision; no notarization claim | apps/portal | S26 | TX02 | approval_decisions | approval_completed | QA24 | APR04 | PENDING | |
@@ -31,7 +31,8 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | MET06 | Paying owner = verified sub, first txn not refunded; after trial | apps/api | S21 | TX05 | entitlement_snapshots | purchase_verified | QA45 | SUB07 | PENDING | |
 | MET07 | CAC = media / non-refunded new paying; unknown separate; $40–50 hypothesis | ops | — | spend import | — | — | Report | ANA03 | PENDING | Business hypothesis |
 | MET08 | Monthly renewal by cohort; weekly activity; annual buy ≠ annual retention | analytics | S21 | reports | entitlement_snapshots | purchase_verified | Cohort job | — | PENDING | |
-| AUTHZ01 | Auth from verified identity; workspace ID not auth; cross-tenant 404; portal ≠ owner; staff MFA | apps/api | all | JWT + RLS | memberships staff_users | — | QA03 QA59 | ARC02 | PENDING | |
+| AUTHZ01 | Auth from verified identity; workspace ID not auth; cross-tenant 404; portal ≠ owner; staff MFA | apps/api | all | JWT + RLS | memberships staff_users | — | QA03; pnpm test:db 15 passed (2026-09-14) | ARC02 | PENDING | DB isolation + forged GUC verified; JWT/portal/staff still pending |
+| INV01 | Integer cents; qty 3-decimal string; no binary float; server authoritative; shared package | packages/domain | S10 S11 | calculate | document_lines | — | packages/domain fixtures.test.ts F01–F12; 40 passing domain tests | FIN01 | VERIFIED | Shared BigInt engine; mobile/API/PDF must import this package |
 | INV01 | Integer cents; qty 3-decimal string; no binary float; server authoritative; shared package | packages/domain | S10 S11 | calculate | document_lines | — | packages/domain fixtures.test.ts F01–F12; 40 passing domain tests | FIN01 | VERIFIED | Shared BigInt engine; mobile/API/PDF must import this package |
 | INV02 | Accepted commercial facts immutable; corrections via new version/reversal/credit | apps/api | S08 | triggers | documents ledger_entries | — | QA26 | DB04 | PENDING | |
 | INV03 | Canonical snapshot SHA-256; separate PDF digest; integrity not legal ID | packages/domain apps/worker | S11 S26 | hash | documents.snapshot_sha256 artifacts | — | QA24 QA30 | QUO02A | PENDING | |
@@ -87,7 +88,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | VAL04 | Notes/terms/reason/name; plain text; client+server | packages/domain | S09 S26 | validation | snapshots | — | QA24 | — | PENDING | |
 | ACC01 | Supabase OTP 6-digit 10m 60s 5 fails; no second code store; secure tokens | apps/mobile apps/api | S02 S03 | Supabase Auth | app_users | signup_verified | QA01 QA02 | SREF06 | PENDING | |
 | ACC02 | JWT verify; refresh once; 7-day offline read; sign-out unsynced warn | apps/mobile apps/api | S02 S05 | JWT | app_users | — | QA05 ACC | SREF06 | PENDING | |
-| ACC02A | Fresh OTP + action grant 5m X-Action-Grant; action_grants table | apps/api | S24 S12 | action-grants | action_grants | — | QA56 QA57 | D-002 Resolved | PENDING | Issuer route + §22 commands both required |
+| ACC02A | Fresh OTP + action grant 5m X-Action-Grant; action_grants table | apps/api | S24 S12 | action-grants | action_grants | — | QA56 QA57 | D-002 Resolved | PENDING | identity.action_grants table exists; issuer route still pending |
 | ACC03 | Email change reauth; UUID stable; no ownership transfer | apps/api | S22 | email-change | app_users | — | ACC03 | ACC02A | PENDING | |
 | CUS01 | Duplicate email warn; snapshots frozen; apply-current explicit | apps/api | S07 S11 | customers | customers | — | QA15 | — | PENDING | |
 | CUS02 | Archive vs delete; no rewrite history on contact delete | apps/api | S19 | archive | customers | — | CUS02 | PRV | PENDING | |
@@ -175,14 +176,14 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | EMAIL10 | Export ready; no customer data in subject | apps/worker | S24 | outbox | exports | export_completed | QA56 | — | PENDING | |
 | EMAIL11 | Deletion receipt | apps/worker | S24 | outbox | deletion_requests | — | QA57 | PRV06 | PENDING | |
 | ARC01 | TS monorepo mobile/portal/admin/api/worker/domain; Supabase; Render; Resend; RC; Sentry; 1P analytics | repo | — | all | — | — | DEL01 | D-001 D-003 | PENDING | |
-| ARC02 | No commercial Supabase REST writes; private schema; FORCE RLS | apps/api | — | RLS | all tenant tables | — | QA03 | SREF07 | PENDING | |
-| ARC03 | JWT → tenant context per txn; portal/staff separate; no pool leak | apps/api | — | Fastify | — | — | Isolation | AUTHZ01 | PENDING | |
+| ARC02 | No commercial Supabase REST writes; private schema; FORCE RLS | apps/api | — | RLS | all tenant tables | — | pnpm test:db 15 passed (2026-09-14); supabase/tests/0002_rls_force.sql | SREF07 | VERIFIED | identity+commercial schemas, FORCE RLS, role revokes, isolation tests. Client REST ban remains app architecture. |
+| ARC03 | JWT → tenant context per txn; portal/staff separate; no pool leak | apps/api | — | Fastify | — | — | pnpm test:db pool-leak + GUC-clear cases (2026-09-14) | AUTHZ01 | PENDING | SET LOCAL + pool-leak verified in PostgreSQL; Fastify JWT wiring still pending |
 | ARC04 | Transactional outbox; SKIP LOCKED; no provider I/O in txn | apps/worker | — | outbox | outbox_tasks | — | QA33 QA65 | — | PENDING | |
 | ARC05 | Pin versions; lockfile CI; no invented patch numbers | repo | — | CI | — | — | QA68 | D-005 | PENDING | Stage 0 pin |
-| DB01 | UUID, cents, numeric qty, composite tenant FKs, no cascade published | supabase | — | migrations | all | — | DEL02 | — | PENDING | |
-| DB02 | Required fields; version; schema-validated JSON; enum constraints | supabase | — | migrations | all | — | DEL02 | — | PENDING | |
+| DB01 | UUID, cents, numeric qty, composite tenant FKs, no cascade published | supabase | — | migrations | all | — | db-test.mjs logo_asset_id FK | — | PENDING | Identity/tenancy tables follow UUID + UNIQUE(workspace_id,id) + composite logo FK; remaining entities later |
+| DB02 | Required fields; version; schema-validated JSON; enum constraints | supabase | — | migrations | all | — | 0002_identity_tenancy.sql | — | PENDING | Enum/version checks exist for identity/tenancy; JSON schema validation later |
 | DB03 | Indexes; pending unique; active invoice unique | supabase | — | migrations | approval_requests jobs | — | QA16 QA43 | INV04 | PENDING | |
-| DB04 | Immutable triggers; reversal checks; DB authz tests | supabase | — | triggers | documents ledger_entries | — | QA26 | INV02 | PENDING | |
+| DB04 | Immutable triggers; reversal checks; DB authz tests | supabase | — | triggers | documents ledger_entries | — | QA26 scripts/db-test.mjs | INV02 | PENDING | Identity/tenancy authorization tests exist; commercial immutability triggers later |
 | DB05 | Privileged purge; deletion ledger on restore | apps/worker | S24 | purge | deletion_requests | — | QA58 | PRV | PENDING | |
 | API01 | /v1 HTTPS JSON; Bearer/cookie; Idempotency-Key; If-Match | apps/api | — | Fastify | idempotency_records | — | API tests | — | PENDING | |
 | API02 | Envelope; cursor lists; error shape; status mapping | apps/api | — | Fastify | — | — | API tests | — | PENDING | |

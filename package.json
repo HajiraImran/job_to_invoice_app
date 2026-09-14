@@ -13,6 +13,7 @@
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "test": "turbo run test",
+    "test:db": "node scripts/db-test.mjs",
     "validate:openapi": "node scripts/validate-openapi.mjs",
     "migrate:clean": "node scripts/migrate-clean.mjs",
     "secret-scan": "node scripts/secret-scan.mjs"
@@ -23,6 +24,7 @@
     "eslint": "10.10.0",
     "pg": "8.16.3",
     "prettier": "3.9.6",
+    "embedded-postgres": "16.14.0-beta.17",
     "turbo": "2.10.12",
     "typescript": "5.9.3",
     "typescript-eslint": "8.70.0",

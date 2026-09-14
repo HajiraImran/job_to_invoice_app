@@ -25,7 +25,7 @@ pnpm validate:openapi
 pnpm secret-scan
 ```
 
-`pnpm migrate:clean` applies `supabase/migrations` to an empty PostgreSQL database using `DATABASE_URL_MIGRATIONS`. Do not use a `service_role` connection string.
+`pnpm migrate:clean` applies `supabase/migrations` to an empty PostgreSQL database using `DATABASE_URL_MIGRATIONS`. `pnpm test:db` reapplies those migrations and runs tenant isolation tests. Do not use a `service_role` connection string. If `DATABASE_URL_MIGRATIONS` is unset, the scripts start a project-local PostgreSQL 16 cluster and stop it when they finish.
 
 Portal and admin Next.js builds do not require production credentials. EAS production signing credentials are not stored in this repository.
 
