@@ -1,0 +1,6 @@
+# Maestro product journeys start in Stage 2. This file documents the app id only.
+appId: com.jobtoinvoice.app
+name: Foundation placeholder
+---
+- launchApp
+- assertVisible: "foundation scaffold"

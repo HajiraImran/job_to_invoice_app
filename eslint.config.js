@@ -1,0 +1,25 @@
+import eslint from "@eslint/js";
+import tseslint from "typescript-eslint";
+
+export default tseslint.config(
+  {
+    ignores: [
+      "**/dist/**",
+      "**/.next/**",
+      "**/.expo/**",
+      "**/node_modules/**",
+      "**/coverage/**",
+      "docs/source/**",
+    ],
+  },
+  eslint.configs.recommended,
+  ...tseslint.configs.strict,
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+    },
+  },
+);

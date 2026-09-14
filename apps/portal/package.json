@@ -1,0 +1,23 @@
+{
+  "name": "@job-to-invoice/portal",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint app --config ../../eslint.config.js",
+    "test": "node -e \"process.exit(0)\""
+  },
+  "dependencies": {
+    "next": "16.3.5",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}

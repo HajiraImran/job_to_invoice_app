@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - packages/*
+
+overrides:
+  react: 19.2.3
+  react-dom: 19.2.3
+  react-native: 0.86.3
+  typescript: 5.9.3
+
+minimumReleaseAgeExclude:
+  - zod@4.6.5

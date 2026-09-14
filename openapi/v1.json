@@ -1,0 +1,20 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Job to Invoice API",
+    "version": "0.0.0",
+    "description": "Foundation contract. Commercial endpoints are not implemented."
+  },
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "summary": "Process health",
+        "responses": {
+          "200": {
+            "description": "API process is running"
+          }
+        }
+      }
+    }
+  }
+}

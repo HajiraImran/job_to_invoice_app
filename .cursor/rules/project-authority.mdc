@@ -1,0 +1,15 @@
+---
+description: Require ENGINEERING_CONTRACT, PRD, architecture, and requirements matrix on every change
+alwaysApply: true
+---
+
+# Project authority
+
+You are working on a production application.
+
+- Always read and obey `ENGINEERING_CONTRACT.md`.
+- `docs/PRD.md` is the authoritative product requirement. Do not drop or reinterpret MUSTs.
+- Follow `docs/ARCHITECTURE.md` for trust boundaries, roles, `SET LOCAL`, and commercial write paths.
+- Track work against `docs/REQUIREMENTS_MATRIX.md`. Do not mark a requirement IMPLEMENTED or VERIFIED because a scaffold, screen, or mock exists.
+
+Never hard-code secrets, commit `service_role` keys, implement authorization only in the UI, or use JavaScript floats for money.

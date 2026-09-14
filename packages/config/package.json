@@ -1,0 +1,23 @@
+{
+  "name": "@job-to-invoice/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./env": "./src/env.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --config ../../eslint.config.js",
+    "test": "vitest run --config vitest.config.ts",
+    "build": "node -e \"process.exit(0)\""
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "5.0.0"
+  }
+}

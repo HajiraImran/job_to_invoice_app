@@ -1,0 +1,257 @@
+> Source: `docs/PRD.md` §§09 (ACC02A), 20, 25
+> `action_grants` is specified by ACC02A and is not in the §20 table. D-002 Resolved: grant issuer route is required.
+
+# Database contract
+
+## Conventions (DB01, DB02)
+
+- UUID primary keys
+- `timestamptz` UTC for timestamps
+- `date` for commercial local dates
+- integer/bigint cents constrained to product limits
+- `numeric(12,3)` quantities
+- `jsonb` only for immutable typed snapshots or versioned event payloads
+- Tenant tables: `workspace_id UUID NOT NULL`, `id UUID`, `created_at`, `updated_at` where mutable, `UNIQUE(workspace_id, id)`
+- Tenant relationships: composite FK `(workspace_id, referenced_id)` only. Single-column FKs on tenant relationships are rejected.
+- Auth user IDs map through application identity; not raw tenant evidence
+- No cascade delete of published financial records in ordinary CRUD
+- All listed fields required unless `?`
+- `[]` means array
+- Defaults explicit in migrations
+- `created_by` is an application actor UUID; workers use a named service actor
+- Mutable rows: `version integer default 1`
+- JSON validated against checked-in schemas on write and read
+- Enums: constrained text plus migration-defined values
+- Private schema; client grants revoked; FORCE RLS (ARC02)
+
+## Roles and grants (ARC02)
+
+| Role | DSN | Notes |
+| --- | --- | --- |
+| `migrator` | `DATABASE_URL_MIGRATIONS` | Object owner. Migrations only. Not a runtime pool. |
+| `api_app` | `DATABASE_URL_API` | FORCE RLS. No `BYPASSRLS`. No superuser. No arbitrary UPDATE/DELETE of issued financial payload. |
+| `worker_app` | `DATABASE_URL_WORKER` | FORCE RLS. EXECUTE named outbox/PDF/billing functions only. Separate pool from API. |
+| `purge_app` | `DATABASE_URL_PURGE` | Scheduled deletion job only. Never in Fastify or outbox pools. No role-level `BYPASSRLS`. Calls named `purge_*` SECURITY DEFINER functions owned by `migrator`. |
+
+Supabase `service_role` is forbidden as an application connection. Client roles have no grants on the commercial schema. `api_app` and `worker_app` must not be `BYPASSRLS`.
+
+## Identity and workspace
+
+| Table | Domain fields beyond common fields |
+| --- | --- |
+| app_users | auth_user_id unique, normalized_email, display_email, status active/suspended/deleting/deleted, last_authenticated_at, deletion_requested_at?, terms_version, privacy_version |
+| workspaces | owner_user_id unique, business_name, legal_name, contact_name, contact_email, contact_phone?, address_json, timezone, currency USD, trade handyman/other, logo_asset_id?, default_tax_bp, default_due_days, default_terms, version |
+| memberships | user_id, role owner, status active; unique workspace/user; v1 exactly one active owner |
+| action_grants | id, user_id, action, token_hash, expires_at, used_at? — restricted identity schema (ACC02A). Actions: export, deletion, email_change, replace_link. Five-minute expiry after fresh OTP. Single use. |
+
+`action_grants` is required even though it is absent from the §20 inventory table.
+
+Composite FKs:
+
+- `memberships (workspace_id, user_id)` → `workspaces` / `app_users` as specified by identity mapping
+- `workspaces.logo_asset_id` if tenant-scoped: `(workspace_id, logo_asset_id)` → `assets (workspace_id, id)`
+
+## Catalogue and jobs
+
+| Table | Domain fields beyond common fields |
+| --- | --- |
+| customers | name, email?, normalized_email?, phone?, billing_address_json?, archived_at?, version |
+| catalogue_items | description, unit, custom_unit_label?, default_quantity, unit_price_cents, discount_cents, tax_bp, archived_at?, version |
+| jobs | customer_id, title, site_address_json?, no_site bool, lifecycle, archived_from_state?, current_quote_id?, active_invoice_id?, scope_version default 0, first_published_at?, entitlement_origin free/trial/paid?, completion_right bool, internal_notes, related_job_id?, version |
+
+Job lifecycle: `draft`, `active`, `invoiced`, `finished`, `canceled`, `archived` plus `archived_from_state` (JOB01).
+
+`completion_right` is write-once. First successful TX01/TX03 publication sets it true. UPDATE that clears it is forbidden except `purge_app` account deletion. `entitlement_snapshots` must not write this column.
+
+Composite FKs:
+
+- `jobs (workspace_id, customer_id)` → `customers (workspace_id, id)`
+- `jobs (workspace_id, current_quote_id)` → `documents (workspace_id, id)`
+- `jobs (workspace_id, active_invoice_id)` → `documents (workspace_id, id)`
+- `jobs (workspace_id, related_job_id)` → `jobs (workspace_id, id)`
+
+## Documents and scope
+
+| Table | Domain fields beyond common fields |
+| --- | --- |
+| document_drafts | job_id, kind quote/change/invoice/credit, parent_document_id?, base_scope_version, payload_json, schema_version, draft_state editing/discarded/published, version |
+| documents | job_id, kind, number, revision_no, prior_document_id?, lifecycle issued/accepted/declined/withdrawn/superseded/voided, issued_at, issue_date, due_date?, currency, net_cents, tax_cents, total_cents, snapshot_json, canonical_snapshot_bytes, schema_version, snapshot_sha256, scope_version, void_reason? |
+| document_lines | document_id, position, line_kind source/reduction/credit, source_line_id?, description, quantity?, unit?, unit_price_cents?, discount_cents, net_cents, tax_bp, tax_cents, total_cents, original_source_id? |
+| scope_entries | job_id, source_line_id, accepted_document_id, scope_version, event_kind add/reduce, net_delta_cents, tax_delta_cents; append-only |
+| document_counters | type quote/change/invoice/credit, next_value; unique workspace/type |
+
+Numbering: Q-000001, CO-000001, INV-000001, CN-000001; never reuse after void; failed allocation kept as void/reserved (INV06).
+
+Composite FKs:
+
+- `document_drafts (workspace_id, job_id)` → `jobs (workspace_id, id)`
+- `document_drafts (workspace_id, parent_document_id)` → `documents (workspace_id, id)`
+- `documents (workspace_id, job_id)` → `jobs (workspace_id, id)`
+- `documents (workspace_id, prior_document_id)` → `documents (workspace_id, id)`
+- `document_lines (workspace_id, document_id)` → `documents (workspace_id, id)`
+- `document_lines (workspace_id, source_line_id)` → `document_lines (workspace_id, id)`
+- `document_lines (workspace_id, original_source_id)` → `document_lines (workspace_id, id)`
+- `scope_entries (workspace_id, job_id)` → `jobs (workspace_id, id)`
+- `scope_entries (workspace_id, source_line_id)` → `document_lines (workspace_id, id)`
+- `scope_entries (workspace_id, accepted_document_id)` → `documents (workspace_id, id)`
+
+## Approval
+
+| Table | Domain fields beyond common fields |
+| --- | --- |
+| approval_requests | job_id, document_id, purpose approval/view_only, recipient_name?, recipient_email, token_hash unique, token_key_version, state pending/approved/declined/withdrawn/expired/superseded/revoked, expected_scope_version, expires_at, access_until, token_rotated_at?, decided_at? |
+| approval_challenges | request_id, code_hash, secret_key_version, expires_at, failed_attempts, last_sent_at, consumed_at? |
+| approval_sessions | request_id, session_hash unique, verified_email, expires_at, revoked_at?, token_generation |
+| approval_decisions | request_id unique, document_id, decision approve/decline, signer_name, verified_email, decided_at, snapshot_sha256, consent_version, consent_text, comment?, encrypted_evidence_json?, evidence_key_version? |
+
+Partial unique index: `approval_requests(workspace_id, job_id) WHERE state='pending' AND purpose='approval'` (DB03, INV04). view_only rows are excluded from that uniqueness (API05).
+
+`encrypted_evidence_json` is versioned envelope ciphertext, not plaintext JSON. Decrypt only for owner export or a live staff content grant.
+
+Composite FKs:
+
+- `approval_requests (workspace_id, job_id)` → `jobs (workspace_id, id)`
+- `approval_requests (workspace_id, document_id)` → `documents (workspace_id, id)`
+- `approval_challenges (workspace_id, request_id)` → `approval_requests (workspace_id, id)`
+- `approval_sessions (workspace_id, request_id)` → `approval_requests (workspace_id, id)`
+- `approval_decisions (workspace_id, request_id)` → `approval_requests (workspace_id, id)`
+- `approval_decisions (workspace_id, document_id)` → `documents (workspace_id, id)`
+
+## Ledger
+
+| Table | Domain fields beyond common fields |
+| --- | --- |
+| ledger_entries | invoice_id, type payment/refund/reversal, amount_cents positive, effective_date, method?, reference?, note?, reverses_entry_id? unique, created_by, operation_id unique; append-only |
+| credit_allocations | credit_document_id, invoice_line_id, net_credit_cents, tax_credit_cents; unique credit/line |
+| ledger_refund_allocations | refund_entry_id, payment_entry_id, amount_cents positive; append-only, same invoice/workspace |
+
+Payment status is derived (INV07). Never store a writable “paid” flag.
+
+Composite FKs:
+
+- `ledger_entries (workspace_id, invoice_id)` → `documents (workspace_id, id)`
+- `ledger_entries (workspace_id, reverses_entry_id)` → `ledger_entries (workspace_id, id)`
+- `credit_allocations (workspace_id, credit_document_id)` → `documents (workspace_id, id)`
+- `credit_allocations (workspace_id, invoice_line_id)` → `document_lines (workspace_id, id)`
+- `ledger_refund_allocations (workspace_id, refund_entry_id)` → `ledger_entries (workspace_id, id)`
+- `ledger_refund_allocations (workspace_id, payment_entry_id)` → `ledger_entries (workspace_id, id)`
+
+## Assets, artifacts, entitlements
+
+| Table | Domain fields beyond common fields |
+| --- | --- |
+| assets | job_id?, draft_id?, visibility internal/customer, bucket_key, upload_state pending/processing/ready/rejected, media_type, source_size, stored_size?, width?, height?, sha256?, rejection_code?, uploaded_by |
+| document_assets | document_id, asset_id, position; append-only after document issue |
+| artifacts | document_id?, export_id?, type original_pdf/status_pdf/receipt_pdf/statement_pdf/export_zip, object_key, sha256, bytes, template_version, generated_at, state ready/failed |
+| job_allowances | PRIMARY KEY (workspace_id). Exactly one row per workspace. free_jobs_consumed default 0, trial_started_at?, trial_ends_at?, trial_jobs_consumed default 0, retained_bytes, version |
+| entitlement_snapshots | user_id unique, provider_customer_id unique, entitlement pro, status, product_id?, expires_at?, will_renew?, verified_at, source_event_id?, environment sandbox/production |
+| provider_events | provider, external_event_id unique per provider, received_at, payload_encrypted?, processing_state, processed_at?, attempts, last_error_code? |
+
+Slot increments occur in the same transaction as the document insert (TX01/TX03). Rollback restores `free_jobs_consumed` / `trial_jobs_consumed`. Two allowance rows per workspace are a migration defect.
+
+Composite FKs:
+
+- `assets (workspace_id, job_id)` → `jobs (workspace_id, id)`
+- `assets (workspace_id, draft_id)` → `document_drafts (workspace_id, id)`
+- `document_assets (workspace_id, document_id)` → `documents (workspace_id, id)`
+- `document_assets (workspace_id, asset_id)` → `assets (workspace_id, id)`
+- `artifacts (workspace_id, document_id)` → `documents (workspace_id, id)`
+- `artifacts (workspace_id, export_id)` → `exports (workspace_id, id)` when export is tenant-scoped
+- `job_allowances.workspace_id` → `workspaces.id` (1:1)
+
+## Outbox, audit, privacy, staff
+
+| Table | Domain fields beyond common fields |
+| --- | --- |
+| outbox_tasks | event_id unique, task_type, aggregate_id, payload_json, schema_version, available_at, lease_until?, attempts, status pending/running/done/dead, effect_key unique, last_error_code? |
+| delivery_attempts | document_id?, request_id?, template_id, recipient_email_encrypted, state, provider_message_id?, effect_key unique, last_event_at, retry_count |
+| idempotency_records | actor_scope, key, route, request_hash, operation_id unique, status, response_code?, response_json?, created_at, expires_at, permanence financial/ephemeral; unique actor_scope/key |
+| audit_events | actor_type, actor_id?, action, entity_type, entity_id, occurred_at, request_id, before_version?, after_version?, reason?, safe_metadata_json; append-only |
+| exports | workspace_id NOT NULL, owner_id, cutoff_at, status queued/running/ready/failed/expired, manifest_json?, expires_at?, error_code? |
+| support_cases | workspace_id NOT NULL, owner_id, category, message, state, content_access_granted_at?, content_access_expires_at?, assigned_staff_id? |
+| analytics_events | event_id unique, pseudonymous_owner_id?, job_id?, event_name, schema_version, occurred_at, received_at, safe_properties_json |
+| staff_users | Global table: auth_subject unique, role agent/supervisor/infra, mfa_required true, status; no commercial tenant access by default |
+| staff_access_grants | staff_user_id, support_case_id, scope_json, reason, approved_by, expires_at, revoked_at? |
+| deletion_requests | workspace_id NOT NULL, owner_id, requested_at, verified_at, status locked/purging/completed/exception, purge_deadline, completed_at?, retained_categories_json? |
+
+Delivery attempt states: queued, submitting, accepted_by_provider, delivered, bounced, complained, failed (NTF03).
+
+`effect_key` for first-send email is `(workspace_id, document_id, template_id, recipient_id)`. Lease retries update the same `outbox_tasks` and `delivery_attempts` rows. Never insert a second approval token on retry.
+
+Idempotency: rows for publish, approve, invoice, credit, payment, refund, reverse, deletion and entitlement are `permanence=financial` and **never expire**. Unique `operation_id` is also stored on the money/effect row (`ledger_entries.operation_id`, document issue, decision). Only non-financial cached response bodies may set `expires_at` (30 days). Deleting an expired ephemeral row must not allow a second financial write.
+
+Composite FKs:
+
+- `outbox_tasks` tenant-scoped aggregates: `(workspace_id, aggregate_id)` to the locked parent
+- `delivery_attempts (workspace_id, document_id)` → `documents (workspace_id, id)`
+- `delivery_attempts (workspace_id, request_id)` → `approval_requests (workspace_id, id)`
+
+## Indexes (DB03)
+
+- Every list path: `(workspace_id, updated_at DESC, id DESC)`
+- Jobs: `(workspace_id, lifecycle, updated_at)`
+- Customer normalized email by workspace
+- Documents: `(workspace_id, kind, number, revision_no)`
+- Approval request hash; state/expiry
+- Ledger by invoice and time
+- Tasks: status/available_at and lease_until
+- Partial unique pending approval (purpose=approval only)
+- Partial unique **and** transactional pointer for the active non-voided final invoice per job. Both are required. Do not rely on UI. Suggested index: unique `(workspace_id, job_id)` on `documents` WHERE `kind='invoice'` AND lifecycle NOT IN (`voided`) for the final invoice (or an equivalent dedicated registry table plus `jobs.active_invoice_id` updated in the same transaction).
+
+A state transition must expire/withdraw the old pending approval row before creating its successor in one transaction.
+
+## Triggers and immutability (DB04, INV02)
+
+After a document is issued, reject UPDATE/DELETE of commercial payload on:
+
+- `documents` payload columns including `canonical_snapshot_bytes`, `snapshot_json`, `snapshot_sha256`, cents, number, revision
+- `document_lines` (all payload columns)
+- `scope_entries` (append-only; no UPDATE/DELETE)
+- `document_assets` (append-only after issue)
+- `artifacts` rows with `type=original_pdf` (bytes, sha256, object_key). Status/statement PDFs are **new** artifact rows, never overwrites.
+
+Also:
+
+- Reject UPDATE that clears `jobs.completion_right` except `purge_app`
+- Status transitions are restricted commands and append `audit_events`
+- `api_app` / `worker_app` have no arbitrary writes to financial tables
+- Ledger reversal function: reference must belong to the same invoice/workspace and must not already be reversed
+- Authorization tests must exercise database access paths
+
+## Deletion (DB05, PRV04–PRV06)
+
+Deletion uses `purge_app` only, on a scheduled job with a separate DSN. Operational immutability does not block an authorized privacy request.
+
+- Lock account immediately; start purge within 24 hours; complete live deletion within 30 days
+- Apply a deletion ledger before any restored backup is exposed (OPS06)
+- Purge Storage objects separately
+- Backups expire within 35 days (BACKUP_RETENTION_DAYS)
+- Restricted retention categories come from counsel before launch; no default blanket invoice exemption
+
+## Active invoice uniqueness
+
+At most one active non-voided final invoice per job (BIL02, DEC08). Enforce **both**:
+
+1. `jobs.active_invoice_id` set in the same transaction as issue
+2. A partial unique index (or dedicated registry) that rejects a second non-voided final invoice for that `(workspace_id, job_id)`
+
+Pointer-only or index-only is insufficient.
+
+## Entity groups
+
+```
+identity:     app_users, workspaces, memberships, action_grants
+catalogue:    customers, catalogue_items
+job:          jobs, job_allowances
+documents:    document_drafts, documents, document_lines, document_counters, document_assets
+scope:        scope_entries
+approval:     approval_requests, approval_challenges, approval_sessions, approval_decisions
+ledger:       ledger_entries, credit_allocations, ledger_refund_allocations
+files:        assets, artifacts
+billing:      entitlement_snapshots, provider_events
+async:        outbox_tasks, delivery_attempts, idempotency_records
+ops:          audit_events, exports, analytics_events, deletion_requests
+staff:        staff_users, staff_access_grants, support_cases
+```
+
+Production SQL must enforce this contract with tests. The table is a design contract, not a substitute for migrations (DEL02).

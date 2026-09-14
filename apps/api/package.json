@@ -1,0 +1,23 @@
+{
+  "name": "@job-to-invoice/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-strip-types --watch src/index.ts",
+    "build": "tsc --noEmit -p tsconfig.json",
+    "start": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --config ../../eslint.config.js",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@job-to-invoice/config": "workspace:*",
+    "@job-to-invoice/domain": "workspace:*",
+    "fastify": "5.12.4"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "5.0.0"
+  }
+}

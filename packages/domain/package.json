@@ -1,0 +1,19 @@
+{
+  "name": "@job-to-invoice/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --config ../../eslint.config.js",
+    "test": "vitest run --config vitest.config.ts",
+    "build": "node -e \"process.exit(0)\""
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "5.0.0"
+  }
+}
