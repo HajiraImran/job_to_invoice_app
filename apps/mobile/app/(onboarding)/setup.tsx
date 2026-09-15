@@ -16,6 +16,7 @@ import { useAuth } from "../../src/session/AuthProvider.tsx";
 import { secureKv } from "../../src/session/supabase.ts";
 import { clearSetupDraft, loadSetupDraft, saveSetupDraft } from "../../src/setup/draft.ts";
 import { emptySetupForm, firstFieldError, setupRequestFromForm, type SetupFormValues } from "../../src/setup/form.ts";
+import { createSetupIdempotencyKey, retainOrCreateSetupIdempotencyKey } from "../../src/setup/idempotency.ts";
 import { colors, space, type } from "../../src/theme.ts";
 
 const STEP1 = new Set(["business_name", "legal_name", "trade", "skip_logo"]);
@@ -65,7 +66,8 @@ export default function SetupScreen() {
   const [restored, setRestored] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [hydrated, setHydrated] = useState(false);
-  const idempotencyKey = useRef(crypto.randomUUID());
+  const idempotencyKey = useRef<string | undefined>(undefined);
+  idempotencyKey.current = retainOrCreateSetupIdempotencyKey(idempotencyKey.current);
   const inputs = useRef<Record<string, TextInput | null>>({});
 
   useEffect(() => {
@@ -209,7 +211,7 @@ export default function SetupScreen() {
     if (result.error.code === "VERSION_CONFLICT") {
       setFormError(copy.setupConflict);
       await auth.refreshBootstrap();
-      idempotencyKey.current = crypto.randomUUID();
+      idempotencyKey.current = createSetupIdempotencyKey();
       return;
     }
     if (result.error.status === 401) {
