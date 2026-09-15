@@ -7,6 +7,7 @@ import {
   RESEND_COOLDOWN_MS,
   SNAPSHOT_SCHEMA_VERSION,
   analyticsPropertiesAreSafe,
+  BOOTSTRAP_SUPPORT_CODES,
   canResend,
   isOfflineReadPermitted,
   maskEmail,
@@ -64,6 +65,7 @@ describe("auth state", () => {
     expect(routeGroupFor({ status: "signed_out" })).toBe("public");
     expect(routeGroupFor({ status: "awaiting_code" })).toBe("verify");
     expect(routeGroupFor({ status: "bootstrap_error" })).toBe("verify");
+    expect(routeGroupFor({ status: "bootstrap_error", supportCode: "BOOTSTRAP_NETWORK" })).toBe("verify");
     expect(routeGroupFor({ status: "authenticated", setupCompleted: false })).toBe("onboarding");
     expect(routeGroupFor({ status: "authenticated", setupCompleted: true })).toBe("app");
     expect(routeGroupFor({ status: "restoring" })).toBe("splash");
@@ -76,6 +78,8 @@ describe("auth state", () => {
     expect(isOfflineReadPermitted("2026-09-10T12:00:00.000Z", now)).toBe(true);
     expect(isOfflineReadPermitted("2026-09-01T12:00:00.000Z", now)).toBe(false);
     expect(OTP_MAX_FAILURES).toBe(5);
+    expect(BOOTSTRAP_SUPPORT_CODES).toContain("BOOTSTRAP_NETWORK");
+    expect(BOOTSTRAP_SUPPORT_CODES).toHaveLength(5);
   });
 
   it("lists session material that sign-out must clear", () => {

@@ -299,7 +299,7 @@ CI on `main` must run: lint/types; domain/financial tests including F01–F12; A
 
 ### Telemetry (OPS03)
 
-Structured `request_id`, `operation_id`, tenant pseudonym, endpoint, duration, status/error code, worker effect ID. Redact authorization headers, cookies, token fragments, emails, commercial text, attachments and payment references before logs leave the process. Sentry replay and screenshots remain off.
+Structured `request_id`, `operation_id`, tenant pseudonym, endpoint, duration, status/error code, worker effect ID. Redact authorization headers, cookies, token fragments, emails, commercial text, attachments and payment references before logs leave the process. Sentry replay and screenshots remain off. `GET /v1/me` also emits a console `owner_me` event with only `event`, `request_id`, `status`, and a safe `stage` enum (`request_received`, `jwt_rejected`, `jwt_verified`, `database_or_provisioning_failed`, `response_sent`). Database vs provisioning failures share one stage because distinguishing them would require logging error objects. These events are operational diagnostics, not `analytics_events`.
 
 Dashboards: API error rate and latency, queue age, publication-to-PDF time, email failures, duplicate command rate, billing reconciliation age, backup freshness, crash-free sessions, storage growth.
 

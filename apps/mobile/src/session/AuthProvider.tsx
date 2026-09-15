@@ -10,8 +10,11 @@ import { copy } from "../i18n/en.ts";
 import {
   bootstrapErrorCopy,
   classifyOwnerMeError,
+  fetchOwnerMe,
   fetchOwnerMeWithOneRefresh,
+  retryOwnerMe,
   snapshotAfterBootstrapFailure,
+  type OwnerMeResponse,
 } from "./bootstrap.ts";
 import { awaitingCodeSnapshot, snapshotFromBootstrap } from "./logic.ts";
 import { createOwnerAuthClient, secureKv } from "./supabase.ts";
@@ -62,33 +65,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(undefined);
   }, []);
 
-  const loadMe = useCallback(
-    async (session: Session, emailHint?: string) => {
-      const result = await fetchOwnerMeWithOneRefresh({
-        accessToken: session.access_token,
-        fetchMe: (accessToken) =>
-          ownerRequest<OwnerBootstrap>({
-            apiBaseUrl: config.apiBaseUrl,
-            path: "/v1/me",
-            accessToken,
-          }),
-        refresh: async () => {
-          if (!client) {
-            return undefined;
-          }
-          const refreshed = await client.auth.refreshSession();
-          return refreshed.data.session?.access_token;
-        },
-      });
+  const applyMeResult = useCallback(
+    async (result: OwnerMeResponse, emailHint?: string) => {
       if (result.ok) {
         await persistBootstrap(result.data, new Date().toISOString());
         return;
       }
       const last = (await secureKv.getItem(LAST_AUTH_KEY)) ?? undefined;
       const cached = await secureKv.getItem(BOOTSTRAP_KEY);
-      const kind = classifyOwnerMeError(result.error);
+      const supportCode = classifyOwnerMeError(result.error);
       const nextSnap = snapshotAfterBootstrapFailure({
-        kind,
+        supportCode,
         emailDisplay: emailHint?.trim() || undefined,
         lastAuthenticatedAt: last,
         nowMs: Date.now(),
@@ -112,12 +99,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...nextSnap,
         status: nextSnap.status === "access_expired" ? "access_expired" : "bootstrap_error",
         emailDisplay: nextSnap.emailDisplay ?? (emailHint?.trim() || undefined),
+        supportCode,
       });
       if (nextSnap.status !== "access_expired") {
-        setError(copy[bootstrapErrorCopy(kind)]);
+        setError(copy[bootstrapErrorCopy(supportCode)]);
       }
     },
-    [client, config.apiBaseUrl, persistBootstrap],
+    [persistBootstrap],
+  );
+
+  const requestMe = useCallback(
+    (accessToken: string) =>
+      fetchOwnerMe({
+        apiBaseUrl: config.apiBaseUrl,
+        accessToken,
+      }),
+    [config.apiBaseUrl],
+  );
+
+  const loadMe = useCallback(
+    async (session: Session, emailHint?: string) => {
+      const result = await fetchOwnerMeWithOneRefresh({
+        accessToken: session.access_token,
+        fetchMe: requestMe,
+        refresh: async () => {
+          if (!client) {
+            return undefined;
+          }
+          const refreshed = await client.auth.refreshSession();
+          return refreshed.data.session?.access_token;
+        },
+      });
+      await applyMeResult(result, emailHint);
+    },
+    [applyMeResult, client, requestMe],
   );
 
   useEffect(() => {
@@ -141,6 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setSnapshot({
               status: "bootstrap_error",
               emailDisplay: existing.data.session.user.email,
+              supportCode: "BOOTSTRAP_UNKNOWN",
             });
             setError(copy.bootstrapUnavailable);
           }
@@ -245,6 +261,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSnapshot({
           status: "bootstrap_error",
           emailDisplay: emailDisplay.trim(),
+          supportCode: "BOOTSTRAP_UNKNOWN",
         });
         setError(copy.bootstrapUnavailable);
       }
@@ -290,21 +307,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSnapshot((current) => ({
           status: "bootstrap_error",
           emailDisplay: current.emailDisplay,
+          supportCode: "BOOTSTRAP_SESSION",
         }));
         setError(copy.bootstrapSession);
         return;
       }
-      await loadMe(existing.data.session, existing.data.session.user.email);
+      const result = await retryOwnerMe({
+        accessToken: existing.data.session.access_token,
+        fetchMe: requestMe,
+      });
+      await applyMeResult(result, existing.data.session.user.email);
     } catch {
       setSnapshot((current) => ({
         status: "bootstrap_error",
         emailDisplay: current.emailDisplay,
+        supportCode: "BOOTSTRAP_UNKNOWN",
       }));
       setError(copy.bootstrapUnavailable);
     } finally {
       setSubmitting(false);
     }
-  }, [client, loadMe]);
+  }, [applyMeResult, client, requestMe]);
 
   const runOwnerRequest = useCallback(
     async <T,>(options: OwnerRequestOptions) => {

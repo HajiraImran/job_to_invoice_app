@@ -17,6 +17,7 @@ export {
 } from "./envelope.ts";
 export { analyticsPropertiesAreSafe, redactRecord, redactText } from "./redact.ts";
 export {
+  BOOTSTRAP_SUPPORT_CODES,
   EMPTY_DRAFT_SYNC,
   OFFLINE_READ_WINDOW_MS,
   OTP_LENGTH,
@@ -31,6 +32,7 @@ export {
   signOutClears,
   type AuthSnapshot,
   type AuthStatus,
+  type BootstrapSupportCode,
   type DraftSyncStatus,
   type RouteGroup,
 } from "./auth-state.ts";

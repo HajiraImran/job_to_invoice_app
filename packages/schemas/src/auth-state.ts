@@ -13,6 +13,16 @@ export type AuthStatus =
   | "offline_cached"
   | "access_expired";
 
+export const BOOTSTRAP_SUPPORT_CODES = [
+  "BOOTSTRAP_NETWORK",
+  "BOOTSTRAP_SESSION",
+  "BOOTSTRAP_SERVICE",
+  "BOOTSTRAP_RESPONSE",
+  "BOOTSTRAP_UNKNOWN",
+] as const;
+
+export type BootstrapSupportCode = (typeof BOOTSTRAP_SUPPORT_CODES)[number];
+
 export type RouteGroup = "splash" | "public" | "verify" | "onboarding" | "app";
 
 export type AuthSnapshot = {
@@ -22,6 +32,7 @@ export type AuthSnapshot = {
   lastAuthenticatedAt?: string;
   verifyFailures?: number;
   resendAvailableAt?: number;
+  supportCode?: BootstrapSupportCode;
 };
 
 export function resendAvailableAt(sentAtMs: number): number {

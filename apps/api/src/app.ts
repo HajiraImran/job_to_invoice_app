@@ -9,7 +9,8 @@ import {
 import type { Pool } from "pg";
 import { withApiRole, withTenant } from "./db.ts";
 import { API_ERROR_CODES, fail, requestId, success } from "./envelope.ts";
-import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
+import { bearerToken, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
+import { ownerMeSafeEvent, writeOwnerMeEvent, type OwnerMeSafeEvent, type OwnerMeStage } from "./me-log.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
@@ -17,6 +18,7 @@ export type AppDeps = {
   env: LoadedEnv;
   verifyJwt?: JwtVerifier;
   pool?: Pool;
+  logOwnerMe?: (event: OwnerMeSafeEvent) => void;
 };
 
 type ProvisionRow = {
@@ -89,29 +91,54 @@ export function buildApp(deps: AppDeps) {
   );
 
   app.get("/v1/me", async (request, reply) => {
+    const emit = (status: number, stage: OwnerMeStage) => {
+      try {
+        const event = ownerMeSafeEvent({ request_id: String(request.id), status, stage });
+        if (deps.logOwnerMe) {
+          deps.logOwnerMe(event);
+        } else {
+          writeOwnerMeEvent(event);
+        }
+      } catch {
+        /* diagnostics must not change /v1/me */
+      }
+    };
+    const replyFail = (
+      stage: OwnerMeStage,
+      code: string,
+      message: string,
+      extra?: { field_errors?: { field: string; message: string }[]; retryAfter?: number },
+    ) => {
+      const result = fail(request.id, code, message, { field_errors: extra?.field_errors });
+      if (extra?.retryAfter !== undefined) {
+        void reply.header("Retry-After", String(extra.retryAfter));
+      }
+      emit(result.status, stage);
+      return reply.status(result.status).send(result.body);
+    };
+
+    emit(0, "request_received");
     const token = bearerToken(request.headers.authorization);
     if (!token) {
-      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+      return replyFail("jwt_rejected", API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
     }
     if (!deps.verifyJwt || !deps.pool) {
-      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+      return replyFail("response_sent", "UNAVAILABLE", "Service unavailable.");
     }
     let access: VerifiedAccess;
     try {
       access = await deps.verifyJwt(token);
-    } catch (error) {
-      if (error instanceof JwtVerificationError) {
-        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
-      }
-      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    } catch {
+      return replyFail("jwt_rejected", API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
     }
     const parsed = parseOwnerEmail(access.email);
     if (!parsed.ok) {
-      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      return replyFail("jwt_rejected", API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
     }
+    emit(0, "jwt_verified");
     const limited = limiter.allow(access.sub);
     if (!limited.ok) {
-      return sendFail(request, reply, API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.", {
+      return replyFail("response_sent", API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.", {
         retryAfter: limited.retryAfterSec,
       });
     }
@@ -125,12 +152,12 @@ export function buildApp(deps: AppDeps) {
         return result.rows[0];
       });
       if (!row) {
-        return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+        return replyFail("database_or_provisioning_failed", "UNAVAILABLE", "Service unavailable.");
       }
       if (row.account_status === "deleted" || row.account_status === "deleting") {
-        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+        return replyFail("response_sent", API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
       }
-      return success(request.id, {
+      const body = success(request.id, {
         user: {
           id: row.actor_id,
           status: row.account_status,
@@ -148,8 +175,10 @@ export function buildApp(deps: AppDeps) {
         first_sign_in: row.first_sign_in,
         analytics_alias_id: row.analytics_alias_id,
       });
+      emit(200, "response_sent");
+      return body;
     } catch {
-      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+      return replyFail("database_or_provisioning_failed", "UNAVAILABLE", "Service unavailable.");
     }
   });
 

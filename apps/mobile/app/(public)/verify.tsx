@@ -2,6 +2,7 @@ import { maskEmail } from "@job-to-invoice/schemas";
 import { useEffect, useRef } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { copy } from "../../src/i18n/en.ts";
+import { bootstrapFailureScreenCopy } from "../../src/session/bootstrap.ts";
 import { useAuth } from "../../src/session/AuthProvider.tsx";
 import { canSubmitCode } from "../../src/session/logic.ts";
 import { colors, space, type } from "../../src/theme.ts";
@@ -10,6 +11,7 @@ export default function VerifyScreen() {
   const auth = useAuth();
   const email = auth.snapshot.emailDisplay ?? auth.emailDisplay;
   const bootstrapFailed = auth.snapshot.status === "bootstrap_error";
+  const bootstrapCopy = bootstrapFailureScreenCopy(auth.snapshot.supportCode ?? "BOOTSTRAP_UNKNOWN");
   const disabled = bootstrapFailed || !canSubmitCode(auth.code, auth.snapshot.verifyFailures ?? 0, auth.submitting);
   const autoSubmitted = useRef("");
 
@@ -32,8 +34,9 @@ export default function VerifyScreen() {
       {bootstrapFailed ? (
         <>
           <Text accessibilityLiveRegion="assertive" style={styles.error}>
-            {auth.error ?? copy.bootstrapUnavailable}
+            {auth.error ?? bootstrapCopy.message}
           </Text>
+          <Text style={styles.supportCode}>{bootstrapCopy.supportLine}</Text>
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ busy: auth.submitting }}
@@ -114,6 +117,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
   error: { color: colors.danger, fontSize: type.secondary },
+  supportCode: { color: colors.secondary, fontSize: type.secondary },
   button: {
     minHeight: 44,
     backgroundColor: colors.navy,

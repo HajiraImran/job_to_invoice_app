@@ -10,6 +10,7 @@ import { applyCleanMigrations } from "../../scripts/db-admin.mjs";
 import { resolveMigrationsUrl } from "../../scripts/postgres-url.mjs";
 import { buildApp } from "./app.ts";
 import { createJwtVerifier } from "./jwt.ts";
+import { ownerMeEventHasOnlySafeFields, type OwnerMeSafeEvent } from "./me-log.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -38,6 +39,7 @@ describe("owner authentication API", () => {
     app = buildApp({
       env,
       pool,
+      logOwnerMe: () => undefined,
       verifyJwt: createJwtVerifier({
         issuer: fixture.issuer,
         audience: fixture.audience,
@@ -226,6 +228,7 @@ describe("owner authentication API", () => {
   it("returns 503 when provisioning throws after a valid JWT", async () => {
     const token = await sign({ sub: AUTH_A, email: "a@example.com" });
     const env = loadEnv({ APP_ENV: "development", PORTAL_ORIGIN: "http://localhost:3000" });
+    const events: OwnerMeSafeEvent[] = [];
     const failing = buildApp({
       env,
       pool: {
@@ -233,6 +236,9 @@ describe("owner authentication API", () => {
           throw new Error("could not SET ROLE");
         },
       } as unknown as Pool,
+      logOwnerMe: (event) => {
+        events.push(event);
+      },
       verifyJwt: createJwtVerifier({
         issuer: fixture.issuer,
         audience: fixture.audience,
@@ -250,6 +256,18 @@ describe("owner authentication API", () => {
     expect(body).not.toMatch(/SET ROLE/i);
     expect(body).not.toContain(token);
     expect(body).not.toContain("a@example.com");
+    expect(events.map((event) => event.stage)).toEqual([
+      "request_received",
+      "jwt_verified",
+      "database_or_provisioning_failed",
+    ]);
+    expect(events.at(-1)?.status).toBe(503);
+    for (const event of events) {
+      expect(ownerMeEventHasOnlySafeFields(event)).toBe(true);
+    }
+    const logged = JSON.stringify(events);
+    expect(logged).not.toMatch(/SET ROLE|Error:|at Object|stack|a@example.com/i);
+    expect(logged).not.toContain(token);
     await failing.close();
   });
 
@@ -261,5 +279,110 @@ describe("owner authentication API", () => {
     expect(invalid.statusCode).toBe(401);
     expect(invalid.json().error.code).toBe("AUTHENTICATION_FAILED");
     expect(JSON.stringify(invalid.json())).not.toContain("not-a-jwt");
+  });
+
+  it("emits allowlisted /v1/me console events without changing status", async () => {
+    const events: OwnerMeSafeEvent[] = [];
+    const env = loadEnv({ APP_ENV: "development", PORTAL_ORIGIN: "http://localhost:3000" });
+    const loggedApp = buildApp({
+      env,
+      pool,
+      logOwnerMe: (event) => {
+        events.push(event);
+      },
+      verifyJwt: createJwtVerifier({
+        issuer: fixture.issuer,
+        audience: fixture.audience,
+        jwks: fixture.jwks,
+      }),
+    });
+    const missing = await loggedApp.inject({ method: "GET", url: "/v1/me" });
+    expect(missing.statusCode).toBe(401);
+    expect(events.map((event) => event.stage)).toEqual(["request_received", "jwt_rejected"]);
+    expect(events.at(-1)?.status).toBe(401);
+
+    events.length = 0;
+    const invalid = await loggedApp.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: "Bearer not-a-jwt" },
+    });
+    expect(invalid.statusCode).toBe(401);
+    expect(events.map((event) => event.stage)).toEqual(["request_received", "jwt_rejected"]);
+    expect(JSON.stringify(events)).not.toContain("not-a-jwt");
+
+    events.length = 0;
+    const health = await loggedApp.inject({ method: "GET", url: "/v1/health" });
+    expect(health.statusCode).toBe(200);
+    expect(events).toEqual([]);
+
+    events.length = 0;
+    const token = await sign({ sub: AUTH_B, email: "owner.b@example.com" });
+    const ok = await loggedApp.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(events.map((event) => event.stage)).toEqual(["request_received", "jwt_verified", "response_sent"]);
+    expect(events.at(-1)?.status).toBe(200);
+    for (const event of events) {
+      expect(ownerMeEventHasOnlySafeFields(event)).toBe(true);
+      expect(Object.keys(event).sort()).toEqual(["event", "request_id", "stage", "status"]);
+    }
+    const logged = JSON.stringify(events);
+    expect(logged).not.toContain(token);
+    expect(logged).not.toContain("owner.b@example.com");
+    expect(logged).not.toMatch(/Error:|stack|Bearer |authorization|SET ROLE|DATABASE_URL/i);
+    await loggedApp.close();
+  });
+
+  it("does not change /v1/me status when diagnostics throw", async () => {
+    const env = loadEnv({ APP_ENV: "development", PORTAL_ORIGIN: "http://localhost:3000" });
+    const noisy = buildApp({
+      env,
+      pool,
+      logOwnerMe: () => {
+        throw new Error("logger boom");
+      },
+      verifyJwt: createJwtVerifier({
+        issuer: fixture.issuer,
+        audience: fixture.audience,
+        jwks: fixture.jwks,
+      }),
+    });
+    const invalid = await noisy.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: "Bearer not-a-jwt" },
+    });
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.json().error.code).toBe("AUTHENTICATION_FAILED");
+    const token = await sign({ sub: AUTH_A, email: "a@example.com" });
+    const failingPool = buildApp({
+      env,
+      pool: {
+        connect: async () => {
+          throw new Error("could not SET ROLE");
+        },
+      } as unknown as Pool,
+      logOwnerMe: () => {
+        throw new Error("logger boom");
+      },
+      verifyJwt: createJwtVerifier({
+        issuer: fixture.issuer,
+        audience: fixture.audience,
+        jwks: fixture.jwks,
+      }),
+    });
+    const unavailable = await failingPool.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json().error.code).toBe("UNAVAILABLE");
+    await noisy.close();
+    await failingPool.close();
   });
 });

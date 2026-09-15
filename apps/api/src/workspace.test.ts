@@ -63,6 +63,7 @@ describe("workspace setup API", () => {
     app = buildApp({
       env,
       pool,
+      logOwnerMe: () => undefined,
       verifyJwt: createJwtVerifier({
         issuer: fixture.issuer,
         audience: fixture.audience,
