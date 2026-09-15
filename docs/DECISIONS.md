@@ -188,7 +188,7 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reason | ACC01 forbids a second OTP store. ACC02 requires JWKS verification, secure refresh storage, and one refresh then sign-in. AUTHZ01 forbids treating a client workspace ID as authorization. FORCE RLS prevents `api_app` from looking up `auth_user_id` without a definer function. |
 | Evidence | `apps/api/src/jwt.ts`, `supabase/migrations/0003_owner_provisioning.sql`, `apps/mobile/src/session/supabase.ts`, `docs/ENV.md` |
 | Owner | Engineering lead |
-| PRD implication | S02/S03/S22 sign-out ship in this slice. Real mailbox OTP, dashboard attempt caps, and Keychain behaviour on a physical iPhone remain staging/device evidence. |
+| PRD implication | S02/S03/S22 sign-out ship in this slice. Physical Expo Go (2026-09-15): mailbox OTP succeeded, JWT verified, GET /v1/me returned 200 `response_sent`, and owner bootstrap reached S04. Dashboard attempt caps, production/native Keychain/Keystore, and signed builds remain unverified. |
 | Impacted requirement IDs | ACC01, ACC02, AUTHZ01, API01–API03, ANA01, S02, S03, S22, ARC03, NFR01, SEC01, SEC04, OPS03 |
 | Impacted test IDs | QA01, QA02, QA19, QA61, QA63 |
 | Migration implications | Additive `setup_completed_at`, `analytics_alias_id`, `analytics_events`, `provision_owner`. |
@@ -206,7 +206,7 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reason | Unique `owner_user_id` forbids a second workspace. API_CONTRACT lists POST /workspace as the setup command. Encrypted SQLite is still TBD; onboarding form state still must survive restart without storing tokens. |
 | Evidence | `supabase/migrations/0004_workspace_setup.sql`, `apps/api/src/workspace.ts`, `apps/mobile/app/(onboarding)/setup.tsx` |
 | Owner | Engineering lead |
-| PRD implication | PATCH /workspace remains Settings/future drafts. S05 is a navigation shell only. Physical-device VoiceOver, SecureStore, and live OTP remain unverified. |
+| PRD implication | PATCH /workspace remains Settings/future drafts. S05 is a navigation shell only. Physical Expo Go (2026-09-15): S04 completed and routed to authenticated Jobs. VoiceOver, Maestro, and production/native SecureStore remain unverified. |
 | Impacted requirement IDs | S04, VAL01, VAL02, FIN02, INV10, AUTHZ01, API01–API03, ANA01, DEC03, DEC04, ACC01 (onboarding entry), ACC02 (session/offline on setup) |
 | Impacted test IDs | QA01, QA61, QA64 |
 | Migration implications | Additive tables `job_allowances`, `audit_events`, `idempotency_records`; completed-setup check; `complete_workspace_setup`. |
@@ -260,7 +260,7 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reason | Direct host `db.fhgacxkpgjdcjuvanesv.supabase.co` resolves only to AAAA. TCP 5432 to it fails. The us-west-2 session pooler resolves to IPv4 and accepts TCP 5432 and 6543. Linked `db push` of `0002`–`0004` timed out during connect after `0001` was already recorded. A wrapper DNS/TCP preflight then reported DNS failure on Windows while Test-NetConnection succeeded against the same session-pooler host and port. That probe added no authorization protection, so connection checks are delegated to the CLI. Local Windows `hosted:db-check` can list pending `0002`–`0004` while `hosted:db-push` then fails at `connecting`, so live apply is not authorized from that workstation. |
 | Evidence | DNS AAAA-only for `db.fhgacxkpgjdcjuvanesv.supabase.co`; TCP 5432 false to that host; TCP 5432 true to `aws-0-us-west-2.pooler.supabase.com`; `LegacyDbConnectError` / `PgClient: Connection timed out`; Windows live `hosted:db-push` `stage: connecting`; `scripts/hosted-db-push.mjs`; `.github/workflows/hosted-development-migrations.yml`; `pnpm test:hosted-push`; hosted `migration list --linked` and catalog SELECT 2026-09-15 (`0001`–`0004` recorded, nine FORCE RLS tables, migrator policies, revoked client grants, `pnpm secret-scan`) |
 | Owner | Engineering lead |
-| PRD implication | Hosted development `0001`–`0004` are recorded on `fhgacxkpgjdcjuvanesv` and catalog-verified. Live hosted two-tenant isolation, hosted execution of `provision_owner` / `complete_workspace_setup`, hosted database lint, and live OTP / API JWT / physical-device behavior remain unverified. |
+| PRD implication | Hosted development `0001`–`0004` are recorded on `fhgacxkpgjdcjuvanesv` and catalog-verified. Physical Expo Go (2026-09-15) executed hosted `provision_owner` (`GET /v1/me` 200 `response_sent`) and `complete_workspace_setup` (S04 saved). Live hosted two-tenant isolation, hosted database lint, and production/native builds remain unverified. |
 | Impacted requirement IDs | ARC02, DB01, SREF07 |
 | Impacted test IDs | `pnpm test:hosted-push` |
 | Migration implications | Do not change or reapply `0001`–`0004`. Do not repair history. Hosted development already recorded those four versions. Further hosted applies use `.github/workflows/hosted-development-migrations.yml` with a process-local `DATABASE_URL_MIGRATIONS` session-pooler URL via `pnpm hosted:db-push` on `ubuntu-latest`, not `db push --linked` and not a live apply from the unreliable local Windows session. |

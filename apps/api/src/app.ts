@@ -7,10 +7,16 @@ import {
   parseOwnerEmail,
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
-import { withApiRole, withTenant } from "./db.ts";
+import { withApiRole, withTenant, ApiTransactionError } from "./db.ts";
 import { API_ERROR_CODES, fail, requestId, success } from "./envelope.ts";
 import { bearerToken, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
-import { ownerMeSafeEvent, writeOwnerMeEvent, type OwnerMeSafeEvent, type OwnerMeStage } from "./me-log.ts";
+import {
+  allowlistedSqlstate,
+  ownerMeSafeEvent,
+  writeOwnerMeEvent,
+  type OwnerMeSafeEvent,
+  type OwnerMeStage,
+} from "./me-log.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
@@ -34,6 +40,41 @@ type ProvisionRow = {
 
 const GENERIC_AUTH = "Could not verify your session.";
 const SIGN_IN_REQUIRED = "Sign in required.";
+
+function isUsableProvisionRow(row: ProvisionRow | undefined): row is ProvisionRow {
+  if (!row) {
+    return false;
+  }
+  return (
+    typeof row.actor_id === "string" &&
+    row.actor_id.length > 0 &&
+    typeof row.workspace_id === "string" &&
+    row.workspace_id.length > 0 &&
+    typeof row.account_status === "string" &&
+    typeof row.display_email === "string" &&
+    typeof row.setup_completed === "boolean" &&
+    typeof row.first_sign_in === "boolean" &&
+    typeof row.analytics_alias_id === "string" &&
+    typeof row.workspace_version === "number"
+  );
+}
+
+function ownerMeDatabaseStage(error: unknown): OwnerMeStage {
+  if (error instanceof ApiTransactionError) {
+    if (error.stage === "session_query_failed") {
+      return "provision_owner_failed";
+    }
+    return error.stage;
+  }
+  return "database_or_provisioning_failed";
+}
+
+function ownerMeSqlstate(error: unknown): string | undefined {
+  if (error instanceof ApiTransactionError) {
+    return allowlistedSqlstate(error.sqlstate);
+  }
+  return undefined;
+}
 
 function sendFail(
   request: FastifyRequest,
@@ -91,9 +132,9 @@ export function buildApp(deps: AppDeps) {
   );
 
   app.get("/v1/me", async (request, reply) => {
-    const emit = (status: number, stage: OwnerMeStage) => {
+    const emit = (status: number, stage: OwnerMeStage, sqlstate?: string) => {
       try {
-        const event = ownerMeSafeEvent({ request_id: String(request.id), status, stage });
+        const event = ownerMeSafeEvent({ request_id: String(request.id), status, stage, sqlstate });
         if (deps.logOwnerMe) {
           deps.logOwnerMe(event);
         } else {
@@ -107,13 +148,13 @@ export function buildApp(deps: AppDeps) {
       stage: OwnerMeStage,
       code: string,
       message: string,
-      extra?: { field_errors?: { field: string; message: string }[]; retryAfter?: number },
+      extra?: { field_errors?: { field: string; message: string }[]; retryAfter?: number; sqlstate?: string },
     ) => {
       const result = fail(request.id, code, message, { field_errors: extra?.field_errors });
       if (extra?.retryAfter !== undefined) {
         void reply.header("Retry-After", String(extra.retryAfter));
       }
-      emit(result.status, stage);
+      emit(result.status, stage, extra?.sqlstate);
       return reply.status(result.status).send(result.body);
     };
 
@@ -151,8 +192,8 @@ export function buildApp(deps: AppDeps) {
         );
         return result.rows[0];
       });
-      if (!row) {
-        return replyFail("database_or_provisioning_failed", "UNAVAILABLE", "Service unavailable.");
+      if (!isUsableProvisionRow(row)) {
+        return replyFail("bootstrap_query_failed", "UNAVAILABLE", "Service unavailable.");
       }
       if (row.account_status === "deleted" || row.account_status === "deleting") {
         return replyFail("response_sent", API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
@@ -177,8 +218,10 @@ export function buildApp(deps: AppDeps) {
       });
       emit(200, "response_sent");
       return body;
-    } catch {
-      return replyFail("database_or_provisioning_failed", "UNAVAILABLE", "Service unavailable.");
+    } catch (error) {
+      return replyFail(ownerMeDatabaseStage(error), "UNAVAILABLE", "Service unavailable.", {
+        sqlstate: ownerMeSqlstate(error),
+      });
     }
   });
 

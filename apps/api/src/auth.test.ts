@@ -259,7 +259,7 @@ describe("owner authentication API", () => {
     expect(events.map((event) => event.stage)).toEqual([
       "request_received",
       "jwt_verified",
-      "database_or_provisioning_failed",
+      "database_connect_failed",
     ]);
     expect(events.at(-1)?.status).toBe(503);
     for (const event of events) {
@@ -384,5 +384,105 @@ describe("owner authentication API", () => {
     expect(unavailable.json().error.code).toBe("UNAVAILABLE");
     await noisy.close();
     await failingPool.close();
+  });
+
+  it("emits a distinct /v1/me stage for each database failure without raw errors", async () => {
+    const env = loadEnv({ APP_ENV: "development", PORTAL_ORIGIN: "http://localhost:3000" });
+    const token = await sign({ sub: AUTH_A, email: "a@example.com" });
+
+    async function probe(stage: string, poolImpl: Pool, sqlstate?: string) {
+      const events: OwnerMeSafeEvent[] = [];
+      const app = buildApp({
+        env,
+        pool: poolImpl,
+        logOwnerMe: (event) => {
+          events.push(event);
+        },
+        verifyJwt: createJwtVerifier({
+          issuer: fixture.issuer,
+          audience: fixture.audience,
+          jwks: fixture.jwks,
+        }),
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/me",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json().error.code).toBe("UNAVAILABLE");
+      expect(events.map((event) => event.stage)).toEqual(["request_received", "jwt_verified", stage]);
+      const failure = events.at(-1);
+      expect(failure?.status).toBe(503);
+      expect(failure?.sqlstate).toBe(sqlstate);
+      const logged = JSON.stringify(events);
+      const body = JSON.stringify(response.json());
+      expect(logged).not.toMatch(/permission denied|does not exist|SET ROLE|host\.example|Error:|at Object/i);
+      expect(body).not.toMatch(/permission denied|does not exist|SET ROLE|host\.example|Error:/i);
+      expect(logged).not.toContain(token);
+      expect(logged).not.toContain("a@example.com");
+      await app.close();
+    }
+
+    function pgError(code: string, message: string): Error {
+      const error = new Error(message);
+      (error as Error & { code: string }).code = code;
+      return error;
+    }
+
+    function poolFrom(script: {
+      connect?: unknown;
+      begin?: unknown;
+      setRole?: unknown;
+      query?: unknown;
+      rows?: unknown[];
+    }): Pool {
+      return {
+        connect: async () => {
+          if (script.connect) {
+            throw script.connect;
+          }
+          return {
+            query: async (sql: string) => {
+              const normalized = sql.trim().toLowerCase();
+              if (normalized === "begin") {
+                if (script.begin) {
+                  throw script.begin;
+                }
+                return { rows: [] };
+              }
+              if (normalized === "set local role api_app") {
+                if (script.setRole) {
+                  throw script.setRole;
+                }
+                return { rows: [] };
+              }
+              if (normalized === "commit" || normalized === "rollback") {
+                return { rows: [] };
+              }
+              if (script.query) {
+                throw script.query;
+              }
+              return { rows: script.rows ?? [] };
+            },
+            release: () => undefined,
+          };
+        },
+      } as unknown as Pool;
+    }
+
+    await probe("database_connect_failed", poolFrom({ connect: pgError("08006", "could not connect to host.example.invalid") }), "08006");
+    await probe("transaction_start_failed", poolFrom({ begin: pgError("25P02", "current transaction is aborted") }), "25P02");
+    await probe(
+      "set_role_failed",
+      poolFrom({ setRole: pgError("42501", 'permission denied to set role "api_app"') }),
+      "42501",
+    );
+    await probe(
+      "provision_owner_failed",
+      poolFrom({ query: pgError("42883", "function identity.provision_owner(uuid, text, text) does not exist") }),
+      "42883",
+    );
+    await probe("bootstrap_query_failed", poolFrom({ rows: [] }));
   });
 });
