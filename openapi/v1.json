@@ -306,6 +306,120 @@
           "422": { "description": "Validation failed" }
         }
       }
+    },
+    "/v1/drafts/{draftId}/preview": {
+      "post": {
+        "summary": "Freeze a 10-minute quote preview and return preview_hash",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Current draft version integer"
+          }
+        ],
+        "responses": {
+          "200": { "description": "Frozen quote preview with preview_hash; official number is not allocated" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant draft" },
+          "409": { "description": "Version conflict" },
+          "422": { "description": "Empty or invalid draft" }
+        }
+      }
+    },
+    "/v1/drafts/{draftId}/publish": {
+      "post": {
+        "summary": "Publish the current quote draft as an immutable revision",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Current draft version integer"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/QuotePublish" }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Published quote; original PDF queued" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
+          "404": { "description": "Unknown or cross-tenant draft" },
+          "409": { "description": "Preview changed, version conflict, already published, or idempotency mismatch" },
+          "422": { "description": "Validation failed" }
+        }
+      }
+    },
+    "/v1/documents/{documentId}": {
+      "get": {
+        "summary": "Read an immutable published quote snapshot and live PDF status",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Published quote snapshot; PDF may still be preparing" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant document" },
+          "422": { "description": "Invalid document id" }
+        }
+      }
+    },
+    "/v1/documents/{documentId}/download": {
+      "get": {
+        "summary": "Original PDF artifact state; preparing until the worker finishes",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Artifact state preparing, ready, or failed; URL is null while preparing" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant document" },
+          "422": { "description": "Invalid document id" }
+        }
+      }
     }
   },
   "components": {
@@ -359,6 +473,14 @@
           "unit_price_cents": { "type": "integer", "minimum": 0, "maximum": 99999999 },
           "discount_cents": { "type": "integer", "minimum": 0 },
           "tax_bp": { "type": "integer", "minimum": 0, "maximum": 2500 }
+        }
+      },
+      "QuotePublish": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["preview_hash"],
+        "properties": {
+          "preview_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
         }
       }
     }

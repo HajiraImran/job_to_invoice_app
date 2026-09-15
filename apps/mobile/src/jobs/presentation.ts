@@ -29,6 +29,13 @@ export type JobDetail = JobSummary & {
     tax_cents: number;
     total_cents: number;
   } | null;
+  current_quote: {
+    id: string;
+    number: string;
+    revision_no: number;
+    lifecycle: string;
+    total_cents: number;
+  } | null;
 };
 
 export type JobsListKind = "loading" | "empty" | "loaded" | "error" | "offline" | "access_expired";
@@ -147,7 +154,10 @@ export function presentJobDetail(input: {
   return { kind: "loaded", showRetry: false, job: input.job };
 }
 
-export function nextActionCopy(mode: string, lifecycle: string): "quote" | "direct" | "none" {
+export function nextActionCopy(mode: string, lifecycle: string): "quote" | "direct" | "published" | "none" {
+  if (lifecycle === "active") {
+    return "published";
+  }
   if (lifecycle !== "draft") {
     return "none";
   }

@@ -74,7 +74,7 @@ Remove-Item Env:DATABASE_URL_MIGRATIONS
 
 Local `pnpm migrate:clean` / `pnpm test:db` still use embedded PostgreSQL when `DATABASE_URL_MIGRATIONS` is unset.
 
-Hosted development catalog evidence (2026-09-15), project `fhgacxkpgjdcjuvanesv`: `schema_migrations` contains exactly `0001`/`foundation`, `0002`/`identity_tenancy`, `0003`/`owner_provisioning`, `0004`/`workspace_setup`. Local `0005_customers_jobs.sql` is not applied on hosted development. Local `0006_document_drafts.sql` is also not applied on hosted development. `migration list --linked` previously showed local and remote aligned through `0004`; `0005` is pending hosted apply. All nine identity/commercial tables from `0001`–`0004` exist on hosted, are owned by `migrator`, have FORCE RLS, and have `{schema}_{table}_migrator_all`. Local `0005` adds `commercial.customers` and `commercial.jobs` with the same FORCE RLS and migrator policy pattern. No unrestricted `FOR ALL` policy is granted to runtime or client roles. `api_app`, `migrator`, `worker_app`, and `purge_app` are `NOLOGIN NOSUPERUSER NOBYPASSRLS`. `anon` and `authenticated` have no schema `USAGE` and no table DML grants on those private objects. `identity.provision_owner` and `commercial.complete_workspace_setup` are `migrator`-owned `SECURITY DEFINER` functions with `search_path=identity, commercial, pg_temp` and `EXECUTE` for `api_app` only. `pnpm secret-scan` passed. Physical Expo Go (2026-09-15): OTP succeeded, JWT `jwt_verified`, `GET /v1/me` 200 `response_sent`, owner bootstrap succeeded, workspace setup completed, authenticated Jobs reached. Still unverified on hosted: live two-tenant behavioral isolation; database lint; production/native signing and Keychain/Keystore.
+Hosted development catalog evidence (2026-09-15), project `fhgacxkpgjdcjuvanesv`: `schema_migrations` contains exactly `0001`/`foundation`, `0002`/`identity_tenancy`, `0003`/`owner_provisioning`, `0004`/`workspace_setup`. Local `0005_customers_jobs.sql` is not applied on hosted development. Local `0006_document_drafts.sql` is also not applied on hosted development. Local `0007_quote_publish.sql` is also not applied on hosted development. `migration list --linked` previously showed local and remote aligned through `0004`; `0005` is pending hosted apply. All nine identity/commercial tables from `0001`–`0004` exist on hosted, are owned by `migrator`, have FORCE RLS, and have `{schema}_{table}_migrator_all`. Local `0005` adds `commercial.customers` and `commercial.jobs` with the same FORCE RLS and migrator policy pattern. No unrestricted `FOR ALL` policy is granted to runtime or client roles. `api_app`, `migrator`, `worker_app`, and `purge_app` are `NOLOGIN NOSUPERUSER NOBYPASSRLS`. `anon` and `authenticated` have no schema `USAGE` and no table DML grants on those private objects. `identity.provision_owner` and `commercial.complete_workspace_setup` are `migrator`-owned `SECURITY DEFINER` functions with `search_path=identity, commercial, pg_temp` and `EXECUTE` for `api_app` only. `pnpm secret-scan` passed. Physical Expo Go (2026-09-15): OTP succeeded, JWT `jwt_verified`, `GET /v1/me` 200 `response_sent`, owner bootstrap succeeded, workspace setup completed, authenticated Jobs reached. Still unverified on hosted: live two-tenant behavioral isolation; database lint; production/native signing and Keychain/Keystore.
 
 ## Schemas
 
@@ -143,7 +143,7 @@ Foreign keys:
 | catalogue_items | description, unit, custom_unit_label?, default_quantity, unit_price_cents, discount_cents, tax_bp, archived_at?, version |
 | jobs | customer_id, title, site_address_json?, no_site bool, lifecycle, archived_from_state?, current_quote_id?, active_invoice_id?, scope_version default 0, first_published_at?, entitlement_origin free/trial/paid?, completion_right bool, internal_notes, related_job_id?, mode quote/direct_invoice, version |
 
-Job lifecycle: `draft`, `active`, `invoiced`, `finished`, `canceled`, `archived` plus `archived_from_state` (JOB01). New jobs start as `draft`. `mode` is `quote` or `direct_invoice` (JRN06, API04). Quote-mode draft jobs open one editing `document_drafts` row via `POST /v1/jobs/{id}/quote`. Direct-invoice jobs do not enter the quote editor. Official numbers, `documents`, and `document_lines` remain a later publish slice.
+Job lifecycle: `draft`, `active`, `invoiced`, `finished`, `canceled`, `archived` plus `archived_from_state` (JOB01). New jobs start as `draft`. `mode` is `quote` or `direct_invoice` (JRN06, API04). Quote-mode draft jobs open one editing `document_drafts` row via `POST /v1/jobs/{id}/quote`. Direct-invoice jobs do not enter the quote editor. First quote publication allocates `Q-000001` `R1`, inserts `documents` / `document_lines`, consumes one free job slot, sets `jobs.lifecycle=active`, and queues `generate_original_pdf`. Email delivery and approval requests are not created in this slice.
 
 `completion_right` is write-once. First successful TX01/TX03 publication sets it true. UPDATE that clears it is forbidden except `purge_app` account deletion. `entitlement_snapshots` must not write this column.
 
@@ -151,7 +151,7 @@ Composite FKs:
 
 - `jobs (workspace_id, customer_id)` → `customers (workspace_id, id)`
 - `jobs (workspace_id, related_job_id)` → `jobs (workspace_id, id)`
-- `jobs (workspace_id, current_quote_id)` → `documents (workspace_id, id)` — deferred until `documents` exists
+- `jobs (workspace_id, current_quote_id)` → `documents (workspace_id, id)` — added in `0007_quote_publish.sql`
 - `jobs (workspace_id, active_invoice_id)` → `documents (workspace_id, id)` — deferred until `documents` exists
 - `assets (workspace_id, job_id)` → `jobs (workspace_id, id)` — added in `0005_customers_jobs.sql`
 
@@ -170,7 +170,7 @@ Numbering: Q-000001, CO-000001, INV-000001, CN-000001; never reuse after void; f
 Composite FKs:
 
 - `document_drafts (workspace_id, job_id)` → `jobs (workspace_id, id)`
-- `document_drafts (workspace_id, parent_document_id)` → `documents (workspace_id, id)` — deferred until `documents` exists
+- `document_drafts (workspace_id, parent_document_id)` → `documents (workspace_id, id)` — added in `0007_quote_publish.sql`
 - `documents (workspace_id, job_id)` → `jobs (workspace_id, id)`
 - `documents (workspace_id, prior_document_id)` → `documents (workspace_id, id)`
 - `document_lines (workspace_id, document_id)` → `documents (workspace_id, id)`

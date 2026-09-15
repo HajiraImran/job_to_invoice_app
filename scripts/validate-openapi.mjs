@@ -43,6 +43,21 @@ if (!spec.paths?.["/v1/drafts/{draftId}"]?.patch) {
 if (spec.paths?.["/v1/drafts/{draftId}"]?.patch && !spec.paths["/v1/drafts/{draftId}"].patch.parameters?.some((item) => item.name === "If-Match")) {
   errors.push("PATCH /v1/drafts/{draftId} requires If-Match");
 }
+if (!spec.paths?.["/v1/drafts/{draftId}/preview"]?.post) {
+  errors.push("POST /v1/drafts/{draftId}/preview is required");
+}
+if (!spec.paths?.["/v1/drafts/{draftId}/publish"]?.post) {
+  errors.push("POST /v1/drafts/{draftId}/publish is required");
+}
+if (spec.paths?.["/v1/drafts/{draftId}/publish"]?.post && !spec.paths["/v1/drafts/{draftId}/publish"].post.parameters?.some((item) => item.name === "Idempotency-Key")) {
+  errors.push("POST /v1/drafts/{draftId}/publish requires Idempotency-Key");
+}
+if (!spec.paths?.["/v1/documents/{documentId}"]?.get) {
+  errors.push("GET /v1/documents/{documentId} is required");
+}
+if (!spec.paths?.["/v1/documents/{documentId}/download"]?.get) {
+  errors.push("GET /v1/documents/{documentId}/download is required");
+}
 if (spec.paths?.["/v1/drafts"] && !spec.paths["/v1/drafts/{draftId}"]) {
   errors.push("draft collection routes must not be declared until they are implemented");
 }
@@ -52,4 +67,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log("OpenAPI 3.1 owner jobs and quote-draft contract is valid.");
+console.log("OpenAPI 3.1 owner jobs, quote-draft, and quote-publish contract is valid.");

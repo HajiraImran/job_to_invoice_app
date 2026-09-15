@@ -49,4 +49,16 @@ export {
   type SettledBy,
 } from "./ledger.ts";
 export { canonicalize, canonicalizeToBytes } from "./canonicalize.ts";
+export {
+  FREE_JOB_LIMIT,
+  PREVIEW_TTL_MS,
+  QUOTE_SNAPSHOT_SCHEMA_VERSION,
+  buildQuoteSnapshot,
+  formatDocumentNumber,
+  lineCountBucket,
+  type QuoteDraftLineSnapshotInput,
+  type QuoteSnapshotAddress,
+  type QuoteSnapshotLine,
+  type QuoteSnapshotV1,
+} from "./snapshot.ts";
 export { FINANCIAL_FIXTURES } from "./fixtures.ts";

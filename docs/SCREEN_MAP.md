@@ -90,7 +90,7 @@ Three steps: name/trade; contact/address; timezone and document defaults. Back p
 
 VAL01–VAL02. Default tax zero with “Confirm tax treatment for your business” (FIN02). Device IANA timezone is suggested and must be confirmed. Currency USD is displayed and not editable.
 
-Implemented route: `/(onboarding)/setup`. Successful POST `/v1/workspace` routes to the S05 jobs list. S05/S06/S08 draft jobs and S09/S10 quote drafting are implemented; publish, PDF, and invoice editors are not.
+Implemented route: `/(onboarding)/setup`. Successful POST `/v1/workspace` routes to the S05 jobs list. S05/S06/S08 draft jobs, S09/S10 quote drafting, and S11 quote publish are implemented; email delivery, PDF bytes, and invoice editors are not.
 
 
 ### S05 Jobs
@@ -125,7 +125,7 @@ Ordered line cards, Add item, notes, terms, expiry. Draft save indicators. Confl
 
 VAL03–VAL04. SYNC02 save copy. Offline publish disabled (NTF05).
 
-Implemented route: `/(tabs)/jobs/[id]/quote`. Server-persisted editing draft; 500 ms debounce PATCH with If-Match. Encrypted local SQLite and publish are not in this slice.
+Implemented route: `/(tabs)/jobs/[id]/quote`. Server-persisted editing draft; 500 ms debounce PATCH with If-Match. Review quote opens S11. Encrypted local SQLite is not in this slice.
 
 ### S10 Line editor
 
@@ -135,7 +135,9 @@ Line fields are edited on the S09 cards in this slice. Catalogue copy-on-use is 
 
 ### S11 Preview and publish
 
-Frozen-looking preview, recipient, expiry, confirm. Show slot/paywall before submit. Stale preview → PREVIEW_CHANGED.
+Frozen-looking preview, expiry, confirm. Show slot/paywall before submit. Stale preview → PREVIEW_CHANGED.
+
+Implemented route: `/(tabs)/jobs/[id]/publish`. Review uses `POST /drafts/{id}/preview`. Confirm publishes `POST /drafts/{id}/publish`. After success, the same route is a read-only published quote. Recipient email, approval links, and PDF bytes are not in this slice; download returns `preparing`.
 
 ### S12 Request detail
 

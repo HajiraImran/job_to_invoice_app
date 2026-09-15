@@ -16,6 +16,7 @@ const A = {
   customer: "aaaa4444-aaaa-4444-8444-aaaaaaaaaaaa",
   job: "aaaa5555-aaaa-4555-8555-aaaaaaaaaaaa",
   draft: "aaaa6666-aaaa-4666-8666-aaaaaaaaaaaa",
+  doc: "aaaa7777-aaaa-4777-8777-aaaaaaaaaaaa",
 };
 const B = {
   user: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -26,6 +27,7 @@ const B = {
   customer: "bbbb4444-bbbb-4444-8444-bbbbbbbbbbbb",
   job: "bbbb5555-bbbb-4555-8555-bbbbbbbbbbbb",
   draft: "bbbb6666-bbbb-4666-8666-bbbbbbbbbbbb",
+  doc: "bbbb7777-bbbb-4777-8777-bbbbbbbbbbbb",
 };
 
 class Fail extends Error {}
@@ -161,6 +163,22 @@ async function insertWorkspace(admin, person) {
       person.job,
       JSON.stringify({ notes: "", terms: "", expiry_days: 14, lines: [] }),
     ],
+  );
+  const snapshot = JSON.stringify({
+    schema_version: 1,
+    kind: "quote",
+    currency: "USD",
+    notes: "",
+    terms: "",
+    lines: [],
+  });
+  await admin.query(
+    `insert into commercial.documents (
+      workspace_id, id, created_by, job_id, kind, number, revision_no, lifecycle,
+      issued_at, issue_date, currency, net_cents, tax_cents, total_cents,
+      snapshot_json, canonical_snapshot_bytes, schema_version, snapshot_sha256
+    ) values ($1, $2, $3, $4, 'quote', 'Q-000001', 1, 'issued', now(), current_date, 'USD', 0, 0, 0, $5::jsonb, $6::bytea, 1, $7)`,
+    [person.ws, person.doc, person.user, person.job, snapshot, Buffer.from("{}"), "ab".repeat(32)],
   );
 }
 
@@ -318,7 +336,7 @@ try {
       );
       assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
     }
-    assert(setRoleFiles === 5, "expected SET ROLE migrator in 0002, 0003, 0004, 0005, and 0006");
+    assert(setRoleFiles === 6, "expected SET ROLE migrator in 0002, 0003, 0004, 0005, 0006, and 0007");
   });
 
   await test("migration history inserts succeed as the restored bootstrap role", async () => {
@@ -326,8 +344,8 @@ try {
       "select version from supabase_migrations.schema_migrations order by version",
     );
     assert(
-      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006",
-      "bootstrap role must record 0001-0006 after RESET ROLE",
+      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006,0007",
+      "bootstrap role must record 0001-0007 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {
@@ -534,14 +552,16 @@ try {
       const assets = await admin.query("select id from commercial.assets");
       const jobs = await admin.query("select id from commercial.jobs");
       const drafts = await admin.query("select id from commercial.document_drafts");
+      const docs = await admin.query("select id from commercial.documents");
       const me = await admin.query("select id from identity.app_users");
-      return { ws, mem, assets, jobs, drafts, me };
+      return { ws, mem, assets, jobs, drafts, docs, me };
     });
     assert(rows.ws.rows.length === 1 && rows.ws.rows[0].id === A.ws, "A should see own workspace");
     assert(rows.mem.rows.length === 1 && rows.mem.rows[0].user_id === A.user, "A should see own membership");
     assert(rows.assets.rows.length === 1 && rows.assets.rows[0].id === A.asset, "A should see own asset");
     assert(rows.jobs.rows.length === 1 && rows.jobs.rows[0].id === A.job, "A should see own job");
     assert(rows.drafts.rows.length === 1 && rows.drafts.rows[0].id === A.draft, "A should see own quote draft");
+    assert(rows.docs.rows.length === 1 && rows.docs.rows[0].id === A.doc, "A should see own published quote");
     assert(rows.me.rows.length === 1 && rows.me.rows[0].id === A.user, "A should see own app_user");
   });
 
@@ -552,13 +572,15 @@ try {
       const assets = await admin.query("select id from commercial.assets where id = $1", [B.asset]);
       const jobs = await admin.query("select id from commercial.jobs where id = $1", [B.job]);
       const drafts = await admin.query("select id from commercial.document_drafts where id = $1", [B.draft]);
+      const docs = await admin.query("select id from commercial.documents where id = $1", [B.doc]);
       const users = await admin.query("select id from identity.app_users where id = $1", [B.user]);
-      return { ws, assets, jobs, drafts, users };
+      return { ws, assets, jobs, drafts, docs, users };
     });
     assert(rows.ws.rows.length === 0, "A must not see B workspace");
     assert(rows.assets.rows.length === 0, "A must not see B asset");
     assert(rows.jobs.rows.length === 0, "A must not see B job");
     assert(rows.drafts.rows.length === 0, "A must not see B quote draft");
+    assert(rows.docs.rows.length === 0, "A must not see B published quote");
     assert(rows.users.rows.length === 0, "A must not see B user");
   });
 
@@ -676,6 +698,35 @@ try {
     );
     const linked = await admin.query("select draft_id from commercial.assets where id = $1", [A.asset]);
     assert(linked.rows[0].draft_id === A.draft, "same-tenant asset draft_id FK should succeed");
+  });
+
+  await test("issued documents and lines are immutable", async () => {
+    await expectFail(
+      () => admin.query("update commercial.documents set total_cents = 1 where id = $1", [A.doc]),
+      /immutable/i,
+      "update issued document",
+    );
+    await expectFail(
+      () => admin.query("delete from commercial.documents where id = $1", [A.doc]),
+      /cannot be deleted|immutable/i,
+      "delete issued document",
+    );
+    await expectFail(
+      () =>
+        withApi(admin, async () => {
+          await admin.query("select identity.set_local_tenant_context($1, $2)", [A.ws, A.user]);
+          await admin.query(
+            `insert into commercial.documents (
+              workspace_id, id, created_by, job_id, kind, number, revision_no, lifecycle,
+              issued_at, issue_date, currency, net_cents, tax_cents, total_cents,
+              snapshot_json, canonical_snapshot_bytes, schema_version, snapshot_sha256
+            ) values ($1, gen_random_uuid(), $2, $3, 'quote', 'Q-000002', 1, 'issued', now(), current_date, 'USD', 0, 0, 0, '{}'::jsonb, $4::bytea, 1, $5)`,
+            [A.ws, A.user, A.job, Buffer.from("{}"), "cd".repeat(32)],
+          );
+        }),
+      /permission denied/i,
+      "api_app insert documents",
+    );
   });
 
   await test("missing tenant context denies access", async () => {
@@ -829,6 +880,18 @@ try {
       },
       /permission denied/i,
       "anon document_drafts select",
+    );
+    await expectFail(
+      async () => {
+        await admin.query("set role anon");
+        try {
+          await admin.query("select id from commercial.documents");
+        } finally {
+          await admin.query("reset role");
+        }
+      },
+      /permission denied/i,
+      "anon documents select",
     );
     await expectFail(
       async () => {

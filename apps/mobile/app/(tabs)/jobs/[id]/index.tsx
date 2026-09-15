@@ -5,7 +5,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
 import { nextActionCopy, presentJobDetail, type JobDetail } from "../../../../src/jobs/presentation.ts";
-import { jobQuotePath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
+import { jobQuotePath, jobPublishPath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
 import { quoteActionLabel } from "../../../../src/quotes/presentation.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
@@ -153,6 +153,7 @@ export default function JobDetailScreen() {
             ) : null}
             {next === "quote" ? <Text style={styles.banner}>{copy.jobNextDraftQuote}</Text> : null}
             {next === "direct" ? <Text style={styles.banner}>{copy.jobNextDraftDirect}</Text> : null}
+            {next === "published" ? <Text style={styles.banner}>{copy.jobNextPublished}</Text> : null}
             {next === "quote" ? (
               <Pressable
                 accessibilityRole="button"
@@ -165,6 +166,19 @@ export default function JobDetailScreen() {
                   {opening ? copy.quoteSaving : quoteAction === "open" ? copy.openQuote : copy.createQuote}
                 </Text>
               </Pressable>
+            ) : null}
+            {view.job?.current_quote ? (
+              <>
+                <Text style={styles.section}>{copy.quoteNumber}</Text>
+                <Text style={styles.body}>{view.job.current_quote.number}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => router.push(jobPublishPath(jobId))}
+                  style={styles.primary}
+                >
+                  <Text style={styles.primaryLabel}>{copy.viewPublishedQuote}</Text>
+                </Pressable>
+              </>
             ) : null}
           </>
         ) : null}

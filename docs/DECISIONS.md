@@ -296,10 +296,28 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reason | DATABASE.md already specifies `document_drafts.payload_json`. Inventing a separate draft-lines table or skipping tax/discount/units would reduce the PRD. Publish snapshots are a later slice. |
 | Evidence | `supabase/migrations/0006_document_drafts.sql`; `apps/api/src/drafts.ts`; `packages/schemas/src/draft.ts`; mobile `/(tabs)/jobs/[id]/quote` |
 | Owner | Engineering lead |
-| PRD implication | S09/S10 drafting is implemented locally. TX01 publish, EMAIL01, PDF, API04 invoice drafts, and hosted `0006` remain later. |
+| PRD implication | S09/S10 drafting is implemented locally. EMAIL01, customer approval, PDF bytes, API04 invoice drafts, and hosted `0006`/`0007` remain later. |
 | Impacted requirement IDs | S08, S09, S10, VAL03, VAL04, FIN01, API01, API03, DB01, SYNC02 |
 | Impacted test IDs | `packages/schemas/src/draft.test.ts`; `apps/api/src/drafts.test.ts`; `apps/mobile/src/quotes/form.test.ts`; `pnpm test:db`; `pnpm validate:openapi` |
 | Migration implications | Forward-only `0006_document_drafts.sql`. Do not edit or replay `0001`–`0006`. Hosted apply is `.github/workflows/hosted-development-migrations.yml` with confirmation `APPLY_0006`; this repository change does not dispatch it. |
 | Reversible | No for the `document_drafts` shape once hosted-applied |
+| Escalation category | none |
+
+### D-015 — Quote publish freezes snapshots without email, approval tokens, or in-process PDF
+
+| Field | Value |
+| --- | --- |
+| ID | D-015 |
+| Date | 2026-09-15 |
+| Status | Resolved |
+| Decision | First quote publication follows TX01 locally: `POST /v1/drafts/{id}/preview` freezes a 10-minute QUO02A commercial snapshot; `POST /v1/drafts/{id}/publish` requires that `preview_hash` plus If-Match draft version, recalculates FIN01 with `@job-to-invoice/domain`, allocates `Q-000001` `R1` from `document_counters`, inserts immutable `documents`/`document_lines`, marks the draft `published` without deleting it, sets `jobs.lifecycle=active` and `completion_right`, consumes one free slot, and inserts a `generate_original_pdf` outbox row. Canonical snapshot bytes exclude the allocated number (it lives on `documents.number`/`revision_no` because allocation happens after preview freeze) and exclude generation timestamps. Recipient email, `approval_requests`, EMAIL01, and PDF bytes are out of this slice; `GET /documents/{id}/download` returns `preparing`. The PDF engine remains unchosen (D-007). Hosted `0007` is not applied in this slice. |
+| Reason | QUO02, QUO02A, JOB01, INV06, ARC04, and SUB02 are defined. Slice scope forbids email and public approval links. Generating PDF inside the API would violate ARC04 and invent a DOC01 engine. |
+| Evidence | `supabase/migrations/0007_quote_publish.sql`; `apps/api/src/quotes.ts`; `packages/domain/src/snapshot.ts`; mobile `/(tabs)/jobs/[id]/publish` |
+| Owner | Engineering lead |
+| PRD implication | S11 publish is implemented locally. EMAIL01, APR01, DOC01 bytes, S12, and hosted `0007` remain later. |
+| Impacted requirement IDs | S11, S08, QUO01, QUO02, QUO02A, JOB01, TX01, INV03, INV06, INV09, SUB02, ARC04, FIN01, API01, DB01, DB04, ANA01 |
+| Impacted test IDs | `packages/domain/src/snapshot.test.ts`; `apps/api/src/quotes.test.ts`; `apps/mobile/src/quotes/form.test.ts`; `pnpm test:db`; `pnpm validate:openapi` |
+| Migration implications | Forward-only `0007_quote_publish.sql`. Do not edit or replay `0001`–`0007`. This repository change does not dispatch hosted apply. |
+| Reversible | No for the `documents` shape once hosted-applied |
 | Escalation category | none |
 

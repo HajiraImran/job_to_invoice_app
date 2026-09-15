@@ -9,7 +9,7 @@ import {
   payloadFromForm,
   type QuoteDraftRecord,
 } from "./form.ts";
-import { presentQuoteEditor, quoteActionLabel } from "./presentation.ts";
+import { presentQuoteEditor, presentQuoteReview, quoteActionLabel } from "./presentation.ts";
 import { jobQuotePath } from "../jobs/routes.ts";
 
 const F01_LINE = {
@@ -125,5 +125,92 @@ describe("quote editor states", () => {
     expect(jobQuotePath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(
       "/(tabs)/jobs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/quote",
     );
+  });
+
+  it("presents review confirmation, success, offline, and failure states", () => {
+    const preview = {
+      draft_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      job_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      version: 2,
+      preview_hash: "ab".repeat(32),
+      preview_expires_at: "2026-09-15T12:10:00.000Z",
+      schema_version: 1,
+      number_label: "Draft",
+      snapshot: {
+        business: { business_name: "Quote Co", legal_name: "Quote Co LLC", contact_name: "Owner", contact_email: "o@example.com" },
+        customer: { name: "Riley" },
+        job: { title: "Faucet", no_site: true, site_address: null },
+        notes: "Scope",
+        terms: "Net 14.",
+        expiry_days: 14,
+        expiry_local_date: "2026-09-29",
+        issue_date: "2026-09-15",
+        lines: [],
+        net_cents: 24000,
+        tax_cents: 1980,
+        total_cents: 25980,
+        currency: "USD",
+      },
+    };
+    expect(
+      presentQuoteReview({ authStatus: "authenticated", loading: true, confirming: false, publishing: false }).kind,
+    ).toBe("loading");
+    expect(
+      presentQuoteReview({
+        authStatus: "offline_cached",
+        loading: false,
+        confirming: false,
+        publishing: false,
+      }).publishDisabled,
+    ).toBe(true);
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
+        confirming: true,
+        publishing: false,
+        preview,
+      }).kind,
+    ).toBe("confirming");
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
+        confirming: false,
+        publishing: false,
+        published: {
+          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          job_id: preview.job_id,
+          number: "Q-000001",
+          revision_label: "R1",
+          revision_no: 1,
+          lifecycle: "issued",
+          pdf_state: "preparing",
+          snapshot: preview.snapshot,
+          net_cents: 24000,
+          tax_cents: 1980,
+          total_cents: 25980,
+        },
+      }).kind,
+    ).toBe("published");
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
+        confirming: false,
+        publishing: false,
+        preview,
+        error: { message: "stale", retryable: true, status: 409, code: "PREVIEW_CHANGED" },
+      }).kind,
+    ).toBe("conflict");
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
+        confirming: false,
+        publishing: false,
+        error: { message: "paywall", retryable: false, status: 403, code: "ENTITLEMENT_REQUIRED" },
+      }).kind,
+    ).toBe("entitlement");
   });
 });

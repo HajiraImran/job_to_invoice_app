@@ -115,3 +115,23 @@ export function naiveUtcMidnightCalendarDate(isoDate: string, timeZone: string):
   const parts = zoneParts(utc, timeZone);
   return `${String(parts.year).padStart(4, "0")}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
 }
+
+export function zonedCalendarDate(instant: Date, timeZone: string): string {
+  const parts = zoneParts(instant, timeZone);
+  return `${String(parts.year).padStart(4, "0")}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+export function addCalendarDays(isoDate: string, days: number): string {
+  const parts = isoDate.split("-");
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  const utc = Date.UTC(year, month - 1, day + days);
+  const shifted = new Date(utc);
+  return `${String(shifted.getUTCFullYear()).padStart(4, "0")}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}-${String(shifted.getUTCDate()).padStart(2, "0")}`;
+}
+
+export function endOfLocalDateUtc(isoDate: string, timeZone: string): Date {
+  const parts = isoDate.split("-");
+  return wallTimeToUtc(timeZone, Number(parts[0]), Number(parts[1]), Number(parts[2]), 23, 59, 59);
+}

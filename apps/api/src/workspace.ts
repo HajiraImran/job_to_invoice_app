@@ -70,8 +70,8 @@ function bootstrapFrom(row: ProvisionRow) {
       setup_completed: row.setup_completed,
     },
     entitlement: {
-      source: "unverified",
-      can_publish: false,
+      source: row.setup_completed ? "free" : "unverified",
+      can_publish: Boolean(row.setup_completed),
     },
     first_sign_in: row.first_sign_in,
     analytics_alias_id: row.analytics_alias_id,

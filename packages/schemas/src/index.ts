@@ -1,5 +1,7 @@
-/** Snapshot schema versions will be added with QUO02A. Foundation has no commercial snapshot. */
-export const SNAPSHOT_SCHEMA_VERSION = 0;
+/** Quote publication snapshot schema (QUO02A). Official numbers live on documents rows. */
+export const SNAPSHOT_SCHEMA_VERSION = 1;
+export const FREE_JOB_LIMIT = 3;
+export const PREVIEW_TTL_MS = 10 * 60 * 1000;
 
 export {
   EMAIL_MAX_LENGTH,
@@ -57,11 +59,14 @@ export { parseOptionalPhone } from "./phone.ts";
 export { hasDisallowedControl, parseBoundedText, parseOptionalBoundedText } from "./text.ts";
 export {
   US_TIMEZONES,
+  addCalendarDays,
   calendarDateInTimeZone,
   deviceTimeZone,
+  endOfLocalDateUtc,
   isValidIanaTimeZone,
   naiveUtcMidnightCalendarDate,
   wallTimeToUtc,
+  zonedCalendarDate,
 } from "./timezone.ts";
 export {
   CUSTOMER_NAME_MAX,
@@ -112,6 +117,7 @@ export {
   type DraftPayloadParseResult,
   type LineUnit,
 } from "./draft.ts";
+export { parseQuotePublish, type QuotePublishInput, type QuotePublishParseResult } from "./quote.ts";
 export {
   DUE_DAYS_MAX,
   DUE_DAYS_MIN,

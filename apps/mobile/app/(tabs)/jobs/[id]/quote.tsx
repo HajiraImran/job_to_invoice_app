@@ -15,7 +15,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { secureRandomUUID } from "../../../../src/crypto/uuid.ts";
 import { copy } from "../../../../src/i18n/en.ts";
-import { jobDetailPath } from "../../../../src/jobs/routes.ts";
+import { jobDetailPath, jobPublishPath } from "../../../../src/jobs/routes.ts";
 import {
   emptyQuoteLine,
   formFromDraft,
@@ -112,11 +112,11 @@ export default function QuoteEditorScreen() {
   const persist = useCallback(
     async (reason: "debounce" | "button") => {
       if (!draft) {
-        return;
+        return false;
       }
       if (auth.snapshot.status === "offline_cached" || auth.snapshot.status === "access_expired") {
         setSaveStatus("offline");
-        return;
+        return false;
       }
       const parsed = payloadFromForm(values);
       if (!parsed.ok) {
@@ -126,7 +126,7 @@ export default function QuoteEditorScreen() {
         }
         setFieldErrors(next);
         setSaveStatus("validation");
-        return;
+        return false;
       }
       const live = liveTotals(values);
       if (!live.ok) {
@@ -136,7 +136,7 @@ export default function QuoteEditorScreen() {
         }
         setFieldErrors(next);
         setSaveStatus("validation");
-        return;
+        return false;
       }
       setSaveStatus("saving");
       setFieldErrors({});
@@ -153,7 +153,7 @@ export default function QuoteEditorScreen() {
         versionRef.current = result.data.version;
         dirtyRef.current = false;
         setSaveStatus("saved");
-        return;
+        return true;
       }
       if (result.error.code === "VERSION_CONFLICT") {
         setSaveStatus("conflict");
@@ -163,7 +163,7 @@ export default function QuoteEditorScreen() {
           status: result.error.status,
           code: result.error.code,
         });
-        return;
+        return false;
       }
       if (result.error.code === "IDEMPOTENCY_MISMATCH") {
         saveKey.current = retainOrCreateSetupIdempotencyKey(undefined);
@@ -175,7 +175,7 @@ export default function QuoteEditorScreen() {
         }
         setFieldErrors(next);
         setSaveStatus("validation");
-        return;
+        return false;
       }
       setSaveStatus("error");
       setError({
@@ -184,6 +184,7 @@ export default function QuoteEditorScreen() {
         status: result.error.status,
         code: result.error.code,
       });
+      return false;
     },
     [auth.snapshot.status, draft, runOwnerRequest, values],
   );
@@ -442,6 +443,25 @@ export default function QuoteEditorScreen() {
               style={styles.primary}
             >
               <Text style={styles.primaryLabel}>{saveStatus === "saving" ? copy.quoteSaving : copy.quoteSave}</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: saveDisabled || auth.snapshot.status === "offline_cached" }}
+              disabled={saveDisabled || auth.snapshot.status === "offline_cached"}
+              onPress={() => {
+                void (async () => {
+                  if (dirtyRef.current) {
+                    const saved = await persist("button");
+                    if (!saved) {
+                      return;
+                    }
+                  }
+                  router.push(jobPublishPath(jobId));
+                })();
+              }}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryLabel}>{copy.quoteReview}</Text>
             </Pressable>
           </>
         ) : null}

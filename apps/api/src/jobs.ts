@@ -9,6 +9,7 @@ import {
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
 import { quoteDraftSummary } from "./drafts.ts";
+import { quoteDocumentSummary } from "./quotes.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { API_ERROR_CODES, fail, success } from "./envelope.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
@@ -46,6 +47,11 @@ type JobRow = {
   quote_draft_id?: string | null;
   quote_draft_version?: number | null;
   quote_draft_payload?: unknown;
+  current_quote_id?: string | null;
+  current_quote_number?: string | null;
+  current_quote_revision?: number | null;
+  current_quote_lifecycle?: string | null;
+  current_quote_total?: string | number | null;
   replayed?: boolean;
 };
 
@@ -166,6 +172,16 @@ function jobDetail(row: JobRow) {
     quote_draft:
       row.quote_draft_id && row.quote_draft_version
         ? quoteDraftSummary(row.quote_draft_payload, row.quote_draft_id, row.quote_draft_version)
+        : null,
+    current_quote:
+      row.current_quote_id && row.current_quote_number && row.current_quote_revision && row.current_quote_lifecycle
+        ? quoteDocumentSummary({
+            id: row.current_quote_id,
+            number: row.current_quote_number,
+            revision_no: row.current_quote_revision,
+            lifecycle: row.current_quote_lifecycle,
+            total_cents: row.current_quote_total ?? 0,
+          })
         : null,
   };
 }
@@ -479,7 +495,9 @@ export function registerJobRoutes(
         const result = await client.query<JobRow>(
           `select j.id, j.workspace_id, j.customer_id, c.name as customer_name, j.title, j.site_address_json,
                   j.no_site, j.lifecycle, j.mode, j.internal_notes, j.version, j.created_at, j.updated_at,
-                  d.id as quote_draft_id, d.version as quote_draft_version, d.payload_json as quote_draft_payload
+                  d.id as quote_draft_id, d.version as quote_draft_version, d.payload_json as quote_draft_payload,
+                  q.id as current_quote_id, q.number as current_quote_number, q.revision_no as current_quote_revision,
+                  q.lifecycle as current_quote_lifecycle, q.total_cents as current_quote_total
            from commercial.jobs j
            join commercial.customers c
              on c.workspace_id = j.workspace_id and c.id = j.customer_id
@@ -488,6 +506,9 @@ export function registerJobRoutes(
             and d.job_id = j.id
             and d.kind = 'quote'
             and d.draft_state = 'editing'
+           left join commercial.documents q
+             on q.workspace_id = j.workspace_id
+            and q.id = j.current_quote_id
            where j.id = $1`,
           [params.jobId],
         );

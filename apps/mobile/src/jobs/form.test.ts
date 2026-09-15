@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { jobFormFocusName, jobRequestFromForm, emptyJobForm, listStateFromFilter } from "./form.ts";
 import { presentJobDetail, presentJobsList, nextActionCopy } from "./presentation.ts";
-import { canOpenCreateJob, createJobDisabled, createJobPath, jobDetailPath, jobQuotePath, jobsIndexPath } from "./routes.ts";
+import { canOpenCreateJob, createJobDisabled, createJobPath, jobDetailPath, jobPublishPath, jobQuotePath, jobsIndexPath } from "./routes.ts";
 
 describe("job form", () => {
   it("maps a complete form to a create payload", () => {
@@ -119,7 +119,7 @@ describe("jobs list and detail states", () => {
     ).toBe("missing");
     expect(nextActionCopy("quote", "draft")).toBe("quote");
     expect(nextActionCopy("direct_invoice", "draft")).toBe("direct");
-    expect(nextActionCopy("quote", "active")).toBe("none");
+    expect(nextActionCopy("quote", "active")).toBe("published");
   });
 });
 
@@ -132,6 +132,9 @@ describe("job navigation", () => {
     );
     expect(jobQuotePath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(
       "/(tabs)/jobs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/quote",
+    );
+    expect(jobPublishPath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(
+      "/(tabs)/jobs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/publish",
     );
   });
 });

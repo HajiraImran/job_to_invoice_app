@@ -19,6 +19,7 @@ import {
 } from "./me-log.ts";
 import { registerDraftRoutes } from "./drafts.ts";
 import { registerJobRoutes } from "./jobs.ts";
+import { registerQuotePublishRoutes } from "./quotes.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
@@ -200,6 +201,23 @@ export function buildApp(deps: AppDeps) {
       if (row.account_status === "deleted" || row.account_status === "deleting") {
         return replyFail("response_sent", API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
       }
+      let canPublish = false;
+      let entitlementSource = "unverified";
+      if (row.setup_completed) {
+        const allowance = await withApiRole(deps.pool, async (client) => {
+          await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+            row.workspace_id,
+            row.actor_id,
+          ]);
+          const consumed = await client.query<{ free_jobs_consumed: number }>(
+            "select free_jobs_consumed from commercial.job_allowances where workspace_id = $1",
+            [row.workspace_id],
+          );
+          return consumed.rows[0]?.free_jobs_consumed ?? 0;
+        });
+        entitlementSource = "free";
+        canPublish = allowance < 3;
+      }
       const body = success(request.id, {
         user: {
           id: row.actor_id,
@@ -212,8 +230,8 @@ export function buildApp(deps: AppDeps) {
           setup_completed: row.setup_completed,
         },
         entitlement: {
-          source: "unverified",
-          can_publish: false,
+          source: entitlementSource,
+          can_publish: canPublish,
         },
         first_sign_in: row.first_sign_in,
         analytics_alias_id: row.analytics_alias_id,
@@ -367,6 +385,9 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerDraftRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerQuotePublishRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
 
