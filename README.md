@@ -37,11 +37,20 @@ Remove-Item Env:DATABASE_URL_MIGRATIONS
 
 Portal and admin Next.js builds do not require production credentials. EAS production signing credentials are not stored in this repository.
 
+Owner mobile development:
+
+```sh
+pnpm --filter @job-to-invoice/mobile dev
+pnpm --filter @job-to-invoice/mobile dev:go
+```
+
+`dev` starts the existing EAS development-client bundler. `dev:go` starts Expo Go (`expo start --go`) for a development preview on a physical Android or iPhone during active development. Expo Go does not VERIFY production signing, native development builds, physical Keychain/Keystore behavior, or background/offline production behavior. Put `EXPO_PUBLIC_*` values in untracked `apps/mobile/.env.local`; Expo CLI does not load the repository-root `.env.local` for this app. Missing required public variables fail closed with their names only.
+
 ## Apps
 
 | Path | Role |
 | --- | --- |
-| `apps/mobile` | Expo development-build owner app |
+| `apps/mobile` | Expo owner app (EAS development-client and Expo Go development preview) |
 | `apps/portal` | Next.js customer portal |
 | `apps/admin` | Next.js staff console |
 | `apps/api` | Fastify `/v1` |

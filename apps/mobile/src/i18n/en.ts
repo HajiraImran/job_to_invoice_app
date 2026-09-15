@@ -73,6 +73,9 @@ export const copy = {
   setupConflict: "This setup was updated elsewhere. Reload and try again.",
   setupGenericError: "Could not save business setup. Try again.",
   setupExpired: "Sign in again to refresh your account.",
+  configMissingTitle: "Configuration required",
+  configMissingBody:
+    "This development preview is missing required public environment variables. Set the names listed below. Their values are never shown here.",
   restoring: "Checking your session",
   offlineCached: "You're offline. Showing saved account status. Publishing is unavailable.",
   accessExpired: "Sign in again to refresh your account.",

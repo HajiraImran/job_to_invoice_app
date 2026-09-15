@@ -10,6 +10,23 @@ These are the only Auth values that may ship in the iPhone app:
 - `EXPO_PUBLIC_AUTH_PROJECT_URL` (Supabase project URL)
 - `EXPO_PUBLIC_AUTH_PUBLISHABLE_KEY` (publishable / anon key, never `service_role`)
 
+Expo CLI loads those names from untracked files in `apps/mobile` (`.env` / `.env.local`). It does not load the repository-root `.env.local` for the owner app. Do not commit those files. Do not put `service_role` in them. If any of the three names is missing, the app shows a configuration error that lists the missing names and never prints their values.
+
+A physical device cannot reach `localhost` on the development machine. For Expo Go preview, `EXPO_PUBLIC_API_BASE_URL` must be a URL the phone can reach (for example a LAN address). The app still uses real Supabase Auth, OTP, API calls, SecureStore, provisioning, and onboarding. Do not replace SecureStore with AsyncStorage.
+
+Expo Go development preview:
+
+```sh
+pnpm --filter @job-to-invoice/mobile dev:go
+```
+
+That command is `expo start --go`. It does not replace `pnpm --filter @job-to-invoice/mobile dev` (EAS development-client). Expo Go is for development preview only. It does not VERIFY:
+
+- production signing
+- native development builds
+- physical Keychain/Keystore behavior
+- background/offline production behavior
+
 ## API private values
 
 - `AUTH_PROJECT_URL` — same project URL as mobile

@@ -2,6 +2,7 @@ import { routeGroupFor } from "@job-to-invoice/schemas";
 import { Slot, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { missingPublicEnvNames } from "../src/config.ts";
 import { copy } from "../src/i18n/en.ts";
 import { AuthProvider, useAuth } from "../src/session/AuthProvider.tsx";
 import { colors, type } from "../src/theme.ts";
@@ -42,7 +43,21 @@ function Guard() {
   return <Slot />;
 }
 
+function ConfigurationError({ names }: { names: string[] }) {
+  return (
+    <View style={styles.splash} accessibilityRole="alert" accessibilityLiveRegion="assertive">
+      <Text style={styles.splashText}>{copy.configMissingTitle}</Text>
+      <Text style={styles.configBody}>{copy.configMissingBody}</Text>
+      <Text style={styles.configNames}>{names.join("\n")}</Text>
+    </View>
+  );
+}
+
 export default function RootLayout() {
+  const missing = missingPublicEnvNames();
+  if (missing.length > 0) {
+    return <ConfigurationError names={missing} />;
+  }
   return (
     <AuthProvider>
       <Guard />
@@ -58,5 +73,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     gap: 12,
   },
-  splashText: { color: colors.navy, fontSize: type.body },
+  splashText: { color: colors.navy, fontSize: type.body, fontWeight: "600" },
+  configBody: {
+    color: colors.secondary,
+    fontSize: type.secondary,
+    textAlign: "center",
+    paddingHorizontal: 24,
+  },
+  configNames: {
+    color: colors.navy,
+    fontSize: type.secondary,
+    textAlign: "center",
+    paddingHorizontal: 24,
+  },
 });

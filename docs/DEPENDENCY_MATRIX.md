@@ -12,7 +12,7 @@ Substitution requires an architecture decision that preserves behaviour and acce
 | TypeScript | Strict shared types across apps | ARC01 ARC05 | TypeScript | 5.9.3 | all | — | Must remain TS monorepo; not 7.x (D-006) |
 | pnpm + Turborepo | Workspaces and task graph | ARC01 DEL01 | pnpm, turbo | pnpm 12.4.1, turbo 2.10.12 | dev CI | — | Equivalent monorepo tool OK (D-004) |
 | React Native | iPhone owner UI | DEC01 ARC01 | React Native | 0.86.3 | mobile | — | No Android v1 product gate; must match Expo 57 |
-| Expo + EAS | Dev/preview/production iOS builds; Expo Go is not release | SYNC01 REL01 | Expo | 57.0.22 | mobile | EAS credentials | Must support encrypted SQLite spike |
+| Expo + EAS | Dev/preview/production iOS builds; Expo Go is development preview only, not release | SYNC01 REL01 | Expo | 57.0.22 | mobile | EAS credentials | Must support encrypted SQLite spike |
 | Expo Router | Owner navigation S01–S24 | ARC01 | Expo Router | 57.0.21 | mobile | — | — |
 | Expo Notifications | Reserved; native push deferred | NTF01 | Expo Notifications | not shipped v1 | — | — | Do not add push in v1 |
 | Next.js | Portal + admin (D-003) | DEC02 ARC01 S28 | Next.js | 16.3.5 | portal admin | PORTAL_ORIGIN | Admin framework reversible |

@@ -34,6 +34,8 @@ Managed services (same US region):
 | GitHub | Source of truth | DEL01 |
 | Expo EAS | iPhone development and production builds | DEC01, REL01 |
 
+`pnpm --filter @job-to-invoice/mobile dev:go` starts Expo Go for an active-development preview of owner authentication and onboarding. Expo Go is not a release environment (SYNC01). It does not VERIFY production signing, native development builds, physical Keychain/Keystore behavior, or background/offline production behavior. EAS `development` / `preview` development-client profiles remain the native-build path.
+
 Vendor substitution requires an architecture decision that preserves behaviour and acceptance tests (ARC01).
 
 ## Trust boundaries

@@ -5,6 +5,7 @@
   "main": "expo-router/entry",
   "scripts": {
     "dev": "expo start --dev-client",
+    "dev:go": "expo start --go",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint app src --config ../../eslint.config.js",
     "test": "vitest run --config vitest.config.ts",
@@ -22,12 +23,19 @@
     "expo-status-bar": "57.0.1",
     "react": "19.2.3",
     "react-native": "0.86.3",
-    "react-native-safe-area-context": "5.6.2",
-    "react-native-screens": "4.19.0"
+    "react-native-safe-area-context": "5.7.0",
+    "react-native-screens": "4.26.2"
   },
   "devDependencies": {
     "@types/react": "19.2.18",
     "typescript": "5.9.3",
     "vitest": "5.0.0"
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "typescript"
+      ]
+    }
   }
 }
