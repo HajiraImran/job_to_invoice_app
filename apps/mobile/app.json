@@ -2,6 +2,7 @@
   "expo": {
     "name": "Job to Invoice",
     "slug": "job-to-invoice",
+    "owner": "hajiraimran",
     "scheme": "jobtoinvoice",
     "version": "0.0.0",
     "orientation": "portrait",
@@ -16,6 +17,11 @@
     "plugins": ["expo-router", "expo-dev-client", "expo-secure-store"],
     "experiments": {
       "typedRoutes": false
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3fc325ae-6017-4dbc-84bb-2f28b44eb032"
+      }
     }
   }
 }
