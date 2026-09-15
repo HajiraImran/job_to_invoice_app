@@ -161,8 +161,10 @@ describe("onboarding route decision", () => {
 });
 
 describe("analytics privacy", () => {
-  it("treats onboarding_completed as a server-only event", () => {
+  it("treats onboarding_completed and job_created as server-only events", () => {
     expect(isServerOnlyAnalyticsEvent("onboarding_completed")).toBe(true);
     expect(isClientAnalyticsEvent("onboarding_completed")).toBe(false);
+    expect(isServerOnlyAnalyticsEvent("job_created")).toBe(true);
+    expect(isClientAnalyticsEvent("job_created")).toBe(false);
   });
 });

@@ -17,6 +17,7 @@ import {
   type OwnerMeSafeEvent,
   type OwnerMeStage,
 } from "./me-log.ts";
+import { registerJobRoutes } from "./jobs.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
@@ -359,6 +360,9 @@ export function buildApp(deps: AppDeps) {
   });
 
   registerWorkspaceRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerJobRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
 

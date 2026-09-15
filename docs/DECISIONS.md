@@ -267,3 +267,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | No for IPv4-only networks without the IPv4 add-on |
 | Escalation category | architecture |
 
+### D-013 — PRD-shaped jobs slice without quote/invoice editors
+
+| Field | Value |
+| --- | --- |
+| ID | D-013 |
+| Date | 2026-09-15 |
+| Status | Resolved |
+| Decision | Authenticated Jobs MVP persists PRD `commercial.customers` and `commercial.jobs` (JOB01 lifecycle, composite tenant FKs, `version`, FORCE RLS, migrator owner policy, `api_app` tenant policies). New jobs start as `draft`. POST `/v1/jobs` accepts a client UUID, customer **name** (inserts the minimum customer row; no S07/S19 CRM), title, explicit `no_site` or site address, optional internal notes, and `mode` `quote` \| `direct_invoice`. `mode` is stored for later publish/issue and is not a document draft. GET `/v1/jobs` is cursor-paginated (`items`, `next_cursor`; S05 Active = `state=open` including drafts). GET `/v1/jobs/{id}` is read-only and does not invent scope or ledger totals. `current_quote_id` / `active_invoice_id` columns exist without document FKs until `documents`. `assets.job_id` FK is added. Server emits `job_created` with allowlisted `mode` `quote`/`direct` only. Hosted `0005` is not applied in this slice. |
+| Reason | Option A from the Jobs MVP decision: do not invent a reduced jobs table, and do not ship quote/invoice/CRM screens in this slice. |
+| Evidence | `supabase/migrations/0005_customers_jobs.sql`; `apps/api/src/jobs.ts`; `packages/schemas/src/job.ts`; `openapi/v1.json`; mobile `/(tabs)/jobs` |
+| Owner | Engineering lead |
+| PRD implication | S05/S06/S08 and JOB01 persistence are implemented locally. JRN01 quote publish, API04 drafts, S07/S19, and hosted `0005` remain later. |
+| Impacted requirement IDs | S05, S06, S08, JOB01, VAL01, VAL02, API01, API02, DB01, ANA01 |
+| Impacted test IDs | `packages/schemas/src/job.test.ts`; `apps/api/src/jobs.test.ts`; `apps/mobile/src/jobs/form.test.ts`; `pnpm test:db`; `pnpm validate:openapi` |
+| Migration implications | Forward-only `0005_customers_jobs.sql`. Do not edit or replay `0001`–`0004`. Do not apply `0005` to hosted development in this slice. |
+| Reversible | No for the `customers`/`jobs` shape once hosted-applied |
+| Escalation category | none |
+

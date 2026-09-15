@@ -7,6 +7,8 @@ export const API_ERROR_CODES = {
   RATE_LIMITED: "RATE_LIMITED",
   IDEMPOTENCY_MISMATCH: "IDEMPOTENCY_MISMATCH",
   VERSION_CONFLICT: "VERSION_CONFLICT",
+  NOT_FOUND: "NOT_FOUND",
+  SETUP_INCOMPLETE: "SETUP_INCOMPLETE",
 } as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];
@@ -35,7 +37,10 @@ export function httpStatusForCode(code: string): number {
       return 401;
     case API_ERROR_CODES.ACCOUNT_SUSPENDED:
     case API_ERROR_CODES.ACCOUNT_DELETING:
+    case API_ERROR_CODES.SETUP_INCOMPLETE:
       return 403;
+    case API_ERROR_CODES.NOT_FOUND:
+      return 404;
     case API_ERROR_CODES.VALIDATION_FAILED:
       return 422;
     case API_ERROR_CODES.IDEMPOTENCY_MISMATCH:

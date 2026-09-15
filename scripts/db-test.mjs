@@ -13,6 +13,8 @@ const A = {
   ws: "11111111-1111-4111-8111-111111111111",
   mem: "aaaa2222-aaaa-4222-8222-aaaaaaaaaaaa",
   asset: "aaaa3333-aaaa-4333-8333-aaaaaaaaaaaa",
+  customer: "aaaa4444-aaaa-4444-8444-aaaaaaaaaaaa",
+  job: "aaaa5555-aaaa-4555-8555-aaaaaaaaaaaa",
 };
 const B = {
   user: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -20,6 +22,8 @@ const B = {
   ws: "22222222-2222-4222-8222-222222222222",
   mem: "bbbb2222-bbbb-4222-8222-bbbbbbbbbbbb",
   asset: "bbbb3333-bbbb-4333-8333-bbbbbbbbbbbb",
+  customer: "bbbb4444-bbbb-4444-8444-bbbbbbbbbbbb",
+  job: "bbbb5555-bbbb-4555-8555-bbbbbbbbbbbb",
 };
 
 class Fail extends Error {}
@@ -133,6 +137,17 @@ async function insertWorkspace(admin, person) {
       workspace_id, id, visibility, bucket_key, upload_state, media_type, source_size, uploaded_by
     ) values ($1, $2, 'internal', $3, 'ready', 'image/png', 12, $4)`,
     [person.ws, person.asset, `logos/${person.ws}.png`, person.user],
+  );
+  await admin.query(
+    `insert into commercial.customers (workspace_id, id, name)
+     values ($1, $2, $3)`,
+    [person.ws, person.customer, `Customer ${person.ws.slice(0, 4)}`],
+  );
+  await admin.query(
+    `insert into commercial.jobs (
+      workspace_id, id, customer_id, title, no_site, lifecycle, mode
+    ) values ($1, $2, $3, $4, true, 'draft', 'quote')`,
+    [person.ws, person.job, person.customer, `Job ${person.ws.slice(0, 4)}`],
   );
 }
 
@@ -290,7 +305,7 @@ try {
       );
       assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
     }
-    assert(setRoleFiles === 3, "expected SET ROLE migrator in 0002, 0003, and 0004");
+    assert(setRoleFiles === 4, "expected SET ROLE migrator in 0002, 0003, 0004, and 0005");
   });
 
   await test("migration history inserts succeed as the restored bootstrap role", async () => {
@@ -298,8 +313,8 @@ try {
       "select version from supabase_migrations.schema_migrations order by version",
     );
     assert(
-      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004",
-      "bootstrap role must record 0001-0004 after RESET ROLE",
+      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005",
+      "bootstrap role must record 0001-0005 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {
@@ -504,12 +519,14 @@ try {
       const ws = await admin.query("select id from commercial.workspaces");
       const mem = await admin.query("select user_id from commercial.memberships");
       const assets = await admin.query("select id from commercial.assets");
+      const jobs = await admin.query("select id from commercial.jobs");
       const me = await admin.query("select id from identity.app_users");
-      return { ws, mem, assets, me };
+      return { ws, mem, assets, jobs, me };
     });
     assert(rows.ws.rows.length === 1 && rows.ws.rows[0].id === A.ws, "A should see own workspace");
     assert(rows.mem.rows.length === 1 && rows.mem.rows[0].user_id === A.user, "A should see own membership");
     assert(rows.assets.rows.length === 1 && rows.assets.rows[0].id === A.asset, "A should see own asset");
+    assert(rows.jobs.rows.length === 1 && rows.jobs.rows[0].id === A.job, "A should see own job");
     assert(rows.me.rows.length === 1 && rows.me.rows[0].id === A.user, "A should see own app_user");
   });
 
@@ -518,11 +535,13 @@ try {
       await admin.query("select identity.set_local_tenant_context($1, $2)", [A.ws, A.user]);
       const ws = await admin.query("select id from commercial.workspaces where id = $1", [B.ws]);
       const assets = await admin.query("select id from commercial.assets where id = $1", [B.asset]);
+      const jobs = await admin.query("select id from commercial.jobs where id = $1", [B.job]);
       const users = await admin.query("select id from identity.app_users where id = $1", [B.user]);
-      return { ws, assets, users };
+      return { ws, assets, jobs, users };
     });
     assert(rows.ws.rows.length === 0, "A must not see B workspace");
     assert(rows.assets.rows.length === 0, "A must not see B asset");
+    assert(rows.jobs.rows.length === 0, "A must not see B job");
     assert(rows.users.rows.length === 0, "A must not see B user");
   });
 
@@ -550,6 +569,20 @@ try {
       /row-level security/i,
       "A insert into B",
     );
+    await expectFail(
+      () =>
+        withApi(admin, async () => {
+          await admin.query("select identity.set_local_tenant_context($1, $2)", [A.ws, A.user]);
+          await admin.query(
+            `insert into commercial.jobs (
+              workspace_id, id, customer_id, title, no_site, lifecycle, mode
+            ) values ($1, gen_random_uuid(), $2, 'hijack', true, 'draft', 'quote')`,
+            [B.ws, B.customer],
+          );
+        }),
+      /row-level security/i,
+      "A insert job into B",
+    );
     const still = await admin.query("select business_name from commercial.workspaces where id = $1", [B.ws]);
     assert(still.rows[0].business_name.startsWith("Biz"), "B workspace must be unchanged");
   });
@@ -559,10 +592,12 @@ try {
       await admin.query("select identity.set_local_tenant_context($1, $2)", [B.ws, A.user]);
       const ws = await admin.query("select id from commercial.workspaces");
       const assets = await admin.query("select id from commercial.assets");
-      return { ws, assets };
+      const jobs = await admin.query("select id from commercial.jobs");
+      return { ws, assets, jobs };
     });
     assert(rows.ws.rows.length === 0, "forged GUC must not reveal B workspace");
     assert(rows.assets.rows.length === 0, "forged GUC must not reveal B assets");
+    assert(rows.jobs.rows.length === 0, "forged GUC must not reveal B jobs");
   });
 
   await test("a cross-tenant foreign-key reference fails", async () => {
@@ -571,6 +606,21 @@ try {
         admin.query("update commercial.workspaces set logo_asset_id = $1 where id = $2", [B.asset, A.ws]),
       /foreign key/i,
       "cross-tenant logo_asset_id",
+    );
+    await expectFail(
+      () =>
+        admin.query("update commercial.jobs set customer_id = $1 where id = $2", [B.customer, A.job]),
+      /foreign key/i,
+      "cross-tenant job customer_id",
+    );
+  });
+
+  await test("completion_right cannot be cleared except by purge_app", async () => {
+    await admin.query("update commercial.jobs set completion_right = true where id = $1", [A.job]);
+    await expectFail(
+      () => admin.query("update commercial.jobs set completion_right = false where id = $1", [A.job]),
+      /write-once|completion_right/i,
+      "clear completion_right",
     );
   });
 
@@ -701,6 +751,30 @@ try {
       },
       /permission denied/i,
       "authenticated select",
+    );
+    await expectFail(
+      async () => {
+        await admin.query("set role anon");
+        try {
+          await admin.query("select id from commercial.jobs");
+        } finally {
+          await admin.query("reset role");
+        }
+      },
+      /permission denied/i,
+      "anon jobs select",
+    );
+    await expectFail(
+      async () => {
+        await admin.query("set role authenticated");
+        try {
+          await admin.query("select id from commercial.customers");
+        } finally {
+          await admin.query("reset role");
+        }
+      },
+      /permission denied/i,
+      "authenticated customers select",
     );
     await expectFail(
       async () => {

@@ -74,7 +74,7 @@ Remove-Item Env:DATABASE_URL_MIGRATIONS
 
 Local `pnpm migrate:clean` / `pnpm test:db` still use embedded PostgreSQL when `DATABASE_URL_MIGRATIONS` is unset.
 
-Hosted development catalog evidence (2026-09-15), project `fhgacxkpgjdcjuvanesv`: `schema_migrations` contains exactly `0001`/`foundation`, `0002`/`identity_tenancy`, `0003`/`owner_provisioning`, `0004`/`workspace_setup`. `migration list --linked` showed local and remote aligned; no pending local migrations. All nine identity/commercial tables exist, are owned by `migrator`, have FORCE RLS, and have `{schema}_{table}_migrator_all`. No unrestricted `FOR ALL` policy is granted to runtime or client roles. `api_app`, `migrator`, `worker_app`, and `purge_app` are `NOLOGIN NOSUPERUSER NOBYPASSRLS`. `anon` and `authenticated` have no schema `USAGE` and no table DML grants on those private objects. `identity.provision_owner` and `commercial.complete_workspace_setup` are `migrator`-owned `SECURITY DEFINER` functions with `search_path=identity, commercial, pg_temp` and `EXECUTE` for `api_app` only. `pnpm secret-scan` passed. Physical Expo Go (2026-09-15): OTP succeeded, JWT `jwt_verified`, `GET /v1/me` 200 `response_sent`, owner bootstrap succeeded, workspace setup completed, authenticated Jobs reached. Still unverified on hosted: live two-tenant behavioral isolation; database lint; production/native signing and Keychain/Keystore.
+Hosted development catalog evidence (2026-09-15), project `fhgacxkpgjdcjuvanesv`: `schema_migrations` contains exactly `0001`/`foundation`, `0002`/`identity_tenancy`, `0003`/`owner_provisioning`, `0004`/`workspace_setup`. Local `0005_customers_jobs.sql` is not applied on hosted development. `migration list --linked` previously showed local and remote aligned through `0004`; `0005` is pending hosted apply. All nine identity/commercial tables from `0001`–`0004` exist on hosted, are owned by `migrator`, have FORCE RLS, and have `{schema}_{table}_migrator_all`. Local `0005` adds `commercial.customers` and `commercial.jobs` with the same FORCE RLS and migrator policy pattern. No unrestricted `FOR ALL` policy is granted to runtime or client roles. `api_app`, `migrator`, `worker_app`, and `purge_app` are `NOLOGIN NOSUPERUSER NOBYPASSRLS`. `anon` and `authenticated` have no schema `USAGE` and no table DML grants on those private objects. `identity.provision_owner` and `commercial.complete_workspace_setup` are `migrator`-owned `SECURITY DEFINER` functions with `search_path=identity, commercial, pg_temp` and `EXECUTE` for `api_app` only. `pnpm secret-scan` passed. Physical Expo Go (2026-09-15): OTP succeeded, JWT `jwt_verified`, `GET /v1/me` 200 `response_sent`, owner bootstrap succeeded, workspace setup completed, authenticated Jobs reached. Still unverified on hosted: live two-tenant behavioral isolation; database lint; production/native signing and Keychain/Keystore.
 
 ## Schemas
 
@@ -112,7 +112,7 @@ A forged GUC for another workspace therefore yields zero rows, not an existence 
 
 Every relationship to a **non-root** tenant row is composite `(workspace_id, referenced_id)`. Example in this slice: `workspaces (workspace_id, logo_asset_id) → assets (workspace_id, id)`.
 
-`assets.job_id` and `assets.draft_id` are nullable and have **no foreign keys** until `jobs` and `document_drafts` exist. Do not write those columns until those migrations land.
+`assets.draft_id` is nullable and has **no foreign key** until `document_drafts` exists. Do not write that column until that migration lands. `assets.job_id` has a composite FK from `0005_customers_jobs.sql`.
 
 ## Identity and workspace
 
@@ -141,18 +141,19 @@ Foreign keys:
 | --- | --- |
 | customers | name, email?, normalized_email?, phone?, billing_address_json?, archived_at?, version |
 | catalogue_items | description, unit, custom_unit_label?, default_quantity, unit_price_cents, discount_cents, tax_bp, archived_at?, version |
-| jobs | customer_id, title, site_address_json?, no_site bool, lifecycle, archived_from_state?, current_quote_id?, active_invoice_id?, scope_version default 0, first_published_at?, entitlement_origin free/trial/paid?, completion_right bool, internal_notes, related_job_id?, version |
+| jobs | customer_id, title, site_address_json?, no_site bool, lifecycle, archived_from_state?, current_quote_id?, active_invoice_id?, scope_version default 0, first_published_at?, entitlement_origin free/trial/paid?, completion_right bool, internal_notes, related_job_id?, mode quote/direct_invoice, version |
 
-Job lifecycle: `draft`, `active`, `invoiced`, `finished`, `canceled`, `archived` plus `archived_from_state` (JOB01).
+Job lifecycle: `draft`, `active`, `invoiced`, `finished`, `canceled`, `archived` plus `archived_from_state` (JOB01). New jobs start as `draft`. `mode` is `quote` or `direct_invoice` (JRN06, API04); this slice stores it and does not create document drafts.
 
 `completion_right` is write-once. First successful TX01/TX03 publication sets it true. UPDATE that clears it is forbidden except `purge_app` account deletion. `entitlement_snapshots` must not write this column.
 
 Composite FKs:
 
 - `jobs (workspace_id, customer_id)` → `customers (workspace_id, id)`
-- `jobs (workspace_id, current_quote_id)` → `documents (workspace_id, id)`
-- `jobs (workspace_id, active_invoice_id)` → `documents (workspace_id, id)`
 - `jobs (workspace_id, related_job_id)` → `jobs (workspace_id, id)`
+- `jobs (workspace_id, current_quote_id)` → `documents (workspace_id, id)` — deferred until `documents` exists
+- `jobs (workspace_id, active_invoice_id)` → `documents (workspace_id, id)` — deferred until `documents` exists
+- `assets (workspace_id, job_id)` → `jobs (workspace_id, id)` — added in `0005_customers_jobs.sql`
 
 ## Documents and scope
 
@@ -235,7 +236,7 @@ Slot increments occur in the same transaction as the document insert (TX01/TX03)
 
 Composite FKs:
 
-- `assets (workspace_id, job_id)` → `jobs (workspace_id, id)` — deferred until `jobs` exists
+- `assets (workspace_id, job_id)` → `jobs (workspace_id, id)`
 - `assets (workspace_id, draft_id)` → `document_drafts (workspace_id, id)` — deferred until `document_drafts` exists
 - `document_assets (workspace_id, document_id)` → `documents (workspace_id, id)`
 - `document_assets (workspace_id, asset_id)` → `assets (workspace_id, id)`

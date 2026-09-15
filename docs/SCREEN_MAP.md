@@ -90,7 +90,7 @@ Three steps: name/trade; contact/address; timezone and document defaults. Back p
 
 VAL01–VAL02. Default tax zero with “Confirm tax treatment for your business” (FIN02). Device IANA timezone is suggested and must be confirmed. Currency USD is displayed and not editable.
 
-Implemented route: `/(onboarding)/setup`. Successful POST `/v1/workspace` routes to the S05 jobs shell. S05 list/search/new-job is not implemented.
+Implemented route: `/(onboarding)/setup`. Successful POST `/v1/workspace` routes to the S05 jobs list. S05/S06/S08 draft jobs are implemented; quote/invoice editors are not.
 
 
 ### S05 Jobs

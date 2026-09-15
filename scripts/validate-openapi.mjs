@@ -22,8 +22,17 @@ if (!spec.paths?.["/v1/analytics/batch"]?.post) {
 if (!spec.paths?.["/v1/workspace"]?.post) {
   errors.push("POST /v1/workspace is required");
 }
-if (spec.paths?.["/v1/jobs"] || spec.paths?.["/v1/drafts"]) {
-  errors.push("commercial routes must not be declared until they are implemented");
+if (!spec.paths?.["/v1/jobs"]?.get) {
+  errors.push("GET /v1/jobs is required");
+}
+if (!spec.paths?.["/v1/jobs"]?.post) {
+  errors.push("POST /v1/jobs is required");
+}
+if (!spec.paths?.["/v1/jobs/{jobId}"]?.get) {
+  errors.push("GET /v1/jobs/{jobId} is required");
+}
+if (spec.paths?.["/v1/drafts"]) {
+  errors.push("draft routes must not be declared until they are implemented");
 }
 
 if (errors.length > 0) {
@@ -31,4 +40,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log("OpenAPI 3.1 owner setup contract is valid.");
+console.log("OpenAPI 3.1 owner jobs contract is valid.");
