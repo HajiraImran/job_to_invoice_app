@@ -1,19 +1,11 @@
 import { z } from "zod";
+import { PLACEHOLDER_PATTERN } from "./placeholders.ts";
+import {
+  resolveDocumentsStorage,
+  type DocumentsStorageConfig,
+} from "./storage.ts";
 
-export const PLACEHOLDER_PATTERN = new RegExp(
-  [
-    "changeme",
-    "placeholder",
-    "your-",
-    "replace-me",
-    "todo\\b",
-    "xxx",
-    "demo-key",
-    "example\\.com",
-    ["sk", "live", "dummy"].join("_"),
-  ].join("|"),
-  "i",
-);
+export { PLACEHOLDER_PATTERN };
 
 const APP_ENVS = ["development", "staging", "production"] as const;
 export type AppEnvName = (typeof APP_ENVS)[number];
@@ -32,6 +24,29 @@ function secret(name: string) {
 function httpsUrl(name: string) {
   return secret(name).refine((value) => value.startsWith("https://"), `${name} must be https`);
 }
+
+const optionalStorageShape = {
+  STORAGE_ENDPOINT: z.string().optional(),
+  STORAGE_DOWNLOAD_ENDPOINT: z.string().optional(),
+  STORAGE_REGION: z.string().optional(),
+  STORAGE_DOCUMENTS_BUCKET: z.string().optional(),
+  STORAGE_FORCE_PATH_STYLE: z.string().optional(),
+  STORAGE_WORKER_ACCESS_KEY_ID: z.string().optional(),
+  STORAGE_WORKER_SECRET_ACCESS_KEY: z.string().optional(),
+  STORAGE_API_ACCESS_KEY_ID: z.string().optional(),
+  STORAGE_API_SECRET_ACCESS_KEY: z.string().optional(),
+};
+
+const requiredStorageShape = {
+  STORAGE_ENDPOINT: httpsUrl("STORAGE_ENDPOINT"),
+  STORAGE_DOWNLOAD_ENDPOINT: z.string().optional(),
+  STORAGE_REGION: secret("STORAGE_REGION"),
+  STORAGE_FORCE_PATH_STYLE: z.enum(["true", "false"]),
+  STORAGE_WORKER_ACCESS_KEY_ID: secret("STORAGE_WORKER_ACCESS_KEY_ID"),
+  STORAGE_WORKER_SECRET_ACCESS_KEY: secret("STORAGE_WORKER_SECRET_ACCESS_KEY"),
+  STORAGE_API_ACCESS_KEY_ID: secret("STORAGE_API_ACCESS_KEY_ID"),
+  STORAGE_API_SECRET_ACCESS_KEY: secret("STORAGE_API_SECRET_ACCESS_KEY"),
+};
 
 const publicShape = {
   APP_ENV: z.enum(APP_ENVS),
@@ -60,12 +75,7 @@ const developmentSchema = z.object({
   AUTH_JWKS_JSON: z.string().optional(),
   DATABASE_URL_API: z.string().optional(),
   DATABASE_URL_WORKER: z.string().optional(),
-  R2_ACCOUNT_ID: z.string().optional(),
-  R2_DOCUMENTS_BUCKET: z.string().optional(),
-  R2_WORKER_ACCESS_KEY_ID: z.string().optional(),
-  R2_WORKER_SECRET_ACCESS_KEY: z.string().optional(),
-  R2_API_ACCESS_KEY_ID: z.string().optional(),
-  R2_API_SECRET_ACCESS_KEY: z.string().optional(),
+  ...optionalStorageShape,
 });
 
 const stagingSchema = z.object({
@@ -81,12 +91,8 @@ const stagingSchema = z.object({
   DATABASE_URL_WORKER: secret("DATABASE_URL_WORKER"),
   DATABASE_URL_PURGE: secret("DATABASE_URL_PURGE"),
   DATABASE_URL_MIGRATIONS: secret("DATABASE_URL_MIGRATIONS"),
-  R2_ACCOUNT_ID: secret("R2_ACCOUNT_ID"),
-  R2_DOCUMENTS_BUCKET: secret("R2_DOCUMENTS_BUCKET"),
-  R2_WORKER_ACCESS_KEY_ID: secret("R2_WORKER_ACCESS_KEY_ID"),
-  R2_WORKER_SECRET_ACCESS_KEY: secret("R2_WORKER_SECRET_ACCESS_KEY"),
-  R2_API_ACCESS_KEY_ID: secret("R2_API_ACCESS_KEY_ID"),
-  R2_API_SECRET_ACCESS_KEY: secret("R2_API_SECRET_ACCESS_KEY"),
+  ...requiredStorageShape,
+  STORAGE_DOCUMENTS_BUCKET: secret("STORAGE_DOCUMENTS_BUCKET"),
 });
 
 const productionSchema = z.object({
@@ -105,12 +111,8 @@ const productionSchema = z.object({
   DATABASE_URL_WORKER: secret("DATABASE_URL_WORKER"),
   DATABASE_URL_PURGE: secret("DATABASE_URL_PURGE"),
   DATABASE_URL_MIGRATIONS: secret("DATABASE_URL_MIGRATIONS"),
-  R2_ACCOUNT_ID: secret("R2_ACCOUNT_ID"),
-  R2_DOCUMENTS_BUCKET: z.string().optional(),
-  R2_WORKER_ACCESS_KEY_ID: secret("R2_WORKER_ACCESS_KEY_ID"),
-  R2_WORKER_SECRET_ACCESS_KEY: secret("R2_WORKER_SECRET_ACCESS_KEY"),
-  R2_API_ACCESS_KEY_ID: secret("R2_API_ACCESS_KEY_ID"),
-  R2_API_SECRET_ACCESS_KEY: secret("R2_API_SECRET_ACCESS_KEY"),
+  ...requiredStorageShape,
+  STORAGE_DOCUMENTS_BUCKET: z.string().optional(),
   APPROVAL_TOKEN_HASH_KEY: secret("APPROVAL_TOKEN_HASH_KEY"),
   OTP_HASH_KEY: secret("OTP_HASH_KEY"),
   APPROVAL_EVIDENCE_ENCRYPTION_KEY: secret("APPROVAL_EVIDENCE_ENCRYPTION_KEY"),
@@ -133,22 +135,13 @@ const productionSchema = z.object({
   LIMITS_VERSION: secret("LIMITS_VERSION"),
 });
 
-export type LoadedEnv = z.infer<typeof developmentSchema> | z.infer<typeof stagingSchema> | z.infer<
-  typeof productionSchema
->;
-
-export function r2DocumentsBucket(appEnv: string, override?: string): string {
-  if (override && override.trim()) {
-    return override.trim();
-  }
-  if (appEnv === "production") {
-    return "job-to-invoice-documents-production";
-  }
-  if (appEnv === "development") {
-    return "job-to-invoice-documents-development";
-  }
-  throw new Error("R2_DOCUMENTS_BUCKET is required");
-}
+export type LoadedEnv = (
+  | z.infer<typeof developmentSchema>
+  | z.infer<typeof stagingSchema>
+  | z.infer<typeof productionSchema>
+) & {
+  documentsStorage?: DocumentsStorageConfig;
+};
 
 function schemaFor(appEnv: string | undefined) {
   if (appEnv === "production") {
@@ -169,5 +162,14 @@ export function loadEnv(source: NodeJS.Dict<string> = process.env): LoadedEnv {
       .join("; ");
     throw new Error(`Invalid ${appEnv} configuration (QA68): ${details}`);
   }
-  return parsed.data;
+  try {
+    const documentsStorage = resolveDocumentsStorage({
+      ...parsed.data,
+      APP_ENV: parsed.data.APP_ENV,
+    });
+    return { ...parsed.data, documentsStorage };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid storage configuration";
+    throw new Error(`Invalid ${appEnv} configuration (QA68): ${message}`, { cause: error });
+  }
 }

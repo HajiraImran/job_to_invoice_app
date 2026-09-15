@@ -25,7 +25,8 @@ Managed services (same US region):
 | --- | --- | --- |
 | Supabase Auth | Owner email OTP only | ACC01, ARC02 |
 | Supabase PostgreSQL | Private commercial schema | ARC02, DB01–DB05 |
-| Cloudflare R2 | Private original-document PDFs; API-minted 5-minute presigned GET only | DOC05, D-016 |
+| Cloudflare R2 | Production/staging private original-document PDFs; API-minted 5-minute presigned GET only. Development may use private MinIO on the same S3 API. | DOC05, D-016 |
+| MinIO | Development-only private S3-compatible PDF bucket for local/LAN testing | DOC05, D-016 |
 | Render (default) | API, portal, admin, worker (Playwright/Chromium Docker), purge job | ARC01, D-016 |
 | Resend | Transactional email | NTF02, EMAIL01–11 |
 | RevenueCat + StoreKit | Apple subscriptions | SUB01–SUB08 |
@@ -59,14 +60,15 @@ Owner iPhone                  Customer browser              Staff browser
                          |
           +--------------+--------------+
           v              v              v
-       Resend      R2 original PDF     RevenueCat server API
+       Resend      S3 original PDF     RevenueCat server API
+                        (MinIO dev / R2 prod)
 ```
 
 Rules:
 
 - Mobile and public browsers call the domain API only. They do not write commercial records through Supabase REST (ARC02).
 - Supabase public Auth endpoints are allowed for owner authentication only.
-- Clients must not use `supabase-js` (or any SDK) for Storage, Realtime, or Edge Functions. No user JWT against Storage REST or R2. Owner PDF downloads use domain-API-minted 5-minute R2 presigned GET URLs only (DOC05, D-016).
+- Clients must not use `supabase-js` (or any SDK) for Storage, Realtime, or Edge Functions. No user JWT against Storage REST, R2, or MinIO. Owner PDF downloads use domain-API-minted 5-minute S3-compatible presigned GET URLs only (DOC05, D-016). Production URLs are Cloudflare R2. Development URLs may be private MinIO, signed against `STORAGE_DOWNLOAD_ENDPOINT` when a physical device cannot reach localhost.
 - Commercial tables live in a private schema with client grants revoked.
 - Supabase `service_role` is forbidden in `apps/api` and `apps/worker`. It is not a runtime connection string.
 - Portal cookies are not accepted as owner authentication (APR01A).

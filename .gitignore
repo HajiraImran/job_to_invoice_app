@@ -35,6 +35,8 @@ supabase/.env
 *.sqlite
 .local-pg
 
+var/minio/
+
 .DS_Store
 Thumbs.db
 .vscode

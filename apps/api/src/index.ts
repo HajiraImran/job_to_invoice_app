@@ -1,21 +1,15 @@
-import { loadEnv, r2DocumentsBucket } from "@job-to-invoice/config";
+import { loadEnv } from "@job-to-invoice/config";
 import { Pool } from "pg";
 import { buildApp } from "./app.ts";
 import { jwtVerifierFromEnv } from "./jwt.ts";
-import { createR2DownloadStore } from "./r2.ts";
+import { createDocumentsDownloadStore } from "./documents-store.ts";
 
 const env = loadEnv();
 const databaseUrl = "DATABASE_URL_API" in env ? env.DATABASE_URL_API : undefined;
 const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 10 }) : undefined;
-const documentsStore =
-  env.R2_ACCOUNT_ID && env.R2_API_ACCESS_KEY_ID && env.R2_API_SECRET_ACCESS_KEY
-    ? createR2DownloadStore({
-        accountId: env.R2_ACCOUNT_ID,
-        bucket: r2DocumentsBucket(env.APP_ENV, env.R2_DOCUMENTS_BUCKET),
-        accessKeyId: env.R2_API_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_API_SECRET_ACCESS_KEY,
-      })
-    : undefined;
+const documentsStore = env.documentsStorage
+  ? createDocumentsDownloadStore(env.documentsStorage)
+  : undefined;
 const app = buildApp({
   env,
   pool,

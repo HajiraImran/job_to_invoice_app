@@ -7,7 +7,7 @@ import {
 } from "@job-to-invoice/domain";
 import type { Pool } from "pg";
 import { withWorkerRole } from "./db.ts";
-import type { DocumentsObjectStore } from "./r2.ts";
+import type { DocumentsObjectStore } from "./documents-store.ts";
 
 export type PdfRenderer = (document: QuotePdfDocument) => Promise<Buffer>;
 

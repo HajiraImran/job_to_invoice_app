@@ -35,12 +35,55 @@ That command is `expo start --go`. It does not replace `pnpm --filter @job-to-in
 - `AUTH_AUDIENCE` — `authenticated`
 - `DATABASE_URL_API` — login role that can `SET ROLE api_app`. Never `service_role`.
 - `DATABASE_URL_MIGRATIONS` — local embedded Postgres, or for hosted apply from an IPv4-only network the **session** pooler URL (`postgres://postgres.<linked-ref>:<percent-encoded-password>@aws-0-<region>.pooler.supabase.com:5432/postgres`). Username must match `supabase/.temp/project-ref`. Port `5432` must be explicit. Never the IPv6-only `db.<ref>.supabase.co` host. Never port `6543`. Never query parameters such as `pgbouncer=true`. Never `service_role` (D-012). Reserved password characters must be percent-encoded. Do not put this URL in repository files.
-- `R2_ACCOUNT_ID` — Cloudflare account id for the R2 S3 endpoint (D-016). Server only.
-- `R2_DOCUMENTS_BUCKET` — required in staging; development defaults to `job-to-invoice-documents-development`; production defaults to `job-to-invoice-documents-production`. Never a public bucket.
-- `R2_WORKER_ACCESS_KEY_ID` / `R2_WORKER_SECRET_ACCESS_KEY` — bucket-scoped Object Read & Write. Worker PutObject only. Never `EXPO_PUBLIC_*`.
-- `R2_API_ACCESS_KEY_ID` / `R2_API_SECRET_ACCESS_KEY` — bucket-scoped Object Read-only. API 5-minute presigned GET only. Never `EXPO_PUBLIC_*`.
+- `STORAGE_ENDPOINT` — S3-compatible API endpoint used by the worker (D-016). Server only. Production/staging must be HTTPS on a public host. Development may use `http://127.0.0.1:9000` or another localhost/RFC1918 HTTP URL for private MinIO.
+- `STORAGE_DOWNLOAD_ENDPOINT` — optional externally reachable endpoint used only when minting 5-minute presigned GET URLs. For Expo Go on a physical device, set this to the LAN URL of MinIO, not localhost. Production/staging must be HTTPS and must not use a local or RFC1918 host.
+- `STORAGE_REGION` — S3 region. Use `auto` for Cloudflare R2. Use `us-east-1` for local MinIO unless your MinIO process requires another region.
+- `STORAGE_DOCUMENTS_BUCKET` — required in staging; development defaults to `job-to-invoice-documents-development`; production defaults to `job-to-invoice-documents-production`. Never a public bucket.
+- `STORAGE_FORCE_PATH_STYLE` — `true` for MinIO; `false` for Cloudflare R2.
+- `STORAGE_WORKER_ACCESS_KEY_ID` / `STORAGE_WORKER_SECRET_ACCESS_KEY` — bucket-scoped Object Read & Write. Worker PutObject only. Never `EXPO_PUBLIC_*`. Must differ from the API pair.
+- `STORAGE_API_ACCESS_KEY_ID` / `STORAGE_API_SECRET_ACCESS_KEY` — bucket-scoped Object Read-only. API 5-minute presigned GET only. Never `EXPO_PUBLIC_*`.
 
-Do not use `STORAGE_SERVICE_KEY` or Supabase `service_role` for document PDFs.
+Do not use `STORAGE_SERVICE_KEY` or Supabase `service_role` for document PDFs. Production remains private Cloudflare R2. Development may use private MinIO on the same S3 API.
+
+Local MinIO is development-only. Do not create repository env files. Supply credentials from the launching process with `Read-Host -AsSecureString`. Do not print them, do not write them to disk, and do not use `minioadmin` or any default password. MinIO root password must be at least eight characters.
+
+```powershell
+function Set-ProcessSecret([string]$Name) {
+  $secure = Read-Host -Prompt $Name -AsSecureString
+  $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+  try {
+    Set-Item -Path "Env:$Name" -Value ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr))
+  } finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) | Out-Null
+  }
+}
+
+Set-ProcessSecret MINIO_ROOT_USER
+Set-ProcessSecret MINIO_ROOT_PASSWORD
+Set-ProcessSecret STORAGE_WORKER_ACCESS_KEY_ID
+Set-ProcessSecret STORAGE_WORKER_SECRET_ACCESS_KEY
+Set-ProcessSecret STORAGE_API_ACCESS_KEY_ID
+Set-ProcessSecret STORAGE_API_SECRET_ACCESS_KEY
+
+$env:APP_ENV = "development"
+$env:STORAGE_ENDPOINT = "http://127.0.0.1:9000"
+$env:STORAGE_REGION = "us-east-1"
+$env:STORAGE_DOCUMENTS_BUCKET = "job-to-invoice-documents-development"
+$env:STORAGE_FORCE_PATH_STYLE = "true"
+# Physical iPhone: set the LAN address of this machine, not localhost.
+$env:STORAGE_DOWNLOAD_ENDPOINT = "http://<lan-ip>:9000"
+
+docker compose -f docker-compose.minio.yml up -d
+pnpm --filter @job-to-invoice/api dev
+pnpm --filter @job-to-invoice/worker dev
+pnpm --filter @job-to-invoice/mobile dev:go
+```
+
+`EXPO_PUBLIC_API_BASE_URL` must be the same LAN host the phone can reach. Do not put storage keys in `EXPO_PUBLIC_*`. Stop MinIO with `docker compose -f docker-compose.minio.yml down`. Unset the process secrets when finished:
+
+```powershell
+Remove-Item Env:MINIO_ROOT_USER, Env:MINIO_ROOT_PASSWORD, Env:STORAGE_WORKER_ACCESS_KEY_ID, Env:STORAGE_WORKER_SECRET_ACCESS_KEY, Env:STORAGE_API_ACCESS_KEY_ID, Env:STORAGE_API_SECRET_ACCESS_KEY, Env:STORAGE_ENDPOINT, Env:STORAGE_DOWNLOAD_ENDPOINT, Env:STORAGE_REGION, Env:STORAGE_DOCUMENTS_BUCKET, Env:STORAGE_FORCE_PATH_STYLE
+```
 
 Hosted apply from PowerShell, process environment only:
 

@@ -293,7 +293,7 @@ After a document is issued, reject UPDATE/DELETE of commercial payload on:
 - `document_lines` (all payload columns)
 - `scope_entries` (append-only; no UPDATE/DELETE)
 - `document_assets` (append-only after issue)
-- `artifacts` rows with `type=original_pdf` (bytes, sha256, object_key). Object key `workspaces/{workspace_id}/documents/{document_id}/revisions/{revision}/original/{artifact_id}.pdf` (D-016). Status/statement PDFs are **new** artifact rows, never overwrites.
+- `artifacts` rows with `type=original_pdf` (bytes, sha256, object_key). Object key `workspaces/{workspace_id}/documents/{document_id}/revisions/{revision}/original/{artifact_id}.pdf` (D-016). PDF bytes live in private S3-compatible object storage (MinIO in development, Cloudflare R2 in production), not in PostgreSQL. Status/statement PDFs are **new** artifact rows, never overwrites.
 
 Also:
 

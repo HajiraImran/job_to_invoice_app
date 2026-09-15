@@ -156,7 +156,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | DOC02 | Status copies distinct; original bytes preserved | apps/worker | S26 S16 | artifacts | artifacts | — | QA30 | INV03 | PENDING | |
 | DOC03 | JPEG/PNG/HEIC; 10 imgs 10MB; strip EXIF; no video | apps/mobile apps/worker | S13 | assets | assets | — | QA52 | — | PENDING | |
 | DOC04 | Camera permission only on Take photo; internal never in PDF | apps/mobile | S13 | — | assets.visibility | — | DOC04 | — | PENDING | |
-| DOC05 | Random keys; private buckets; 5-min signed URLs | apps/api | download | R2 | artifacts | apps/api/src/quotes.test.ts presigned GET; apps/worker/src/keys.test.ts | QA53 | D-016 | IMPLEMENTED | Private R2 object keys and 5-minute API presign. Hosted R2 not provisioned. Not hosted-verified |
+| DOC05 | Random keys; private buckets; 5-min signed URLs | apps/api | download | S3 | artifacts | apps/api/src/quotes.test.ts presigned GET; apps/api/src/documents-store.test.ts; apps/worker/src/keys.test.ts; packages/config/src/storage.test.ts | QA53 | D-016 | IMPLEMENTED | Private S3-compatible object keys and 5-minute API presign. Production R2; development MinIO. Hosted R2 not provisioned. Not hosted-verified |
 | EXP01 | Authenticated ZIP; formula-safe CSV; cents columns | apps/worker | S24 | exports | exports | export_completed | QA55 QA56 | ACC02A | PENDING | |
 | EXP02 | Consistent cutoff; 24h link; 7d delete; 2/day | apps/worker | S24 | exports | exports | — | QA56 | EMAIL10 | PENDING | |
 | NTF01 | Email + in-app + share sheet; no SMS/push/marketing | apps/worker | S12 | Resend | delivery_attempts | request_delivery_result | NTF01 | — | PENDING | Push deferred |
