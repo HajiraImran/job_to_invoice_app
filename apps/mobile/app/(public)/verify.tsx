@@ -9,16 +9,17 @@ import { colors, space, type } from "../../src/theme.ts";
 export default function VerifyScreen() {
   const auth = useAuth();
   const email = auth.snapshot.emailDisplay ?? auth.emailDisplay;
-  const disabled = !canSubmitCode(auth.code, auth.snapshot.verifyFailures ?? 0, auth.submitting);
+  const bootstrapFailed = auth.snapshot.status === "bootstrap_error";
+  const disabled = bootstrapFailed || !canSubmitCode(auth.code, auth.snapshot.verifyFailures ?? 0, auth.submitting);
   const autoSubmitted = useRef("");
 
   useEffect(() => {
-    if (disabled || autoSubmitted.current === auth.code) {
+    if (bootstrapFailed || disabled || autoSubmitted.current === auth.code) {
       return;
     }
     autoSubmitted.current = auth.code;
     void auth.verifyCode();
-  }, [auth, disabled]);
+  }, [auth, bootstrapFailed, disabled]);
 
   return (
     <View style={styles.screen}>
@@ -26,48 +27,69 @@ export default function VerifyScreen() {
         {copy.verifyTitle}
       </Text>
       <Text style={styles.body}>
-        {copy.codeSent} {maskEmail(email)}
+        {copy.codeSent} {maskEmail(email ?? "")}
       </Text>
-      <Text nativeID="code-label" style={styles.label}>
-        {copy.codeLabel}
-      </Text>
-      <TextInput
-        accessibilityLabel={copy.codeLabel}
-        autoComplete="one-time-code"
-        keyboardType="number-pad"
-        maxLength={6}
-        onChangeText={(value) => auth.setCode(value.replace(/\D/g, "").slice(0, 6))}
-        style={styles.input}
-        textContentType="oneTimeCode"
-        value={auth.code}
-      />
-      {auth.error ? (
-        <Text accessibilityLiveRegion="assertive" style={styles.error}>
-          {auth.error}
-        </Text>
-      ) : null}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ busy: auth.submitting, disabled }}
-        disabled={disabled}
-        onPress={() => {
-          void auth.verifyCode();
-        }}
-        style={[styles.button, disabled ? styles.buttonDisabled : null]}
-      >
-        <Text style={styles.buttonLabel}>{auth.submitting ? copy.verifying : copy.verify}</Text>
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        disabled={auth.resendSeconds > 0 || auth.submitting}
-        onPress={() => {
-          void auth.sendCode();
-        }}
-      >
-        <Text style={styles.link}>
-          {auth.resendSeconds > 0 ? `Resend in ${auth.resendSeconds}s` : copy.resend}
-        </Text>
-      </Pressable>
+      {bootstrapFailed ? (
+        <>
+          <Text accessibilityLiveRegion="assertive" style={styles.error}>
+            {auth.error ?? copy.bootstrapUnavailable}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ busy: auth.submitting }}
+            disabled={auth.submitting}
+            onPress={() => {
+              void auth.refreshBootstrap();
+            }}
+            style={[styles.button, auth.submitting ? styles.buttonDisabled : null]}
+          >
+            <Text style={styles.buttonLabel}>{auth.submitting ? copy.verifying : copy.retry}</Text>
+          </Pressable>
+        </>
+      ) : (
+        <>
+          <Text nativeID="code-label" style={styles.label}>
+            {copy.codeLabel}
+          </Text>
+          <TextInput
+            accessibilityLabel={copy.codeLabel}
+            autoComplete="one-time-code"
+            keyboardType="number-pad"
+            maxLength={6}
+            onChangeText={(value) => auth.setCode(value.replace(/\D/g, "").slice(0, 6))}
+            style={styles.input}
+            textContentType="oneTimeCode"
+            value={auth.code}
+          />
+          {auth.error ? (
+            <Text accessibilityLiveRegion="assertive" style={styles.error}>
+              {auth.error}
+            </Text>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ busy: auth.submitting, disabled }}
+            disabled={disabled}
+            onPress={() => {
+              void auth.verifyCode();
+            }}
+            style={[styles.button, disabled ? styles.buttonDisabled : null]}
+          >
+            <Text style={styles.buttonLabel}>{auth.submitting ? copy.verifying : copy.verify}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={auth.resendSeconds > 0 || auth.submitting}
+            onPress={() => {
+              void auth.sendCode();
+            }}
+          >
+            <Text style={styles.link}>
+              {auth.resendSeconds > 0 ? `Resend in ${auth.resendSeconds}s` : copy.resend}
+            </Text>
+          </Pressable>
+        </>
+      )}
       <Pressable accessibilityRole="button" onPress={auth.changeEmail}>
         <Text style={styles.link}>{copy.changeEmail}</Text>
       </Pressable>

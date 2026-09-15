@@ -156,6 +156,7 @@ describe("onboarding route decision", () => {
     expect(routeGroupFor({ status: "authenticated", setupCompleted: true })).toBe("app");
     expect(routeGroupFor({ status: "offline_cached", setupCompleted: false })).toBe("onboarding");
     expect(routeGroupFor({ status: "offline_cached", setupCompleted: true })).toBe("app");
+    expect(routeGroupFor({ status: "bootstrap_error" })).toBe("verify");
   });
 });
 

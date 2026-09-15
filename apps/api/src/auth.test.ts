@@ -222,4 +222,44 @@ describe("owner authentication API", () => {
     });
     expect(serverOnly.statusCode).toBe(422);
   });
+
+  it("returns 503 when provisioning throws after a valid JWT", async () => {
+    const token = await sign({ sub: AUTH_A, email: "a@example.com" });
+    const env = loadEnv({ APP_ENV: "development", PORTAL_ORIGIN: "http://localhost:3000" });
+    const failing = buildApp({
+      env,
+      pool: {
+        connect: async () => {
+          throw new Error("could not SET ROLE");
+        },
+      } as unknown as Pool,
+      verifyJwt: createJwtVerifier({
+        issuer: fixture.issuer,
+        audience: fixture.audience,
+        jwks: fixture.jwks,
+      }),
+    });
+    const response = await failing.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe("UNAVAILABLE");
+    const body = JSON.stringify(response.json());
+    expect(body).not.toMatch(/SET ROLE/i);
+    expect(body).not.toContain(token);
+    expect(body).not.toContain("a@example.com");
+    await failing.close();
+  });
+
+  it("keeps missing and invalid JWTs as 401", async () => {
+    const missing = await me();
+    expect(missing.statusCode).toBe(401);
+    expect(missing.json().error.code).toBe("AUTHENTICATION_REQUIRED");
+    const invalid = await me("not-a-jwt");
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.json().error.code).toBe("AUTHENTICATION_FAILED");
+    expect(JSON.stringify(invalid.json())).not.toContain("not-a-jwt");
+  });
 });

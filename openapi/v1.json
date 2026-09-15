@@ -22,7 +22,8 @@
         "security": [{ "bearerAuth": [] }],
         "responses": {
           "200": { "description": "Verified identity, workspace version, and setup state" },
-          "401": { "description": "Missing or invalid access token" }
+          "401": { "description": "Missing or invalid access token" },
+          "503": { "description": "Database, role, or provisioning unavailable" }
         }
       }
     },

@@ -63,6 +63,7 @@ describe("auth state", () => {
   it("routes unauthenticated users to public screens and signed-in users by setup state", () => {
     expect(routeGroupFor({ status: "signed_out" })).toBe("public");
     expect(routeGroupFor({ status: "awaiting_code" })).toBe("verify");
+    expect(routeGroupFor({ status: "bootstrap_error" })).toBe("verify");
     expect(routeGroupFor({ status: "authenticated", setupCompleted: false })).toBe("onboarding");
     expect(routeGroupFor({ status: "authenticated", setupCompleted: true })).toBe("app");
     expect(routeGroupFor({ status: "restoring" })).toBe("splash");

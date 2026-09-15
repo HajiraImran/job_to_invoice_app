@@ -20,7 +20,9 @@ function Guard() {
     const parts = [...segments];
     const root = parts[0];
     const page = parts[1];
-    if (group === "public" && root !== "(public)") {
+    if (group === "public" && page === "verify") {
+      router.replace("/(public)/sign-in");
+    } else if (group === "public" && root !== "(public)") {
       router.replace("/(public)/welcome");
     } else if (group === "verify" && page !== "verify") {
       router.replace("/(public)/verify");
@@ -31,16 +33,23 @@ function Guard() {
     }
   }, [auth.snapshot.status, group, router, segments]);
 
-  if (auth.snapshot.status === "restoring" || auth.snapshot.status === "authenticating") {
-    return (
-      <View style={styles.splash} accessibilityLiveRegion="polite">
-        <ActivityIndicator color={colors.navy} />
-        <Text style={styles.splashText}>{copy.restoring}</Text>
-      </View>
-    );
-  }
+  const overlay = auth.snapshot.status === "restoring" || auth.snapshot.status === "authenticating";
 
-  return <Slot />;
+  return (
+    <View style={styles.root}>
+      <Slot />
+      {overlay ? (
+        <View
+          accessibilityLiveRegion="polite"
+          pointerEvents="auto"
+          style={styles.overlay}
+        >
+          <ActivityIndicator color={colors.navy} />
+          <Text style={styles.splashText}>{copy.restoring}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
 }
 
 function ConfigurationError({ names }: { names: string[] }) {
@@ -66,12 +75,21 @@ export default function RootLayout() {
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   splash: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: colors.background,
     gap: 12,
+  },
+  overlay: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: colors.background,
+    gap: 12,
+    zIndex: 2,
   },
   splashText: { color: colors.navy, fontSize: type.body, fontWeight: "600" },
   configBody: {

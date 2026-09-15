@@ -79,5 +79,7 @@ export const copy = {
   restoring: "Checking your session",
   offlineCached: "You're offline. Showing saved account status. Publishing is unavailable.",
   accessExpired: "Sign in again to refresh your account.",
+  bootstrapUnavailable: "Sign-in succeeded but account setup could not be loaded. Try again.",
+  bootstrapSession: "Could not verify your session. Try again.",
   retry: "Try again",
 } as const;

@@ -8,6 +8,7 @@ export type AuthStatus =
   | "signed_out"
   | "awaiting_code"
   | "authenticating"
+  | "bootstrap_error"
   | "authenticated"
   | "offline_cached"
   | "access_expired";
@@ -54,6 +55,7 @@ export function routeGroupFor(snapshot: AuthSnapshot): RouteGroup {
     case "restoring":
       return "splash";
     case "awaiting_code":
+    case "bootstrap_error":
       return "verify";
     case "authenticating":
       return "splash";

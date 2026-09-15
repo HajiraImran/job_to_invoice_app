@@ -6,11 +6,14 @@ import { ownerRequest, type OwnerBootstrap, type OwnerRequestOptions } from "../
 import { publicConfig } from "../config.ts";
 import { discardLocalDrafts, getDraftSyncStatus } from "../drafts/sync.ts";
 import { mapAuthError } from "../auth/errors.ts";
+import { copy } from "../i18n/en.ts";
 import {
-  awaitingCodeSnapshot,
-  snapshotAfterRefreshFailure,
-  snapshotFromBootstrap,
-} from "./logic.ts";
+  bootstrapErrorCopy,
+  classifyOwnerMeError,
+  fetchOwnerMeWithOneRefresh,
+  snapshotAfterBootstrapFailure,
+} from "./bootstrap.ts";
+import { awaitingCodeSnapshot, snapshotFromBootstrap } from "./logic.ts";
 import { createOwnerAuthClient, secureKv } from "./supabase.ts";
 import { BOOTSTRAP_KEY, LAST_AUTH_KEY, clearAuthMaterial } from "./storage.ts";
 
@@ -56,47 +59,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await secureKv.setItem(BOOTSTRAP_KEY, JSON.stringify(next));
     await secureKv.setItem(LAST_AUTH_KEY, authenticatedAt);
     setSnapshot(snapshotFromBootstrap(next, authenticatedAt));
+    setError(undefined);
   }, []);
 
   const loadMe = useCallback(
-    async (session: Session, allowRefresh: boolean) => {
-      const first = await ownerRequest<OwnerBootstrap>({
-        apiBaseUrl: config.apiBaseUrl,
-        path: "/v1/me",
+    async (session: Session, emailHint?: string) => {
+      const result = await fetchOwnerMeWithOneRefresh({
         accessToken: session.access_token,
-      });
-      if (first.ok) {
-        await persistBootstrap(first.data, new Date().toISOString());
-        return;
-      }
-      if (first.error.status === 401 && allowRefresh && client) {
-        const refreshed = await client.auth.refreshSession();
-        const next = refreshed.data.session;
-        if (next) {
-          const retry = await ownerRequest<OwnerBootstrap>({
+        fetchMe: (accessToken) =>
+          ownerRequest<OwnerBootstrap>({
             apiBaseUrl: config.apiBaseUrl,
             path: "/v1/me",
-            accessToken: next.access_token,
-          });
-          if (retry.ok) {
-            await persistBootstrap(retry.data, new Date().toISOString());
-            return;
+            accessToken,
+          }),
+        refresh: async () => {
+          if (!client) {
+            return undefined;
           }
-        }
+          const refreshed = await client.auth.refreshSession();
+          return refreshed.data.session?.access_token;
+        },
+      });
+      if (result.ok) {
+        await persistBootstrap(result.data, new Date().toISOString());
+        return;
       }
       const last = (await secureKv.getItem(LAST_AUTH_KEY)) ?? undefined;
       const cached = await secureKv.getItem(BOOTSTRAP_KEY);
-      const nextSnap = snapshotAfterRefreshFailure(last, Date.now());
+      const kind = classifyOwnerMeError(result.error);
+      const nextSnap = snapshotAfterBootstrapFailure({
+        kind,
+        emailDisplay: emailHint?.trim() || undefined,
+        lastAuthenticatedAt: last,
+        nowMs: Date.now(),
+        hasCachedBootstrap: Boolean(cached),
+      });
       if (nextSnap.status === "offline_cached" && cached) {
-        setBootstrap(JSON.parse(cached) as OwnerBootstrap);
-        setSnapshot({
-          ...nextSnap,
-          setupCompleted: (JSON.parse(cached) as OwnerBootstrap).workspace.setup_completed,
-          emailDisplay: (JSON.parse(cached) as OwnerBootstrap).user.display_email,
-        });
-        return;
+        try {
+          const parsed = JSON.parse(cached) as OwnerBootstrap;
+          setBootstrap(parsed);
+          setSnapshot({
+            ...nextSnap,
+            setupCompleted: parsed.workspace.setup_completed,
+            emailDisplay: parsed.user.display_email,
+          });
+          return;
+        } catch {
+          /* fall through to bootstrap_error */
+        }
       }
-      setSnapshot({ status: nextSnap.status === "access_expired" ? "access_expired" : "signed_out" });
+      setSnapshot({
+        ...nextSnap,
+        status: nextSnap.status === "access_expired" ? "access_expired" : "bootstrap_error",
+        emailDisplay: nextSnap.emailDisplay ?? (emailHint?.trim() || undefined),
+      });
+      if (nextSnap.status !== "access_expired") {
+        setError(copy[bootstrapErrorCopy(kind)]);
+      }
     },
     [client, config.apiBaseUrl, persistBootstrap],
   );
@@ -115,7 +134,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (existing.data.session) {
-        await loadMe(existing.data.session, true);
+        try {
+          await loadMe(existing.data.session, existing.data.session.user.email);
+        } catch {
+          if (!cancelled) {
+            setSnapshot({
+              status: "bootstrap_error",
+              emailDisplay: existing.data.session.user.email,
+            });
+            setError(copy.bootstrapUnavailable);
+          }
+        }
       } else {
         setSnapshot({ status: "signed_out" });
       }
@@ -210,7 +239,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       setCode("");
-      await loadMe(data.session, false);
+      try {
+        await loadMe(data.session, emailDisplay.trim());
+      } catch {
+        setSnapshot({
+          status: "bootstrap_error",
+          emailDisplay: emailDisplay.trim(),
+        });
+        setError(copy.bootstrapUnavailable);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -244,9 +281,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!client) {
       return;
     }
-    const existing = await client.auth.getSession();
-    if (existing.data.session) {
-      await loadMe(existing.data.session, true);
+    setSubmitting(true);
+    setError(undefined);
+    setSnapshot((current) => ({ ...current, status: "authenticating", emailDisplay: current.emailDisplay }));
+    try {
+      const existing = await client.auth.getSession();
+      if (!existing.data.session) {
+        setSnapshot((current) => ({
+          status: "bootstrap_error",
+          emailDisplay: current.emailDisplay,
+        }));
+        setError(copy.bootstrapSession);
+        return;
+      }
+      await loadMe(existing.data.session, existing.data.session.user.email);
+    } catch {
+      setSnapshot((current) => ({
+        status: "bootstrap_error",
+        emailDisplay: current.emailDisplay,
+      }));
+      setError(copy.bootstrapUnavailable);
+    } finally {
+      setSubmitting(false);
     }
   }, [client, loadMe]);
 

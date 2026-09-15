@@ -125,7 +125,7 @@ export function buildApp(deps: AppDeps) {
         return result.rows[0];
       });
       if (!row) {
-        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+        return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
       }
       if (row.account_status === "deleted" || row.account_status === "deleting") {
         return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
@@ -149,7 +149,7 @@ export function buildApp(deps: AppDeps) {
         analytics_alias_id: row.analytics_alias_id,
       });
     } catch {
-      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
     }
   });
 
