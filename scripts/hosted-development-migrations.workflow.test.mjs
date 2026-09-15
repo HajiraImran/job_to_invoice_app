@@ -55,7 +55,12 @@ test("hosted development migration workflow is dispatch-only and statically gate
 
   assert.match(confirm, /runs-on: ubuntu-latest/);
   assert.equal(confirm.includes(confirmationExpr), true);
-  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0002_0004" \]/);
+  assert.match(
+    yaml,
+    /Type APPLY_0005 to apply pending hosted development migration 0005_customers_jobs\.sql/,
+  );
+  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0005" \]/);
+  assert.doesNotMatch(yaml, /APPLY_0002_0004/);
   assert.doesNotMatch(confirm, /secrets\./);
   assert.doesNotMatch(confirm, /DATABASE_URL_MIGRATIONS/);
   assert.doesNotMatch(confirm, /environment:/);
@@ -83,8 +88,12 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.ok(pushIndex < verifyIndex);
   assert.equal([...apply.matchAll(/pnpm hosted:db-push/g)].length, 1);
   assert.equal([...apply.matchAll(/pnpm hosted:db-check/g)].length, 2);
-  assert.match(apply, /grep -qx 'ok: true'/);
+  assert.equal([...apply.matchAll(/grep -qx 'ok: true'/g)].length, 2);
+  assert.match(apply, /grep -qx 'pending: 0005_customers_jobs\.sql'/);
   assert.match(apply, /grep -qx 'pending: \(none\)'/);
+  assert.ok(
+    apply.indexOf("pending: 0005_customers_jobs.sql") < apply.indexOf("pnpm hosted:db-push"),
+  );
 
   assert.doesNotMatch(yaml, /^env:/m);
   assert.doesNotMatch(apply, /^    env:/m);
@@ -101,10 +110,11 @@ test("hosted development migration workflow is dispatch-only and statically gate
 
   const names = namedSteps(apply);
   assert.ok(
-    names.indexOf("Check pending hosted migrations") < names.indexOf("Apply hosted migrations"),
+    names.indexOf("Check pending hosted migration 0005") <
+      names.indexOf("Apply hosted migration 0005"),
   );
   assert.ok(
-    names.indexOf("Apply hosted migrations") <
+    names.indexOf("Apply hosted migration 0005") <
       names.indexOf("Verify no pending hosted migrations"),
   );
   assert.ok(
