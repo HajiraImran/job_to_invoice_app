@@ -1,14 +1,16 @@
 import { formatUsdCents } from "@job-to-invoice/schemas";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
 import { jobDetailPath, jobQuotePath } from "../../../../src/jobs/routes.ts";
 import type { JobDetail } from "../../../../src/jobs/presentation.ts";
 import {
+  presentQuotePdf,
   presentQuoteReview,
   type PublishedQuoteRecord,
+  type QuotePdfDownload,
   type QuotePreviewRecord,
 } from "../../../../src/quotes/presentation.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
@@ -27,6 +29,8 @@ export default function QuotePublishScreen() {
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [pdfDownload, setPdfDownload] = useState<QuotePdfDownload | undefined>();
+  const [pdfError, setPdfError] = useState<string | undefined>();
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number; code?: string } | undefined>();
   const publishKey = useRef<string | undefined>(undefined);
 
@@ -56,6 +60,8 @@ export default function QuotePublishScreen() {
       });
       if (doc.ok) {
         setPublished(doc.data);
+        setPdfDownload({ state: doc.data.pdf_state, url: null });
+        setPdfError(undefined);
         setPreview(undefined);
         setLoading(false);
         return;
@@ -82,6 +88,7 @@ export default function QuotePublishScreen() {
     if (result.ok) {
       setPreview(result.data);
       setPublished(undefined);
+      setPdfDownload(undefined);
     } else {
       setError({
         message:
@@ -100,6 +107,54 @@ export default function QuotePublishScreen() {
     void load();
   }, [load]);
 
+  const refreshPdf = useCallback(async (documentId: string) => {
+    const result = await runOwnerRequest<QuotePdfDownload>({
+      path: `/v1/documents/${documentId}/download`,
+    });
+    if (!result.ok) {
+      setPdfError(result.error.message || copy.quotePdfOpenError);
+      return result;
+    }
+    setPdfError(undefined);
+    setPdfDownload(result.data);
+    return result;
+  }, [runOwnerRequest]);
+
+  useEffect(() => {
+    if (!published?.id) {
+      return;
+    }
+    let cancelled = false;
+    let settled = false;
+    const timer = setInterval(() => {
+      if (settled || cancelled) {
+        return;
+      }
+      void refreshPdf(published.id).then((result) => {
+        if (cancelled || !result.ok) {
+          return;
+        }
+        if (result.data.state === "ready" || result.data.state === "failed") {
+          settled = true;
+          clearInterval(timer);
+        }
+      });
+    }, 3000);
+    void refreshPdf(published.id).then((result) => {
+      if (cancelled || !result.ok) {
+        return;
+      }
+      if (result.data.state === "ready" || result.data.state === "failed") {
+        settled = true;
+        clearInterval(timer);
+      }
+    });
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [published?.id, refreshPdf]);
+
   const view = presentQuoteReview({
     authStatus: auth.snapshot.status,
     loading,
@@ -111,6 +166,21 @@ export default function QuotePublishScreen() {
   });
   const snapshot = published?.snapshot ?? preview?.snapshot;
   const publishDisabled = view.publishDisabled || publishing;
+  const pdfView = presentQuotePdf(pdfDownload ?? (published ? { state: published.pdf_state, url: null } : undefined));
+
+  async function openOrRetryPdf() {
+    if (!published) {
+      return;
+    }
+    const result = await refreshPdf(published.id);
+    if (result.ok && result.data.url) {
+      try {
+        await Linking.openURL(result.data.url);
+      } catch {
+        setPdfError(copy.quotePdfOpenError);
+      }
+    }
+  }
 
   async function confirmPublish() {
     if (!preview || publishDisabled) {
@@ -128,6 +198,8 @@ export default function QuotePublishScreen() {
     });
     if (result.ok) {
       setPublished(result.data);
+      setPdfDownload({ state: result.data.pdf_state, url: null });
+      setPdfError(undefined);
       setError(undefined);
       setPublishing(false);
       return;
@@ -240,9 +312,32 @@ export default function QuotePublishScreen() {
             <Text style={styles.section}>{copy.quoteExpiry}</Text>
             <Text style={styles.body}>{snapshot.expiry_local_date}</Text>
             {view.kind === "published" ? (
-              <Text accessibilityLiveRegion="polite" style={styles.banner}>
-                {copy.quotePdfPreparing}
-              </Text>
+              <>
+                {pdfView.kind === "preparing" ? (
+                  <Text accessibilityLiveRegion="polite" style={styles.banner}>
+                    {copy.quotePdfPreparing}
+                  </Text>
+                ) : null}
+                {pdfView.kind === "failed" ? (
+                  <Text accessibilityLiveRegion="polite" style={styles.error}>
+                    {copy.quotePdfFailed}
+                  </Text>
+                ) : null}
+                {pdfError ? (
+                  <Text accessibilityLiveRegion="polite" style={styles.error}>
+                    {pdfError}
+                  </Text>
+                ) : null}
+                {pdfView.kind === "ready" ? (
+                  <Pressable accessibilityRole="button" onPress={() => void openOrRetryPdf()} style={styles.primary}>
+                    <Text style={styles.primaryLabel}>{copy.quotePdfDownload}</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable accessibilityRole="button" onPress={() => void openOrRetryPdf()} style={styles.secondary}>
+                    <Text style={styles.secondaryLabel}>{copy.quotePdfRetry}</Text>
+                  </Pressable>
+                )}
+              </>
             ) : null}
             {view.kind === "confirming" ? (
               <>

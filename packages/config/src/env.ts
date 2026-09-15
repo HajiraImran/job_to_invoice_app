@@ -59,6 +59,13 @@ const developmentSchema = z.object({
   AUTH_AUDIENCE: z.string().optional(),
   AUTH_JWKS_JSON: z.string().optional(),
   DATABASE_URL_API: z.string().optional(),
+  DATABASE_URL_WORKER: z.string().optional(),
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_DOCUMENTS_BUCKET: z.string().optional(),
+  R2_WORKER_ACCESS_KEY_ID: z.string().optional(),
+  R2_WORKER_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_API_ACCESS_KEY_ID: z.string().optional(),
+  R2_API_SECRET_ACCESS_KEY: z.string().optional(),
 });
 
 const stagingSchema = z.object({
@@ -74,6 +81,12 @@ const stagingSchema = z.object({
   DATABASE_URL_WORKER: secret("DATABASE_URL_WORKER"),
   DATABASE_URL_PURGE: secret("DATABASE_URL_PURGE"),
   DATABASE_URL_MIGRATIONS: secret("DATABASE_URL_MIGRATIONS"),
+  R2_ACCOUNT_ID: secret("R2_ACCOUNT_ID"),
+  R2_DOCUMENTS_BUCKET: secret("R2_DOCUMENTS_BUCKET"),
+  R2_WORKER_ACCESS_KEY_ID: secret("R2_WORKER_ACCESS_KEY_ID"),
+  R2_WORKER_SECRET_ACCESS_KEY: secret("R2_WORKER_SECRET_ACCESS_KEY"),
+  R2_API_ACCESS_KEY_ID: secret("R2_API_ACCESS_KEY_ID"),
+  R2_API_SECRET_ACCESS_KEY: secret("R2_API_SECRET_ACCESS_KEY"),
 });
 
 const productionSchema = z.object({
@@ -92,6 +105,12 @@ const productionSchema = z.object({
   DATABASE_URL_WORKER: secret("DATABASE_URL_WORKER"),
   DATABASE_URL_PURGE: secret("DATABASE_URL_PURGE"),
   DATABASE_URL_MIGRATIONS: secret("DATABASE_URL_MIGRATIONS"),
+  R2_ACCOUNT_ID: secret("R2_ACCOUNT_ID"),
+  R2_DOCUMENTS_BUCKET: z.string().optional(),
+  R2_WORKER_ACCESS_KEY_ID: secret("R2_WORKER_ACCESS_KEY_ID"),
+  R2_WORKER_SECRET_ACCESS_KEY: secret("R2_WORKER_SECRET_ACCESS_KEY"),
+  R2_API_ACCESS_KEY_ID: secret("R2_API_ACCESS_KEY_ID"),
+  R2_API_SECRET_ACCESS_KEY: secret("R2_API_SECRET_ACCESS_KEY"),
   APPROVAL_TOKEN_HASH_KEY: secret("APPROVAL_TOKEN_HASH_KEY"),
   OTP_HASH_KEY: secret("OTP_HASH_KEY"),
   APPROVAL_EVIDENCE_ENCRYPTION_KEY: secret("APPROVAL_EVIDENCE_ENCRYPTION_KEY"),
@@ -117,6 +136,19 @@ const productionSchema = z.object({
 export type LoadedEnv = z.infer<typeof developmentSchema> | z.infer<typeof stagingSchema> | z.infer<
   typeof productionSchema
 >;
+
+export function r2DocumentsBucket(appEnv: string, override?: string): string {
+  if (override && override.trim()) {
+    return override.trim();
+  }
+  if (appEnv === "production") {
+    return "job-to-invoice-documents-production";
+  }
+  if (appEnv === "development") {
+    return "job-to-invoice-documents-development";
+  }
+  throw new Error("R2_DOCUMENTS_BUCKET is required");
+}
 
 function schemaFor(appEnv: string | undefined) {
   if (appEnv === "production") {

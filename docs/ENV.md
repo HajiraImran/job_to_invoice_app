@@ -35,6 +35,12 @@ That command is `expo start --go`. It does not replace `pnpm --filter @job-to-in
 - `AUTH_AUDIENCE` — `authenticated`
 - `DATABASE_URL_API` — login role that can `SET ROLE api_app`. Never `service_role`.
 - `DATABASE_URL_MIGRATIONS` — local embedded Postgres, or for hosted apply from an IPv4-only network the **session** pooler URL (`postgres://postgres.<linked-ref>:<percent-encoded-password>@aws-0-<region>.pooler.supabase.com:5432/postgres`). Username must match `supabase/.temp/project-ref`. Port `5432` must be explicit. Never the IPv6-only `db.<ref>.supabase.co` host. Never port `6543`. Never query parameters such as `pgbouncer=true`. Never `service_role` (D-012). Reserved password characters must be percent-encoded. Do not put this URL in repository files.
+- `R2_ACCOUNT_ID` — Cloudflare account id for the R2 S3 endpoint (D-016). Server only.
+- `R2_DOCUMENTS_BUCKET` — required in staging; development defaults to `job-to-invoice-documents-development`; production defaults to `job-to-invoice-documents-production`. Never a public bucket.
+- `R2_WORKER_ACCESS_KEY_ID` / `R2_WORKER_SECRET_ACCESS_KEY` — bucket-scoped Object Read & Write. Worker PutObject only. Never `EXPO_PUBLIC_*`.
+- `R2_API_ACCESS_KEY_ID` / `R2_API_SECRET_ACCESS_KEY` — bucket-scoped Object Read-only. API 5-minute presigned GET only. Never `EXPO_PUBLIC_*`.
+
+Do not use `STORAGE_SERVICE_KEY` or Supabase `service_role` for document PDFs.
 
 Hosted apply from PowerShell, process environment only:
 

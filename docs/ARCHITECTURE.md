@@ -25,8 +25,8 @@ Managed services (same US region):
 | --- | --- | --- |
 | Supabase Auth | Owner email OTP only | ACC01, ARC02 |
 | Supabase PostgreSQL | Private commercial schema | ARC02, DB01–DB05 |
-| Supabase Storage | Private buckets; API-minted signed URLs only | DOC05, ARC02 |
-| Render (default) | API, portal, admin, worker, purge job | ARC01 |
+| Cloudflare R2 | Private original-document PDFs; API-minted 5-minute presigned GET only | DOC05, D-016 |
+| Render (default) | API, portal, admin, worker (Playwright/Chromium Docker), purge job | ARC01, D-016 |
 | Resend | Transactional email | NTF02, EMAIL01–11 |
 | RevenueCat + StoreKit | Apple subscriptions | SUB01–SUB08 |
 | Sentry | Sanitized errors; replay and screenshots off | OPS03 |
@@ -59,14 +59,14 @@ Owner iPhone                  Customer browser              Staff browser
                          |
           +--------------+--------------+
           v              v              v
-       Resend      Storage/PDF     RevenueCat server API
+       Resend      R2 original PDF     RevenueCat server API
 ```
 
 Rules:
 
 - Mobile and public browsers call the domain API only. They do not write commercial records through Supabase REST (ARC02).
 - Supabase public Auth endpoints are allowed for owner authentication only.
-- Clients must not use `supabase-js` (or any SDK) for Storage, Realtime, or Edge Functions. No user JWT against Storage REST. Uploads and downloads use domain-API-minted signed URLs only (DOC05).
+- Clients must not use `supabase-js` (or any SDK) for Storage, Realtime, or Edge Functions. No user JWT against Storage REST or R2. Owner PDF downloads use domain-API-minted 5-minute R2 presigned GET URLs only (DOC05, D-016).
 - Commercial tables live in a private schema with client grants revoked.
 - Supabase `service_role` is forbidden in `apps/api` and `apps/worker`. It is not a runtime connection string.
 - Portal cookies are not accepted as owner authentication (APR01A).
@@ -146,9 +146,11 @@ One outbox row and one `effect_key` per intended external effect. For first-send
 Worker:
 
 - Lease 60 seconds, heartbeat for long jobs
+- `generate_original_pdf`: max 5 attempts; backoff 30s, 2m, 10m, 30m; fifth failure or permanent validation failure marks the task `dead`
+- Persist `artifact_id` on the outbox payload before the first PutObject; retries reuse `workspaces/{workspace_id}/documents/{document_id}/revisions/{revision}/original/{artifact_id}.pdf`
 - Never hold a database transaction open while calling email, storage or billing
-- Reconcile orphan blobs by job ID if crash occurs between upload and status commit
-- PDF/email retry must not allocate a new document number or approval token
+- Reconcile a crash between R2 PutObject and artifact insert from database state; do not list the bucket
+- PDF/email retry must not allocate a new document number, artifact id, or approval token
 
 Scheduled jobs (OPS08): poll outbox continuously; expire pending approvals every minute (endpoints still enforce exact expiry); cleanup stale uploads hourly; reconcile entitlements nightly; retry billing backlog every five minutes; trial reminders two days before end; purge exports daily; apply retention/deletion daily via `purge_app`; verify backups daily; deidentified cohort reports daily.
 
@@ -184,7 +186,7 @@ Owner confirm S11
   -> insert snapshot, lines, tokenized request, outbox
   -> commit
   -> return IDs
-  -> worker PDF then EMAIL01/02 (never inside the transaction)
+  -> worker original PDF (D-016) then EMAIL01/02 (never inside the transaction)
 ```
 
 No environment or compile-time stub may skip slot consumption. `APP_ENV=development` may seed fixture allowances; it must still run this command. Staging, TestFlight and production use real `job_allowances`. Precommit failure rolls back the counter. Entitlement snapshot updates must not write `completion_right`.

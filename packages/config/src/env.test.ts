@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { loadEnv } from "./env.ts";
+import { loadEnv, r2DocumentsBucket } from "./env.ts";
 
 describe("loadEnv", () => {
   it("accepts development with local defaults", () => {
     const env = loadEnv({ APP_ENV: "development" });
     expect(env.APP_ENV).toBe("development");
     expect(env.API_BASE_URL).toContain("localhost");
+  });
+
+  it("defaults private R2 buckets and requires staging to set the name", () => {
+    expect(r2DocumentsBucket("development")).toBe("job-to-invoice-documents-development");
+    expect(r2DocumentsBucket("production")).toBe("job-to-invoice-documents-production");
+    expect(r2DocumentsBucket("staging", "job-to-invoice-documents-staging")).toBe(
+      "job-to-invoice-documents-staging",
+    );
+    expect(() => r2DocumentsBucket("staging")).toThrow(/R2_DOCUMENTS_BUCKET/);
   });
 
   it("rejects production when mandatory secrets are empty", () => {

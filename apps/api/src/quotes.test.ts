@@ -1,5 +1,7 @@
 import { loadEnv } from "@job-to-invoice/config";
+import { originalPdfObjectKey } from "@job-to-invoice/domain";
 import { createJwtFixture } from "@job-to-invoice/testing";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, Pool } from "pg";
@@ -101,15 +103,19 @@ describe("quote publish API", () => {
     admin = new Client({ connectionString: resolved.url });
     await admin.connect();
     await applyCleanMigrations(admin, repoRoot);
-    await admin.query("grant api_app to current_user");
+    await admin.query("grant api_app, worker_app to current_user");
     pool = new Pool({ connectionString: resolved.url, max: 8 });
     const fixture = await createJwtFixture();
     sign = fixture.sign;
     const env = loadEnv({ APP_ENV: "development", PORTAL_ORIGIN: "http://localhost:3000" });
+    const SIGNED = "https://r2.invalid/original.pdf?X-Amz-Expires=300";
     app = buildApp({
       env,
       pool,
       logOwnerMe: () => undefined,
+      documentsStore: {
+        presignGet: async (key) => `${SIGNED}&key=${encodeURIComponent(key)}`,
+      },
       verifyJwt: createJwtVerifier({
         issuer: fixture.issuer,
         audience: fixture.audience,
@@ -274,6 +280,46 @@ describe("quote publish API", () => {
     expect(download.statusCode).toBe(200);
     expect(download.json().data.state).toBe("preparing");
     expect(download.json().data.url).toBeNull();
+    const issued = await running().admin.query(
+      `select workspace_id, revision_no from commercial.documents where id = $1`,
+      [doc.id],
+    );
+    const task = await running().admin.query(
+      `select id from commercial.outbox_tasks where aggregate_id = $1`,
+      [doc.id],
+    );
+    const artifactId = "37373737-3737-4373-8373-373737373738";
+    const objectKey = originalPdfObjectKey({
+      workspaceId: issued.rows[0].workspace_id,
+      documentId: doc.id,
+      revision: issued.rows[0].revision_no,
+      artifactId,
+    });
+    const pdf = Buffer.from("%PDF-1.4 test original");
+    await running().admin.query("set role worker_app");
+    try {
+      await running().admin.query(
+        "select commercial.complete_original_pdf($1::uuid, $2::uuid, $3, $4, $5::bigint)",
+        [task.rows[0].id, artifactId, objectKey, createHash("sha256").update(pdf).digest("hex"), pdf.byteLength],
+      );
+    } finally {
+      await running().admin.query("reset role");
+    }
+    const readyDownload = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${doc.id}/download`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(readyDownload.statusCode).toBe(200);
+    expect(readyDownload.json().data.state).toBe("ready");
+    expect(readyDownload.json().data.url).toContain("X-Amz-Expires=300");
+    expect(readyDownload.json().data.url).toContain(encodeURIComponent(objectKey));
+    const readyDoc = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${doc.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(readyDoc.json().data.pdf_state).toBe("ready");
     const job = await running().app.inject({
       method: "GET",
       url: `/v1/jobs/${JOB_1}`,
@@ -306,7 +352,7 @@ describe("quote publish API", () => {
       [doc.id],
     );
     expect(outbox.rows[0]?.task_type).toBe("generate_original_pdf");
-    expect(outbox.rows[0]?.status).toBe("pending");
+    expect(outbox.rows[0]?.status).toBe("done");
     const analytics = await running().admin.query(
       `select safe_properties_json from commercial.analytics_events
        where event_name = 'document_published' and job_id = $1`,
@@ -457,6 +503,13 @@ describe("quote publish API", () => {
     });
     expect(leak.statusCode).toBe(404);
     expect(JSON.stringify(leak.json())).not.toMatch(/Riley Chen|Q-000001/i);
+    const leakDownload = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${published.json().data.id}/download`,
+      headers: { authorization: `Bearer ${tokenP}` },
+    });
+    expect(leakDownload.statusCode).toBe(404);
+    expect(JSON.stringify(leakDownload.json())).not.toMatch(/r2\.invalid|original\.pdf/i);
     const steal = await publish(
       tokenP,
       draft.id,
@@ -465,6 +518,44 @@ describe("quote publish API", () => {
       "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a3a",
     );
     expect(steal.statusCode).toBe(404);
+  });
+
+  it("returns failed download when original PDF generation is dead", async () => {
+    const token = await sign({ sub: AUTH_P, email: "owner.p@example.com" });
+    const jobId = "34343434-3434-4343-8343-343434343439";
+    const draft = await readyDraft(token, jobId, {
+      job: "42424242-4242-4242-8242-424242424241",
+      open: "42424242-4242-4242-8242-424242424242",
+      save: "42424242-4242-4242-8242-424242424243",
+    });
+    const previewed = await preview(token, draft.id, draft.version);
+    const published = await publish(
+      token,
+      draft.id,
+      draft.version,
+      previewed.json().data.preview_hash,
+      "42424242-4242-4242-8242-424242424244",
+    );
+    expect(published.statusCode).toBe(202);
+    await running().admin.query(
+      `update commercial.outbox_tasks set status = 'dead', last_error_code = 'VALIDATION_FAILED'
+       where aggregate_id = $1`,
+      [published.json().data.id],
+    );
+    const download = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${published.json().data.id}/download`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(download.statusCode).toBe(200);
+    expect(download.json().data.state).toBe("failed");
+    expect(download.json().data.url).toBeNull();
+    const loaded = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${published.json().data.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(loaded.json().data.pdf_state).toBe("failed");
   });
 
   it("rejects unauthenticated publish routes", async () => {

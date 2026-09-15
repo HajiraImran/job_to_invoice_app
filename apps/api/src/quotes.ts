@@ -319,7 +319,11 @@ function mapPublishError(
 
 export function registerQuotePublishRoutes(
   app: FastifyInstance,
-  deps: { verifyJwt?: JwtVerifier; pool?: Pool },
+  deps: {
+    verifyJwt?: JwtVerifier;
+    pool?: Pool;
+    documentsStore?: { presignGet: (key: string) => Promise<string> };
+  },
   options: { limiterAllow: (key: string) => { ok: true } | { ok: false; retryAfterSec: number } },
 ): void {
   async function requireOwner(
@@ -641,18 +645,17 @@ export function registerQuotePublishRoutes(
     }
     try {
       const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
-        const result = await client.query<PublishRow & { pdf_ready: boolean }>(
+        const result = await client.query<PublishRow>(
           `select d.id, d.workspace_id, d.job_id, dr.id as draft_id, d.kind, d.number, d.revision_no, d.lifecycle,
                   d.issued_at, d.issue_date, d.currency, d.net_cents, d.tax_cents, d.total_cents, d.snapshot_json,
                   d.schema_version, d.snapshot_sha256,
-                  case when a.id is null then 'preparing' else a.state end as pdf_state
+                  coalesce(p.download_state, 'preparing') as pdf_state
            from commercial.documents d
            left join commercial.document_drafts dr
              on dr.workspace_id = d.workspace_id and dr.parent_document_id = d.id and dr.kind = 'quote'
-           left join commercial.artifacts a
-             on a.workspace_id = d.workspace_id and a.document_id = d.id and a.type = 'original_pdf'
+           left join lateral commercial.original_pdf_download($2::uuid, d.id) p on true
            where d.id = $1 and d.kind = 'quote'`,
-          [params.documentId],
+          [params.documentId, owner.workspace_id],
         );
         return result.rows[0];
       });
@@ -678,26 +681,29 @@ export function registerQuotePublishRoutes(
     }
     try {
       const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
-        const document = await client.query<{ id: string }>(
-          `select id from commercial.documents where id = $1 and kind = 'quote'`,
-          [params.documentId],
+        const result = await client.query<{ download_state: string; object_key: string | null }>(
+          `select download_state, object_key from commercial.original_pdf_download($1::uuid, $2::uuid)`,
+          [owner.workspace_id, params.documentId],
         );
-        if (!document.rows[0]) {
-          return undefined;
-        }
-        const artifact = await client.query<{ state: string }>(
-          `select state from commercial.artifacts
-           where document_id = $1 and type = 'original_pdf'`,
-          [params.documentId],
-        );
-        return { document_id: document.rows[0].id, state: artifact.rows[0]?.state ?? "preparing" };
+        return result.rows[0];
       });
       if (!row) {
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, DOCUMENT_NOT_FOUND);
       }
+      if (row.download_state === "ready") {
+        if (!row.object_key || !deps.documentsStore) {
+          return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+        }
+        const url = await deps.documentsStore.presignGet(row.object_key);
+        return success(request.id, {
+          document_id: params.documentId,
+          state: "ready",
+          url,
+        });
+      }
       return success(request.id, {
-        document_id: row.document_id,
-        state: row.state,
+        document_id: params.documentId,
+        state: row.download_state,
         url: null,
       });
     } catch {

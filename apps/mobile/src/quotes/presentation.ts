@@ -159,3 +159,22 @@ export function presentQuoteReview(input: {
   }
   return { kind: "ready", showRetry: false, publishDisabled: false };
 }
+
+export type QuotePdfDownload = {
+  state: string;
+  url: string | null;
+};
+
+export function presentQuotePdf(download?: QuotePdfDownload): {
+  kind: "preparing" | "ready" | "failed";
+  url?: string;
+  showRetry: boolean;
+} {
+  if (download?.state === "ready" && typeof download.url === "string" && download.url.length > 0) {
+    return { kind: "ready", url: download.url, showRetry: false };
+  }
+  if (download?.state === "failed") {
+    return { kind: "failed", showRetry: true };
+  }
+  return { kind: "preparing", showRetry: true };
+}

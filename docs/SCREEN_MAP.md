@@ -90,7 +90,7 @@ Three steps: name/trade; contact/address; timezone and document defaults. Back p
 
 VAL01–VAL02. Default tax zero with “Confirm tax treatment for your business” (FIN02). Device IANA timezone is suggested and must be confirmed. Currency USD is displayed and not editable.
 
-Implemented route: `/(onboarding)/setup`. Successful POST `/v1/workspace` routes to the S05 jobs list. S05/S06/S08 draft jobs, S09/S10 quote drafting, and S11 quote publish are implemented; email delivery, PDF bytes, and invoice editors are not.
+Implemented route: `/(onboarding)/setup`. Successful POST `/v1/workspace` routes to the S05 jobs list. S05/S06/S08 draft jobs, S09/S10 quote drafting, and S11 quote publish with original PDF download are implemented; email delivery and invoice editors are not.
 
 
 ### S05 Jobs
@@ -137,7 +137,7 @@ Line fields are edited on the S09 cards in this slice. Catalogue copy-on-use is 
 
 Frozen-looking preview, expiry, confirm. Show slot/paywall before submit. Stale preview → PREVIEW_CHANGED.
 
-Implemented route: `/(tabs)/jobs/[id]/publish`. Review uses `POST /drafts/{id}/preview`. Confirm publishes `POST /drafts/{id}/publish`. After success, the same route is a read-only published quote. Recipient email, approval links, and PDF bytes are not in this slice; download returns `preparing`.
+Implemented route: `/(tabs)/jobs/[id]/publish`. Review uses `POST /drafts/{id}/preview`. Confirm publishes `POST /drafts/{id}/publish`. After success, the same route is a read-only published quote with Preparing PDF, Download/View PDF when ready, and a safe retryable generation-failed state. Recipient email and approval links are not in this slice.
 
 ### S12 Request detail
 

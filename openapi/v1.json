@@ -402,7 +402,7 @@
     },
     "/v1/documents/{documentId}/download": {
       "get": {
-        "summary": "Original PDF artifact state; preparing until the worker finishes",
+        "summary": "Original PDF artifact state or a 5-minute private download URL",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -413,7 +413,7 @@
           }
         ],
         "responses": {
-          "200": { "description": "Artifact state preparing, ready, or failed; URL is null while preparing" },
+          "200": { "description": "Artifact state preparing, ready, or failed; ready includes a 5-minute private URL" },
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant document" },

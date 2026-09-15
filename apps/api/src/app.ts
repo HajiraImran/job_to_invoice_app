@@ -28,6 +28,7 @@ export type AppDeps = {
   verifyJwt?: JwtVerifier;
   pool?: Pool;
   logOwnerMe?: (event: OwnerMeSafeEvent) => void;
+  documentsStore?: { presignGet: (key: string) => Promise<string> };
 };
 
 type ProvisionRow = {

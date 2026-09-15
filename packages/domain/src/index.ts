@@ -62,3 +62,14 @@ export {
   type QuoteSnapshotV1,
 } from "./snapshot.ts";
 export { FINANCIAL_FIXTURES } from "./fixtures.ts";
+export {
+  QUOTE_PDF_TEMPLATE_VERSION,
+  discountCentsTotal,
+  escapeHtml,
+  formatCalendarDate,
+  formatTaxBp,
+  originalPdfObjectKey,
+  renderQuoteOriginalHtml,
+  type QuotePdfDocument,
+  type QuotePdfLine,
+} from "./quote-html.ts";

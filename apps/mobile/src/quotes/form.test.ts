@@ -9,7 +9,7 @@ import {
   payloadFromForm,
   type QuoteDraftRecord,
 } from "./form.ts";
-import { presentQuoteEditor, presentQuoteReview, quoteActionLabel } from "./presentation.ts";
+import { presentQuoteEditor, presentQuotePdf, presentQuoteReview, quoteActionLabel } from "./presentation.ts";
 import { jobQuotePath } from "../jobs/routes.ts";
 
 const F01_LINE = {
@@ -193,6 +193,19 @@ describe("quote editor states", () => {
         },
       }).kind,
     ).toBe("published");
+    expect(presentQuotePdf({ state: "preparing", url: null })).toEqual({
+      kind: "preparing",
+      showRetry: true,
+    });
+    expect(presentQuotePdf({ state: "ready", url: "https://r2.invalid/quote.pdf" })).toEqual({
+      kind: "ready",
+      url: "https://r2.invalid/quote.pdf",
+      showRetry: false,
+    });
+    expect(presentQuotePdf({ state: "failed", url: null })).toEqual({
+      kind: "failed",
+      showRetry: true,
+    });
     expect(
       presentQuoteReview({
         authStatus: "authenticated",

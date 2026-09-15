@@ -130,7 +130,7 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | ID | D-005 |
 | Date | 2026-09-14 |
 | Status | Resolved |
-| Decision | Pin the repository foundation to Node 22.23.2, pnpm 12.4.1, TypeScript 5.9.3, Expo 57.0.22, React Native 0.86.3, React 19.2.3, Next.js 16.3.5, Fastify 5.12.4, Turbo 2.10.12, Zod 4.6.5, Vitest 5.0.0, ESLint 10.10.0, and Prettier 3.9.6, with exact versions in `pnpm-lock.yaml`. Encrypted SQLite and the PDF engine remain unchosen until spike evidence. Plaintext local storage remains forbidden. |
+| Decision | Pin the repository foundation to Node 22.23.2, pnpm 12.4.1, TypeScript 5.9.3, Expo 57.0.22, React Native 0.86.3, React 19.2.3, Next.js 16.3.5, Fastify 5.12.4, Turbo 2.10.12, Zod 4.6.5, Vitest 5.0.0, ESLint 10.10.0, and Prettier 3.9.6, with exact versions in `pnpm-lock.yaml`. Encrypted SQLite remains unchosen until spike evidence. The original-quote PDF engine is D-016. Plaintext local storage remains forbidden. |
 | Reason | ARC05 requires currently supported stable pins at project initialization. Expo SDK 57 requires React Native 0.86 and React 19.2.3, not the newer 0.87 / 19.3 line. |
 | Evidence | Expo SDK 57 compatibility table; npm current stables on 2026-09-14; `pnpm-lock.yaml` |
 | Owner | Engineering lead |
@@ -310,14 +310,32 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | ID | D-015 |
 | Date | 2026-09-15 |
 | Status | Resolved |
-| Decision | First quote publication follows TX01 locally: `POST /v1/drafts/{id}/preview` freezes a 10-minute QUO02A commercial snapshot; `POST /v1/drafts/{id}/publish` requires that `preview_hash` plus If-Match draft version, recalculates FIN01 with `@job-to-invoice/domain`, allocates `Q-000001` `R1` from `document_counters`, inserts immutable `documents`/`document_lines`, marks the draft `published` without deleting it, sets `jobs.lifecycle=active` and `completion_right`, consumes one free slot, and inserts a `generate_original_pdf` outbox row. Canonical snapshot bytes exclude the allocated number (it lives on `documents.number`/`revision_no` because allocation happens after preview freeze) and exclude generation timestamps. Recipient email, `approval_requests`, EMAIL01, and PDF bytes are out of this slice; `GET /documents/{id}/download` returns `preparing`. The PDF engine remains unchosen (D-007). Hosted `0007` is not applied in this slice. |
+| Decision | First quote publication follows TX01 locally: `POST /v1/drafts/{id}/preview` freezes a 10-minute QUO02A commercial snapshot; `POST /v1/drafts/{id}/publish` requires that `preview_hash` plus If-Match draft version, recalculates FIN01 with `@job-to-invoice/domain`, allocates `Q-000001` `R1` from `document_counters`, inserts immutable `documents`/`document_lines`, marks the draft `published` without deleting it, sets `jobs.lifecycle=active` and `completion_right`, consumes one free slot, and inserts a `generate_original_pdf` outbox row. Canonical snapshot bytes exclude the allocated number (it lives on `documents.number`/`revision_no` because allocation happens after preview freeze) and exclude generation timestamps. Recipient email, `approval_requests`, EMAIL01, and PDF bytes are out of this slice; `GET /documents/{id}/download` returns `preparing` until D-016. Hosted `0007` is not applied in this slice. |
 | Reason | QUO02, QUO02A, JOB01, INV06, ARC04, and SUB02 are defined. Slice scope forbids email and public approval links. Generating PDF inside the API would violate ARC04 and invent a DOC01 engine. |
 | Evidence | `supabase/migrations/0007_quote_publish.sql`; `apps/api/src/quotes.ts`; `packages/domain/src/snapshot.ts`; mobile `/(tabs)/jobs/[id]/publish` |
 | Owner | Engineering lead |
-| PRD implication | S11 publish is implemented locally. EMAIL01, APR01, DOC01 bytes, S12, and hosted `0007` remain later. |
+| PRD implication | S11 publish is implemented locally. Original PDF bytes are D-016. EMAIL01, APR01, S12, and hosted `0007` remain later. |
 | Impacted requirement IDs | S11, S08, QUO01, QUO02, QUO02A, JOB01, TX01, INV03, INV06, INV09, SUB02, ARC04, FIN01, API01, DB01, DB04, ANA01 |
 | Impacted test IDs | `packages/domain/src/snapshot.test.ts`; `apps/api/src/quotes.test.ts`; `apps/mobile/src/quotes/form.test.ts`; `pnpm test:db`; `pnpm validate:openapi` |
 | Migration implications | Forward-only `0007_quote_publish.sql`. Do not edit or replay `0001`–`0007`. Hosted apply is `.github/workflows/hosted-development-migrations.yml` with confirmation `APPLY_0007`; this repository change does not dispatch it. |
 | Reversible | No for the `documents` shape once hosted-applied |
 | Escalation category | none |
+
+### D-016 — Playwright original-quote PDF on private Cloudflare R2
+
+| Field | Value |
+| --- | --- |
+| ID | D-016 |
+| Date | 2026-09-15 |
+| Status | Resolved |
+| Decision | Original published-quote PDFs are generated only from immutable `documents` / `document_lines` (never drafts) by `apps/worker`. The engine is Playwright 1.63.0 + bundled Chromium, pinned with Node 22.23.2. Chromium loads worker-controlled HTML only; all network requests are aborted. Template `quote-original-v1` is A4 portrait, print backgrounds, fixed 18 mm margins, `lang=en`, and calendar dates from the snapshot without `Date` locale conversion. Inter Regular/Medium/Bold (SIL OFL) are embedded as data URIs. DOC01’s US Letter size is superseded here by A4. Storage is private Cloudflare R2, not Supabase Storage and not `STORAGE_SERVICE_KEY` / `service_role`. Buckets: `job-to-invoice-documents-development` (development) and `job-to-invoice-documents-production` (production). Staging must set `R2_DOCUMENTS_BUCKET` explicitly. Object key `workspaces/{workspace_id}/documents/{document_id}/revisions/{revision}/original/{artifact_id}.pdf`. `artifact_id` is persisted on the outbox payload before the first PutObject so retries overwrite the same key. Worker credentials are bucket-scoped Object Read & Write; API credentials are a separate bucket-scoped Object Read-only pair used only to mint 5-minute presigned GET URLs. Mobile receives only that URL. No public buckets, no bucket listing, no `EXPO_PUBLIC_*` storage secrets. Outbox: 60 s lease, max 5 attempts, backoff 30 s / 2 m / 10 m / 30 m, fifth failure or permanent validation failure → `dead` and download `failed`. Crash between upload and DB commit retries PutObject then inserts `artifacts` from database state; never list R2. Hosted `0008` is not applied in this slice. |
+| Reason | Stage 0 left DOC01/DOC05 unchosen. Approved worker/PDF/R2 contract unblocks S11 download without Supabase Storage or `service_role`. |
+| Evidence | `supabase/migrations/0008_original_quote_pdf.sql`; `apps/worker`; `packages/domain/src/quote-html.ts`; `GET /v1/documents/{id}/download` |
+| Owner | Engineering lead |
+| PRD implication | DOC01 layout uses A4 for this product. DOC05 signed URLs are R2 presigned GET, not Supabase Storage. EMAIL01 and public approval remain later. |
+| Impacted requirement IDs | DOC01, DOC05, INV03, ARC04, S11, QA54, QA53 |
+| Impacted test IDs | `packages/domain/src/quote-html.test.ts`; `apps/worker/src/outbox.test.ts`; `apps/api/src/quotes.test.ts`; `apps/mobile/src/quotes/form.test.ts`; `pnpm test:db` |
+| Migration implications | Forward-only `0008_original_quote_pdf.sql`. Do not edit or replay `0001`–`0007`. This repository change does not dispatch hosted apply. |
+| Reversible | No for R2 key layout and Playwright template once hosted-applied |
+| Escalation category | architecture |
 

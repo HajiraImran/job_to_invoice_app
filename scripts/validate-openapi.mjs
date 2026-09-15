@@ -58,6 +58,9 @@ if (!spec.paths?.["/v1/documents/{documentId}"]?.get) {
 if (!spec.paths?.["/v1/documents/{documentId}/download"]?.get) {
   errors.push("GET /v1/documents/{documentId}/download is required");
 }
+if (spec.paths?.["/v1/documents/{documentId}/download"]?.get && !/5-minute|five-minute/i.test(spec.paths["/v1/documents/{documentId}/download"].get.responses?.["200"]?.description ?? "")) {
+  errors.push("GET /v1/documents/{documentId}/download must describe the 5-minute URL");
+}
 if (spec.paths?.["/v1/drafts"] && !spec.paths["/v1/drafts/{draftId}"]) {
   errors.push("draft collection routes must not be declared until they are implemented");
 }
