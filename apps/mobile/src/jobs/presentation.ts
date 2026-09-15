@@ -21,6 +21,14 @@ export type JobDetail = JobSummary & {
   } | null;
   internal_notes: string;
   permitted_actions: string[];
+  quote_draft: {
+    id: string;
+    version: number;
+    line_count: number;
+    net_cents: number;
+    tax_cents: number;
+    total_cents: number;
+  } | null;
 };
 
 export type JobsListKind = "loading" | "empty" | "loaded" | "error" | "offline" | "access_expired";

@@ -90,7 +90,7 @@ Three steps: name/trade; contact/address; timezone and document defaults. Back p
 
 VAL01–VAL02. Default tax zero with “Confirm tax treatment for your business” (FIN02). Device IANA timezone is suggested and must be confirmed. Currency USD is displayed and not editable.
 
-Implemented route: `/(onboarding)/setup`. Successful POST `/v1/workspace` routes to the S05 jobs list. S05/S06/S08 draft jobs are implemented; quote/invoice editors are not.
+Implemented route: `/(onboarding)/setup`. Successful POST `/v1/workspace` routes to the S05 jobs list. S05/S06/S08 draft jobs and S09/S10 quote drafting are implemented; publish, PDF, and invoice editors are not.
 
 
 ### S05 Jobs
@@ -117,15 +117,21 @@ Customer/site, scope total, current step, documents, activity. Next action varie
 
 Canceled jobs that retain a receivable must show it.
 
+Implemented route: `/(tabs)/jobs/[id]`. Quote-mode drafts show Create/Open quote. Direct-invoice jobs do not enter the quote editor. No fake ledger totals.
+
 ### S09 Quote editor
 
 Ordered line cards, Add item, notes, terms, expiry. Draft save indicators. Conflict recovery.
 
 VAL03–VAL04. SYNC02 save copy. Offline publish disabled (NTF05).
 
+Implemented route: `/(tabs)/jobs/[id]/quote`. Server-persisted editing draft; 500 ms debounce PATCH with If-Match. Encrypted local SQLite and publish are not in this slice.
+
 ### S10 Line editor
 
 Description, quantity, unit, unit price, fixed discount, tax rate. Live subtotal/net/tax. Optional saved-item picker (copy, never live-link).
+
+Line fields are edited on the S09 cards in this slice. Catalogue copy-on-use is not in this slice.
 
 ### S11 Preview and publish
 

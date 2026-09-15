@@ -1,12 +1,15 @@
+import { formatUsdCents } from "@job-to-invoice/schemas";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { copy } from "../../../src/i18n/en.ts";
-import { nextActionCopy, presentJobDetail, type JobDetail } from "../../../src/jobs/presentation.ts";
-import { jobsIndexPath } from "../../../src/jobs/routes.ts";
-import { useAuth } from "../../../src/session/AuthProvider.tsx";
-import { colors, space, type } from "../../../src/theme.ts";
+import { copy } from "../../../../src/i18n/en.ts";
+import { nextActionCopy, presentJobDetail, type JobDetail } from "../../../../src/jobs/presentation.ts";
+import { jobQuotePath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
+import { quoteActionLabel } from "../../../../src/quotes/presentation.ts";
+import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
+import { useAuth } from "../../../../src/session/AuthProvider.tsx";
+import { colors, space, type } from "../../../../src/theme.ts";
 
 export default function JobDetailScreen() {
   const auth = useAuth();
@@ -17,7 +20,9 @@ export default function JobDetailScreen() {
   const jobId = typeof params.id === "string" ? params.id : "";
   const [job, setJob] = useState<JobDetail | undefined>();
   const [loading, setLoading] = useState(true);
+  const [opening, setOpening] = useState(false);
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number } | undefined>();
+  const openKey = useRef<string | undefined>(undefined);
 
   const load = useCallback(async () => {
     if (!jobId) {
@@ -51,6 +56,35 @@ export default function JobDetailScreen() {
     error,
   });
   const next = view.job ? nextActionCopy(view.job.mode, view.job.lifecycle) : "none";
+  const quoteAction = quoteActionLabel(Boolean(view.job?.quote_draft));
+  const quoteDisabled =
+    opening || auth.snapshot.status === "access_expired" || auth.snapshot.status === "offline_cached";
+
+  async function openQuote() {
+    if (!jobId || quoteDisabled) {
+      return;
+    }
+    setOpening(true);
+    openKey.current = retainOrCreateSetupIdempotencyKey(openKey.current);
+    const result = await runOwnerRequest({
+      path: `/v1/jobs/${jobId}/quote`,
+      method: "POST",
+      idempotencyKey: openKey.current,
+    });
+    setOpening(false);
+    if (result.ok) {
+      router.push(jobQuotePath(jobId));
+      return;
+    }
+    if (result.error.code === "IDEMPOTENCY_MISMATCH") {
+      openKey.current = retainOrCreateSetupIdempotencyKey(undefined);
+    }
+    setError({
+      message: result.error.message || copy.quoteLoadError,
+      retryable: result.error.retryable || result.error.status === 0,
+      status: result.error.status,
+    });
+  }
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
@@ -105,6 +139,12 @@ export default function JobDetailScreen() {
             </Text>
             <Text style={styles.section}>{copy.jobMode}</Text>
             <Text style={styles.body}>{view.job.mode === "direct_invoice" ? copy.modeDirect : copy.modeQuote}</Text>
+            {view.job.quote_draft ? (
+              <>
+                <Text style={styles.section}>{copy.quoteTotal}</Text>
+                <Text style={styles.body}>{formatUsdCents(view.job.quote_draft.total_cents)}</Text>
+              </>
+            ) : null}
             {view.job.internal_notes ? (
               <>
                 <Text style={styles.section}>{copy.internalNotes}</Text>
@@ -113,6 +153,19 @@ export default function JobDetailScreen() {
             ) : null}
             {next === "quote" ? <Text style={styles.banner}>{copy.jobNextDraftQuote}</Text> : null}
             {next === "direct" ? <Text style={styles.banner}>{copy.jobNextDraftDirect}</Text> : null}
+            {next === "quote" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: quoteDisabled }}
+                disabled={quoteDisabled}
+                onPress={() => void openQuote()}
+                style={styles.primary}
+              >
+                <Text style={styles.primaryLabel}>
+                  {opening ? copy.quoteSaving : quoteAction === "open" ? copy.openQuote : copy.createQuote}
+                </Text>
+              </Pressable>
+            ) : null}
           </>
         ) : null}
 
@@ -149,6 +202,15 @@ const styles = StyleSheet.create({
   body: { color: colors.text, fontSize: type.body },
   banner: { color: colors.navy, fontSize: type.secondary },
   error: { color: colors.danger, fontSize: type.secondary },
+  primary: {
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: space.radius,
+    backgroundColor: colors.navy,
+    marginTop: space.gutter,
+  },
+  primaryLabel: { color: "#FFFFFF", fontSize: type.body, fontWeight: "700" },
   secondary: {
     minHeight: 44,
     alignItems: "center",

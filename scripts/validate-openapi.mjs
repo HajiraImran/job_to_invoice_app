@@ -31,8 +31,20 @@ if (!spec.paths?.["/v1/jobs"]?.post) {
 if (!spec.paths?.["/v1/jobs/{jobId}"]?.get) {
   errors.push("GET /v1/jobs/{jobId} is required");
 }
-if (spec.paths?.["/v1/drafts"]) {
-  errors.push("draft routes must not be declared until they are implemented");
+if (!spec.paths?.["/v1/jobs/{jobId}/quote"]?.post) {
+  errors.push("POST /v1/jobs/{jobId}/quote is required");
+}
+if (!spec.paths?.["/v1/drafts/{draftId}"]?.get) {
+  errors.push("GET /v1/drafts/{draftId} is required");
+}
+if (!spec.paths?.["/v1/drafts/{draftId}"]?.patch) {
+  errors.push("PATCH /v1/drafts/{draftId} is required");
+}
+if (spec.paths?.["/v1/drafts/{draftId}"]?.patch && !spec.paths["/v1/drafts/{draftId}"].patch.parameters?.some((item) => item.name === "If-Match")) {
+  errors.push("PATCH /v1/drafts/{draftId} requires If-Match");
+}
+if (spec.paths?.["/v1/drafts"] && !spec.paths["/v1/drafts/{draftId}"]) {
+  errors.push("draft collection routes must not be declared until they are implemented");
 }
 
 if (errors.length > 0) {
@@ -40,4 +52,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log("OpenAPI 3.1 owner jobs contract is valid.");
+console.log("OpenAPI 3.1 owner jobs and quote-draft contract is valid.");

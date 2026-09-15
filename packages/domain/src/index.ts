@@ -15,7 +15,12 @@ export {
   type UsdCents,
 } from "./money.ts";
 export { calculateLine, taxOnNet, type LineInput, type LineResult } from "./line.ts";
-export { calculateDocument, type DocumentTotals, type TaxRateSummary } from "./document.ts";
+export {
+  calculateDocument,
+  calculateDraftDocument,
+  type DocumentTotals,
+  type TaxRateSummary,
+} from "./document.ts";
 export {
   applyReduction,
   applySequentialReductions,

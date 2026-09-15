@@ -9,6 +9,7 @@ import {
   calculateChangeOrder,
   calculateCredit,
   calculateDocument,
+  calculateDraftDocument,
   calculateInvoiceFromResiduals,
   calculateLine,
   canonicalize,
@@ -63,6 +64,16 @@ describe("quantity and amount boundaries", () => {
       { quantity: "1", unit_price_cents: 100, discount_cents: 0, tax_bp: 0 },
     ]);
     expect(mixed.net_cents).toBe(100);
+  });
+
+  it("allows empty and zero-net drafts without changing publish-positive-net rules", () => {
+    const empty = calculateDraftDocument([]);
+    expect(empty.net_cents).toBe(0);
+    expect(empty.total_cents).toBe(0);
+    expect(empty.lines).toEqual([]);
+    const freeDraft = calculateDraftDocument([{ quantity: "1", unit_price_cents: 0, discount_cents: 0, tax_bp: 0 }]);
+    expect(freeDraft.net_cents).toBe(0);
+    expect(freeDraft.total_cents).toBe(0);
   });
 
   it("rejects a discount above rounded gross and tax above 2500 bp", () => {

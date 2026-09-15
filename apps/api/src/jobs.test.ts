@@ -200,6 +200,7 @@ describe("jobs API", () => {
     expect(data.mode).toBe("quote");
     expect(data.customer_name).toBe("Riley Chen");
     expect(data.permitted_actions).toEqual([]);
+    expect(data.quote_draft).toBeNull();
     expect(data.scope_total).toBeUndefined();
     expect(data.ledger).toBeUndefined();
     const replay = await createJob(token, jobBody(), KEY_2);

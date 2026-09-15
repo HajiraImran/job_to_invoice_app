@@ -71,3 +71,17 @@ export function calculateDocument(
     tax_by_rate,
   };
 }
+
+export function calculateDraftDocument(lines: readonly LineInput[]): DocumentTotals {
+  if (lines.length === 0) {
+    return {
+      schema_version: MONEY_SCHEMA_VERSION,
+      lines: [],
+      net_cents: toSafeCents(0n, "net_cents"),
+      tax_cents: toSafeCents(0n, "tax_cents"),
+      total_cents: toSafeCents(0n, "total_cents"),
+      tax_by_rate: [],
+    };
+  }
+  return calculateDocument(lines, { require_positive_net: false });
+}

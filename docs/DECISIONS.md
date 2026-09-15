@@ -285,3 +285,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | No for the `customers`/`jobs` shape once hosted-applied |
 | Escalation category | none |
 
+### D-014 — Quote drafting uses document_drafts payload, not a reduced line table
+
+| Field | Value |
+| --- | --- |
+| ID | D-014 |
+| Date | 2026-09-15 |
+| Status | Resolved |
+| Decision | Quote-mode draft jobs create or reopen one `commercial.document_drafts` row (`kind=quote`, `draft_state=editing`). Line items, notes, terms, and expiry days live in `payload_json`. Server recalculates FIN01 totals with `@job-to-invoice/domain` and does not persist client totals. `documents` / `document_lines` / official Q-numbers stay unpublished. Direct-invoice jobs cannot open this editor. Optimistic concurrency is If-Match on `version`. |
+| Reason | DATABASE.md already specifies `document_drafts.payload_json`. Inventing a separate draft-lines table or skipping tax/discount/units would reduce the PRD. Publish snapshots are a later slice. |
+| Evidence | `supabase/migrations/0006_document_drafts.sql`; `apps/api/src/drafts.ts`; `packages/schemas/src/draft.ts`; mobile `/(tabs)/jobs/[id]/quote` |
+| Owner | Engineering lead |
+| PRD implication | S09/S10 drafting is implemented locally. TX01 publish, EMAIL01, PDF, API04 invoice drafts, and hosted `0006` remain later. |
+| Impacted requirement IDs | S08, S09, S10, VAL03, VAL04, FIN01, API01, API03, DB01, SYNC02 |
+| Impacted test IDs | `packages/schemas/src/draft.test.ts`; `apps/api/src/drafts.test.ts`; `apps/mobile/src/quotes/form.test.ts`; `pnpm test:db`; `pnpm validate:openapi` |
+| Migration implications | Forward-only `0006_document_drafts.sql`. Do not edit or replay `0001`–`0006`. Do not dispatch hosted apply in this slice. |
+| Reversible | No for the `document_drafts` shape once hosted-applied |
+| Escalation category | none |
+

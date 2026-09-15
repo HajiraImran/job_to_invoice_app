@@ -15,6 +15,7 @@ const A = {
   asset: "aaaa3333-aaaa-4333-8333-aaaaaaaaaaaa",
   customer: "aaaa4444-aaaa-4444-8444-aaaaaaaaaaaa",
   job: "aaaa5555-aaaa-4555-8555-aaaaaaaaaaaa",
+  draft: "aaaa6666-aaaa-4666-8666-aaaaaaaaaaaa",
 };
 const B = {
   user: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -24,6 +25,7 @@ const B = {
   asset: "bbbb3333-bbbb-4333-8333-bbbbbbbbbbbb",
   customer: "bbbb4444-bbbb-4444-8444-bbbbbbbbbbbb",
   job: "bbbb5555-bbbb-4555-8555-bbbbbbbbbbbb",
+  draft: "bbbb6666-bbbb-4666-8666-bbbbbbbbbbbb",
 };
 
 class Fail extends Error {}
@@ -148,6 +150,17 @@ async function insertWorkspace(admin, person) {
       workspace_id, id, customer_id, title, no_site, lifecycle, mode
     ) values ($1, $2, $3, $4, true, 'draft', 'quote')`,
     [person.ws, person.job, person.customer, `Job ${person.ws.slice(0, 4)}`],
+  );
+  await admin.query(
+    `insert into commercial.document_drafts (
+      workspace_id, id, job_id, kind, payload_json, draft_state
+    ) values ($1, $2, $3, 'quote', $4::jsonb, 'editing')`,
+    [
+      person.ws,
+      person.draft,
+      person.job,
+      JSON.stringify({ notes: "", terms: "", expiry_days: 14, lines: [] }),
+    ],
   );
 }
 
@@ -305,7 +318,7 @@ try {
       );
       assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
     }
-    assert(setRoleFiles === 4, "expected SET ROLE migrator in 0002, 0003, 0004, and 0005");
+    assert(setRoleFiles === 5, "expected SET ROLE migrator in 0002, 0003, 0004, 0005, and 0006");
   });
 
   await test("migration history inserts succeed as the restored bootstrap role", async () => {
@@ -313,8 +326,8 @@ try {
       "select version from supabase_migrations.schema_migrations order by version",
     );
     assert(
-      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005",
-      "bootstrap role must record 0001-0005 after RESET ROLE",
+      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006",
+      "bootstrap role must record 0001-0006 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {
@@ -520,13 +533,15 @@ try {
       const mem = await admin.query("select user_id from commercial.memberships");
       const assets = await admin.query("select id from commercial.assets");
       const jobs = await admin.query("select id from commercial.jobs");
+      const drafts = await admin.query("select id from commercial.document_drafts");
       const me = await admin.query("select id from identity.app_users");
-      return { ws, mem, assets, jobs, me };
+      return { ws, mem, assets, jobs, drafts, me };
     });
     assert(rows.ws.rows.length === 1 && rows.ws.rows[0].id === A.ws, "A should see own workspace");
     assert(rows.mem.rows.length === 1 && rows.mem.rows[0].user_id === A.user, "A should see own membership");
     assert(rows.assets.rows.length === 1 && rows.assets.rows[0].id === A.asset, "A should see own asset");
     assert(rows.jobs.rows.length === 1 && rows.jobs.rows[0].id === A.job, "A should see own job");
+    assert(rows.drafts.rows.length === 1 && rows.drafts.rows[0].id === A.draft, "A should see own quote draft");
     assert(rows.me.rows.length === 1 && rows.me.rows[0].id === A.user, "A should see own app_user");
   });
 
@@ -536,12 +551,14 @@ try {
       const ws = await admin.query("select id from commercial.workspaces where id = $1", [B.ws]);
       const assets = await admin.query("select id from commercial.assets where id = $1", [B.asset]);
       const jobs = await admin.query("select id from commercial.jobs where id = $1", [B.job]);
+      const drafts = await admin.query("select id from commercial.document_drafts where id = $1", [B.draft]);
       const users = await admin.query("select id from identity.app_users where id = $1", [B.user]);
-      return { ws, assets, jobs, users };
+      return { ws, assets, jobs, drafts, users };
     });
     assert(rows.ws.rows.length === 0, "A must not see B workspace");
     assert(rows.assets.rows.length === 0, "A must not see B asset");
     assert(rows.jobs.rows.length === 0, "A must not see B job");
+    assert(rows.drafts.rows.length === 0, "A must not see B quote draft");
     assert(rows.users.rows.length === 0, "A must not see B user");
   });
 
@@ -613,6 +630,18 @@ try {
       /foreign key/i,
       "cross-tenant job customer_id",
     );
+    await expectFail(
+      () =>
+        admin.query("update commercial.document_drafts set job_id = $1 where id = $2", [B.job, A.draft]),
+      /foreign key|immutable/i,
+      "cross-tenant quote draft job_id",
+    );
+    await expectFail(
+      () =>
+        admin.query("update commercial.assets set draft_id = $1 where id = $2", [B.draft, A.asset]),
+      /foreign key/i,
+      "cross-tenant asset draft_id",
+    );
   });
 
   await test("completion_right cannot be cleared except by purge_app", async () => {
@@ -622,6 +651,31 @@ try {
       /write-once|completion_right/i,
       "clear completion_right",
     );
+  });
+
+  await test("one editing quote draft per job and version conflict", async () => {
+    await expectFail(
+      () =>
+        admin.query(
+          `insert into commercial.document_drafts (
+            workspace_id, id, job_id, kind, payload_json, draft_state
+          ) values ($1, gen_random_uuid(), $2, 'quote', $3::jsonb, 'editing')`,
+          [A.ws, A.job, JSON.stringify({ notes: "", terms: "", expiry_days: 14, lines: [] })],
+        ),
+      /unique|duplicate/i,
+      "second editing quote draft",
+    );
+    const first = await admin.query(
+      "update commercial.document_drafts set payload_json = payload_json, version = version + 1 where id = $1 returning version",
+      [A.draft],
+    );
+    assert(first.rows[0].version === 2, "draft version should increment");
+    await admin.query(
+      "update commercial.assets set draft_id = $1 where id = $2",
+      [A.draft, A.asset],
+    );
+    const linked = await admin.query("select draft_id from commercial.assets where id = $1", [A.asset]);
+    assert(linked.rows[0].draft_id === A.draft, "same-tenant asset draft_id FK should succeed");
   });
 
   await test("missing tenant context denies access", async () => {
@@ -763,6 +817,18 @@ try {
       },
       /permission denied/i,
       "anon jobs select",
+    );
+    await expectFail(
+      async () => {
+        await admin.query("set role anon");
+        try {
+          await admin.query("select id from commercial.document_drafts");
+        } finally {
+          await admin.query("reset role");
+        }
+      },
+      /permission denied/i,
+      "anon document_drafts select",
     );
     await expectFail(
       async () => {

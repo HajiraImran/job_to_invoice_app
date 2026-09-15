@@ -10,6 +10,10 @@ export function jobDetailPath(jobId: string): string {
   return `/(tabs)/jobs/${jobId}`;
 }
 
+export function jobQuotePath(jobId: string): string {
+  return `/(tabs)/jobs/${jobId}/quote`;
+}
+
 export function canOpenCreateJob(status: string): boolean {
   return status === "authenticated" || status === "offline_cached";
 }

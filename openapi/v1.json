@@ -209,11 +209,101 @@
           }
         ],
         "responses": {
-          "200": { "description": "Job overview without ledger or scope totals" },
+          "200": { "description": "Job overview with optional current quote draft totals; no ledger" },
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant job" },
           "422": { "description": "Invalid job id" }
+        }
+      }
+    },
+    "/v1/jobs/{jobId}/quote": {
+      "post": {
+        "summary": "Create or return the current editing quote draft for a quote-mode job",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Editing quote draft with server-calculated totals" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant job" },
+          "409": { "description": "Idempotency mismatch" },
+          "422": { "description": "Direct-invoice job, extra body fields, or invalid job id" }
+        }
+      }
+    },
+    "/v1/drafts/{draftId}": {
+      "get": {
+        "summary": "Read an editing quote draft and server-calculated totals",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Quote draft payload and calculated totals" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant draft" },
+          "422": { "description": "Invalid draft id" }
+        }
+      },
+      "patch": {
+        "summary": "Replace the full editing quote draft payload",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Current draft version integer"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/QuoteDraftPayload" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Updated draft with server-calculated totals" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant draft" },
+          "409": { "description": "Version conflict or idempotency mismatch" },
+          "422": { "description": "Validation failed" }
         }
       }
     }
@@ -239,6 +329,36 @@
           "site_address": { "type": ["object", "null"], "additionalProperties": false },
           "internal_notes": { "type": ["string", "null"], "maxLength": 4000 },
           "mode": { "type": "string", "enum": ["quote", "direct_invoice"] }
+        }
+      },
+      "QuoteDraftPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lines"],
+        "properties": {
+          "notes": { "type": "string", "maxLength": 2000 },
+          "terms": { "type": "string", "maxLength": 4000 },
+          "expiry_days": { "type": "integer", "minimum": 1, "maximum": 90 },
+          "lines": {
+            "type": "array",
+            "maxItems": 100,
+            "items": { "$ref": "#/components/schemas/QuoteDraftLine" }
+          }
+        }
+      },
+      "QuoteDraftLine": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["client_line_id", "description", "unit", "quantity", "unit_price_cents", "discount_cents", "tax_bp"],
+        "properties": {
+          "client_line_id": { "type": "string", "format": "uuid" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "unit": { "type": "string", "enum": ["item", "hour", "day", "square_foot", "linear_foot", "custom"] },
+          "custom_unit_label": { "type": ["string", "null"], "maxLength": 20 },
+          "quantity": { "type": "string", "pattern": "^(0|[1-9]\\d{0,5})(\\.\\d{1,3})?$" },
+          "unit_price_cents": { "type": "integer", "minimum": 0, "maximum": 99999999 },
+          "discount_cents": { "type": "integer", "minimum": 0 },
+          "tax_bp": { "type": "integer", "minimum": 0, "maximum": 2500 }
         }
       }
     }

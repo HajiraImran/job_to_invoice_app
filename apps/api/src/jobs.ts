@@ -8,6 +8,7 @@ import {
   type JobListState,
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
+import { quoteDraftSummary } from "./drafts.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { API_ERROR_CODES, fail, success } from "./envelope.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
@@ -42,6 +43,9 @@ type JobRow = {
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
+  quote_draft_id?: string | null;
+  quote_draft_version?: number | null;
+  quote_draft_payload?: unknown;
   replayed?: boolean;
 };
 
@@ -159,6 +163,10 @@ function jobDetail(row: JobRow) {
     created_at: asIso(row.created_at),
     updated_at: asIso(row.updated_at),
     permitted_actions: [] as string[],
+    quote_draft:
+      row.quote_draft_id && row.quote_draft_version
+        ? quoteDraftSummary(row.quote_draft_payload, row.quote_draft_id, row.quote_draft_version)
+        : null,
   };
 }
 
@@ -470,10 +478,16 @@ export function registerJobRoutes(
       const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
         const result = await client.query<JobRow>(
           `select j.id, j.workspace_id, j.customer_id, c.name as customer_name, j.title, j.site_address_json,
-                  j.no_site, j.lifecycle, j.mode, j.internal_notes, j.version, j.created_at, j.updated_at
+                  j.no_site, j.lifecycle, j.mode, j.internal_notes, j.version, j.created_at, j.updated_at,
+                  d.id as quote_draft_id, d.version as quote_draft_version, d.payload_json as quote_draft_payload
            from commercial.jobs j
            join commercial.customers c
              on c.workspace_id = j.workspace_id and c.id = j.customer_id
+           left join commercial.document_drafts d
+             on d.workspace_id = j.workspace_id
+            and d.job_id = j.id
+            and d.kind = 'quote'
+            and d.draft_state = 'editing'
            where j.id = $1`,
           [params.jobId],
         );

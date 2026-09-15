@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { jobFormFocusName, jobRequestFromForm, emptyJobForm, listStateFromFilter } from "./form.ts";
 import { presentJobDetail, presentJobsList, nextActionCopy } from "./presentation.ts";
-import { canOpenCreateJob, createJobDisabled, createJobPath, jobDetailPath, jobsIndexPath } from "./routes.ts";
+import { canOpenCreateJob, createJobDisabled, createJobPath, jobDetailPath, jobQuotePath, jobsIndexPath } from "./routes.ts";
 
 describe("job form", () => {
   it("maps a complete form to a create payload", () => {
@@ -129,6 +129,9 @@ describe("job navigation", () => {
     expect(createJobPath()).toBe("/(tabs)/jobs/new");
     expect(jobDetailPath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(
       "/(tabs)/jobs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    );
+    expect(jobQuotePath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(
+      "/(tabs)/jobs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/quote",
     );
   });
 });
