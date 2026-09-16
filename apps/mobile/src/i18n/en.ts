@@ -107,6 +107,8 @@ export const copy = {
   quoteCustomer: "Customer",
   quoteDiscountTotal: "Discount",
   quotePdfPreparing: "Customer PDF is preparing. This quote is already published.",
+  quotePdfStillPreparing: "PDF is still being prepared",
+  quotePdfChecking: "Checking…",
   quotePdfDownload: "Download PDF",
   quotePdfFailed: "The customer PDF could not be generated. Try again.",
   quotePdfRetry: "Try again",

@@ -225,7 +225,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | DEL05 | Staging TestFlight runbooks secrets transfer demo | ops | — | — | — | — | Handover | REL | PENDING | |
 | OPS01 | Separate env; sandbox≠prod; TEST watermark; no prod PII in dev | ops | — | — | — | — | OPS01 | — | PENDING | |
 | OPS02 | CI gates + flags for publication/purchases | repo | — | CI | — | — | QA68 | — | PENDING | |
-| OPS03 | Structured redacted logs; Sentry no replay; dashboards | all | — | Sentry | — | — | packages/schemas/src/index.test.ts redactText; apps/api/src/me-log.test.ts; apps/api/src/db.test.ts; apps/api/src/auth.test.ts /v1/me stages | — | PENDING | Redaction helpers exist. GET /v1/me emits allowlisted owner_me stages plus optional SQLSTATE. Sentry wiring and dashboards later |
+| OPS03 | Structured redacted logs; Sentry no replay; dashboards | all | — | Sentry | — | — | packages/schemas/src/index.test.ts redactText; apps/api/src/me-log.test.ts; apps/api/src/db.test.ts; apps/api/src/auth.test.ts /v1/me stages; apps/worker/src/worker-log.test.ts | — | PENDING | Redaction helpers exist. GET /v1/me emits allowlisted owner_me stages plus optional SQLSTATE. Worker original-PDF emits allowlisted worker_pdf stages only. Sentry wiring and dashboards later |
 | OPS04 | Sev1 alerts; staffed on-call | ops | — | alerts | — | — | OPS04 | §34 | PENDING | Owner staffing |
 | OPS05 | Sev1 30m / Sev2 4h; no invented breach deadlines | ops | — | incidents | — | — | Runbook | — | PENDING | |
 | OPS06 | Restore runbook; quarterly drill | ops | — | restore | — | — | QA58 QA66 | PRV05 | PENDING | |

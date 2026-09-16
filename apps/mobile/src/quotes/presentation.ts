@@ -1,3 +1,5 @@
+import { copy } from "../i18n/en.ts";
+
 export type QuoteEditorKind =
   | "loading"
   | "error"
@@ -177,4 +179,17 @@ export function presentQuotePdf(download?: QuotePdfDownload): {
     return { kind: "failed", showRetry: true };
   }
   return { kind: "preparing", showRetry: true };
+}
+
+export function presentQuotePdfRetry(input: {
+  checking: boolean;
+  stillPreparing: boolean;
+}): { busy: boolean; label: string; acknowledgement?: string } {
+  if (input.checking) {
+    return { busy: true, label: copy.quotePdfChecking };
+  }
+  if (input.stillPreparing) {
+    return { busy: false, label: copy.quotePdfRetry, acknowledgement: copy.quotePdfStillPreparing };
+  }
+  return { busy: false, label: copy.quotePdfRetry };
 }

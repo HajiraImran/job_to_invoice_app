@@ -8,6 +8,7 @@ import {
 import type { Pool } from "pg";
 import { withWorkerRole } from "./db.ts";
 import type { DocumentsObjectStore } from "./documents-store.ts";
+import type { WorkerPdfStage } from "./worker-log.ts";
 
 export type PdfRenderer = (document: QuotePdfDocument) => Promise<Buffer>;
 
@@ -88,10 +89,30 @@ function asDocument(row: SourceRow): QuotePdfDocument {
   };
 }
 
+const HEARTBEAT_MS = 15_000;
+
+async function whileLeased<T>(pool: Pool, taskId: string, fn: () => Promise<T>): Promise<T> {
+  const beat = async () => {
+    await withWorkerRole(pool, async (client) => {
+      await client.query("select commercial.heartbeat_outbox_task($1::uuid)", [taskId]);
+    });
+  };
+  await beat();
+  const timer = setInterval(() => {
+    void beat().catch(() => undefined);
+  }, HEARTBEAT_MS);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 export async function processGenerateOriginalPdf(input: {
   pool: Pool;
   store: DocumentsObjectStore;
   render: PdfRenderer;
+  onStage?: (stage: WorkerPdfStage) => void;
 }): Promise<"idle" | "done" | "retry" | "dead"> {
   const claimed = await withWorkerRole(input.pool, async (client) => {
     const result = await client.query<ClaimRow>("select * from commercial.claim_generate_original_pdf()");
@@ -108,6 +129,7 @@ export async function processGenerateOriginalPdf(input: {
   if (!claimed) {
     return "idle";
   }
+  input.onStage?.("claimed");
 
   try {
     const source = await withWorkerRole(input.pool, async (client) => {
@@ -135,18 +157,21 @@ export async function processGenerateOriginalPdf(input: {
       revision: source.row.revision_no,
       artifactId: source.artifactId,
     });
-    await withWorkerRole(input.pool, async (client) => {
-      await client.query("select commercial.heartbeat_outbox_task($1::uuid)", [claimed.id]);
+    const bytes = await whileLeased(input.pool, claimed.id, async () => {
+      input.onStage?.("rendering");
+      const rendered = await input.render(document);
+      input.onStage?.("uploading");
+      await input.store.putObject({ key, body: rendered, contentType: "application/pdf" });
+      return rendered;
     });
-    const bytes = await input.render(document);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
-    await input.store.putObject({ key, body: bytes, contentType: "application/pdf" });
     await withWorkerRole(input.pool, async (client) => {
       await client.query(
         "select commercial.complete_original_pdf($1::uuid, $2::uuid, $3, $4, $5::bigint)",
         [claimed.id, source.artifactId, key, sha256, bytes.byteLength],
       );
     });
+    input.onStage?.("completed");
     return "done";
   } catch (error) {
     const permanent =
@@ -162,6 +187,11 @@ export async function processGenerateOriginalPdf(input: {
       );
       return failed.rows[0]?.fail_original_pdf ?? "pending";
     });
-    return status === "dead" ? "dead" : "retry";
+    if (status === "dead") {
+      input.onStage?.("dead");
+      return "dead";
+    }
+    input.onStage?.("retry_scheduled");
+    return "retry";
   }
 }

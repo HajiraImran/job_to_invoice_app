@@ -8,6 +8,7 @@ import { jobDetailPath, jobQuotePath } from "../../../../src/jobs/routes.ts";
 import type { JobDetail } from "../../../../src/jobs/presentation.ts";
 import {
   presentQuotePdf,
+  presentQuotePdfRetry,
   presentQuoteReview,
   type PublishedQuoteRecord,
   type QuotePdfDownload,
@@ -31,6 +32,9 @@ export default function QuotePublishScreen() {
   const [publishing, setPublishing] = useState(false);
   const [pdfDownload, setPdfDownload] = useState<QuotePdfDownload | undefined>();
   const [pdfError, setPdfError] = useState<string | undefined>();
+  const [pdfChecking, setPdfChecking] = useState(false);
+  const [pdfStillPreparing, setPdfStillPreparing] = useState(false);
+  const pdfInFlight = useRef(false);
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number; code?: string } | undefined>();
   const publishKey = useRef<string | undefined>(undefined);
 
@@ -62,6 +66,7 @@ export default function QuotePublishScreen() {
         setPublished(doc.data);
         setPdfDownload({ state: doc.data.pdf_state, url: null });
         setPdfError(undefined);
+        setPdfStillPreparing(false);
         setPreview(undefined);
         setLoading(false);
         return;
@@ -127,7 +132,7 @@ export default function QuotePublishScreen() {
     let cancelled = false;
     let settled = false;
     const timer = setInterval(() => {
-      if (settled || cancelled) {
+      if (settled || cancelled || pdfInFlight.current) {
         return;
       }
       void refreshPdf(published.id).then((result) => {
@@ -167,18 +172,32 @@ export default function QuotePublishScreen() {
   const snapshot = published?.snapshot ?? preview?.snapshot;
   const publishDisabled = view.publishDisabled || publishing;
   const pdfView = presentQuotePdf(pdfDownload ?? (published ? { state: published.pdf_state, url: null } : undefined));
+  const pdfRetry = presentQuotePdfRetry({ checking: pdfChecking, stillPreparing: pdfStillPreparing });
 
   async function openOrRetryPdf() {
-    if (!published) {
+    if (!published || pdfInFlight.current) {
       return;
     }
-    const result = await refreshPdf(published.id);
-    if (result.ok && result.data.url) {
-      try {
-        await Linking.openURL(result.data.url);
-      } catch {
-        setPdfError(copy.quotePdfOpenError);
+    pdfInFlight.current = true;
+    setPdfChecking(true);
+    setPdfStillPreparing(false);
+    try {
+      const result = await refreshPdf(published.id);
+      if (result.ok && result.data.url) {
+        setPdfStillPreparing(false);
+        try {
+          await Linking.openURL(result.data.url);
+        } catch {
+          setPdfError(copy.quotePdfOpenError);
+        }
+        return;
       }
+      if (result.ok && result.data.state === "preparing") {
+        setPdfStillPreparing(true);
+      }
+    } finally {
+      pdfInFlight.current = false;
+      setPdfChecking(false);
     }
   }
 
@@ -200,6 +219,7 @@ export default function QuotePublishScreen() {
       setPublished(result.data);
       setPdfDownload({ state: result.data.pdf_state, url: null });
       setPdfError(undefined);
+      setPdfStillPreparing(false);
       setError(undefined);
       setPublishing(false);
       return;
@@ -328,13 +348,24 @@ export default function QuotePublishScreen() {
                     {pdfError}
                   </Text>
                 ) : null}
+                {pdfRetry.acknowledgement ? (
+                  <Text accessibilityLiveRegion="polite" style={styles.banner}>
+                    {pdfRetry.acknowledgement}
+                  </Text>
+                ) : null}
                 {pdfView.kind === "ready" ? (
                   <Pressable accessibilityRole="button" onPress={() => void openOrRetryPdf()} style={styles.primary}>
                     <Text style={styles.primaryLabel}>{copy.quotePdfDownload}</Text>
                   </Pressable>
                 ) : (
-                  <Pressable accessibilityRole="button" onPress={() => void openOrRetryPdf()} style={styles.secondary}>
-                    <Text style={styles.secondaryLabel}>{copy.quotePdfRetry}</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: pdfRetry.busy }}
+                    disabled={pdfRetry.busy}
+                    onPress={() => void openOrRetryPdf()}
+                    style={styles.secondary}
+                  >
+                    <Text style={styles.secondaryLabel}>{pdfRetry.label}</Text>
                   </Pressable>
                 )}
               </>

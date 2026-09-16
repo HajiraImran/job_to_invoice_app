@@ -178,6 +178,7 @@ describe("generate original PDF outbox", () => {
 
   it("uploads once, reuses the reserved object key, and ignores a duplicate claim", async () => {
     const keys: string[] = [];
+    const stages: string[] = [];
     const store = {
       putObject: async ({ key }: { key: string }) => {
         keys.push(key);
@@ -185,8 +186,14 @@ describe("generate original PDF outbox", () => {
     };
     const render = async () => Buffer.from("%PDF-1.4 original");
     await insertTask(TASK, EVENT, DOC, { document_id: DOC, kind: "quote", workspace_id: "ffffffff-ffff-4fff-8fff-ffffffffffff" });
-    const first = await processGenerateOriginalPdf({ pool: running().pool, store, render });
+    const first = await processGenerateOriginalPdf({
+      pool: running().pool,
+      store,
+      render,
+      onStage: (stage) => stages.push(stage),
+    });
     expect(first).toBe("done");
+    expect(stages).toEqual(["claimed", "rendering", "uploading", "completed"]);
     const reserved = await running().admin.query<{ payload_json: { artifact_id: string } }>(
       "select payload_json from commercial.outbox_tasks where id = $1",
       [TASK],
@@ -262,6 +269,7 @@ describe("generate original PDF outbox", () => {
     );
     await insertTask(retryTask, retryEvent, retryDoc, { document_id: retryDoc, kind: "quote" });
     const keys: string[] = [];
+    const stages: string[] = [];
     let shouldFail = true;
     const store = {
       putObject: async ({ key }: { key: string }) => {
@@ -272,7 +280,15 @@ describe("generate original PDF outbox", () => {
       },
     };
     const render = async () => Buffer.from("%PDF-1.4 retry");
-    expect(await processGenerateOriginalPdf({ pool: running().pool, store, render })).toBe("retry");
+    expect(
+      await processGenerateOriginalPdf({
+        pool: running().pool,
+        store,
+        render,
+        onStage: (stage) => stages.push(stage),
+      }),
+    ).toBe("retry");
+    expect(stages).toEqual(["claimed", "rendering", "uploading", "retry_scheduled"]);
     const reserved = await running().admin.query<{ payload_json: { artifact_id: string }; status: string }>(
       "select payload_json, attempts, status from commercial.outbox_tasks where id = $1",
       [retryTask],
@@ -289,13 +305,16 @@ describe("generate original PDF outbox", () => {
   it("fails permanent validation immediately and dead-letters the fifth transient failure", async () => {
     await insertTask(EMPTY_TASK, EMPTY_EVENT, EMPTY_DOC, { document_id: EMPTY_DOC, kind: "quote" });
     const store = { putObject: async () => undefined };
+    const stages: string[] = [];
     expect(
       await processGenerateOriginalPdf({
         pool: running().pool,
         store,
         render: async () => Buffer.from("%PDF-1.4 unused"),
+        onStage: (stage) => stages.push(stage),
       }),
     ).toBe("dead");
+    expect(stages).toEqual(["claimed", "dead"]);
     const empty = await running().admin.query("select status, attempts from commercial.outbox_tasks where id = $1", [
       EMPTY_TASK,
     ]);
