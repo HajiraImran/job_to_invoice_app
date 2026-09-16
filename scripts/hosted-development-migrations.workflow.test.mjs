@@ -57,10 +57,10 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.equal(confirm.includes(confirmationExpr), true);
   assert.match(
     yaml,
-    /Type APPLY_0008 to apply pending hosted development migration 0008_original_quote_pdf\.sql/,
+    /Type APPLY_0009 to apply pending hosted development migration 0009_worker_app_membership\.sql/,
   );
-  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0008" \]/);
-  assert.doesNotMatch(yaml, /APPLY_0007/);
+  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0009" \]/);
+  assert.doesNotMatch(yaml, /APPLY_0008/);
   assert.doesNotMatch(confirm, /secrets\./);
   assert.doesNotMatch(confirm, /DATABASE_URL_MIGRATIONS/);
   assert.doesNotMatch(confirm, /environment:/);
@@ -89,10 +89,10 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.equal([...apply.matchAll(/pnpm hosted:db-push/g)].length, 1);
   assert.equal([...apply.matchAll(/pnpm hosted:db-check/g)].length, 2);
   assert.equal([...apply.matchAll(/grep -qx 'ok: true'/g)].length, 2);
-  assert.match(apply, /grep -qx 'pending: 0008_original_quote_pdf\.sql'/);
+  assert.match(apply, /grep -qx 'pending: 0009_worker_app_membership\.sql'/);
   assert.match(apply, /grep -qx 'pending: \(none\)'/);
   assert.ok(
-    apply.indexOf("pending: 0008_original_quote_pdf.sql") < apply.indexOf("pnpm hosted:db-push"),
+    apply.indexOf("pending: 0009_worker_app_membership.sql") < apply.indexOf("pnpm hosted:db-push"),
   );
 
   assert.doesNotMatch(yaml, /^env:/m);
@@ -110,11 +110,11 @@ test("hosted development migration workflow is dispatch-only and statically gate
 
   const names = namedSteps(apply);
   assert.ok(
-    names.indexOf("Check pending hosted migration 0008") <
-      names.indexOf("Apply hosted migration 0008"),
+    names.indexOf("Check pending hosted migration 0009") <
+      names.indexOf("Apply hosted migration 0009"),
   );
   assert.ok(
-    names.indexOf("Apply hosted migration 0008") <
+    names.indexOf("Apply hosted migration 0009") <
       names.indexOf("Verify no pending hosted migrations"),
   );
   assert.ok(

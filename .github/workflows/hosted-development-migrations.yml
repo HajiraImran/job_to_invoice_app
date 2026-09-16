@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type APPLY_0008 to apply pending hosted development migration 0008_original_quote_pdf.sql
+        description: Type APPLY_0009 to apply pending hosted development migration 0009_worker_app_membership.sql
         required: true
         type: string
 
@@ -24,7 +24,7 @@ jobs:
           CONFIRMATION: ${{ github.event.inputs.confirmation }}
         run: |
           set -euo pipefail
-          if [ "$CONFIRMATION" != "APPLY_0008" ]; then
+          if [ "$CONFIRMATION" != "APPLY_0009" ]; then
             echo "Confirmation phrase did not match. Hosted apply aborted."
             exit 1
           fi
@@ -56,7 +56,7 @@ jobs:
           mkdir -p supabase/.temp
           printf '%s' 'fhgacxkpgjdcjuvanesv' > supabase/.temp/project-ref
 
-      - name: Check pending hosted migration 0008
+      - name: Check pending hosted migration 0009
         env:
           DATABASE_URL_MIGRATIONS: ${{ secrets.DATABASE_URL_MIGRATIONS }}
         run: |
@@ -69,9 +69,9 @@ jobs:
           report="$(pnpm hosted:db-check)"
           printf '%s\n' "$report"
           printf '%s\n' "$report" | grep -qx 'ok: true'
-          printf '%s\n' "$report" | grep -qx 'pending: 0008_original_quote_pdf.sql'
+          printf '%s\n' "$report" | grep -qx 'pending: 0009_worker_app_membership.sql'
 
-      - name: Apply hosted migration 0008
+      - name: Apply hosted migration 0009
         env:
           DATABASE_URL_MIGRATIONS: ${{ secrets.DATABASE_URL_MIGRATIONS }}
         run: |
