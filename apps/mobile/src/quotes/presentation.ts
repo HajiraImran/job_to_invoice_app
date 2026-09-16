@@ -175,6 +175,19 @@ export function presentQuoteReview(input: {
   return { kind: "ready", showRetry: false, publishDisabled: false };
 }
 
+export function quotePublishBackControls(kind: QuoteReviewKind): {
+  cancelConfirmation: boolean;
+  jobOverview: boolean;
+} {
+  if (kind === "confirming") {
+    return { cancelConfirmation: true, jobOverview: false };
+  }
+  if (kind === "publishing") {
+    return { cancelConfirmation: false, jobOverview: false };
+  }
+  return { cancelConfirmation: false, jobOverview: true };
+}
+
 export type QuotePdfDownload = {
   state: string;
   url: string | null;

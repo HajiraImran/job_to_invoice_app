@@ -17,6 +17,7 @@ import {
   type OwnerMeSafeEvent,
   type OwnerMeStage,
 } from "./me-log.ts";
+import type { QuotePublishSafeEvent } from "./publish-log.ts";
 import { registerDraftRoutes } from "./drafts.ts";
 import { registerJobRoutes } from "./jobs.ts";
 import { registerQuotePublishRoutes } from "./quotes.ts";
@@ -35,6 +36,7 @@ export type AppDeps = {
   verifyJwt?: JwtVerifier;
   pool?: Pool;
   logOwnerMe?: (event: OwnerMeSafeEvent) => void;
+  logQuotePublish?: (event: QuotePublishSafeEvent) => void;
   documentsStore?: { presignGet: (key: string) => Promise<string> };
   nowSec?: () => number;
 };
@@ -75,6 +77,9 @@ function ownerMeDatabaseStage(error: unknown): OwnerMeStage {
   if (error instanceof ApiTransactionError) {
     if (error.stage === "session_query_failed") {
       return "provision_owner_failed";
+    }
+    if (error.stage === "tenant_context_failed") {
+      return "database_or_provisioning_failed";
     }
     return error.stage;
   }

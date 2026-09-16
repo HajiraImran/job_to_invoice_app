@@ -17,6 +17,7 @@ import {
   presentQuotePdfRetry,
   presentQuoteReview,
   quoteActionLabel,
+  quotePublishBackControls,
 } from "./presentation.ts";
 import { jobQuotePath, jobRequestPath } from "../jobs/routes.ts";
 
@@ -190,6 +191,22 @@ describe("quote editor states", () => {
         error: { message: "Enter a valid customer email before publishing.", retryable: false, status: 422 },
       }),
     ).toMatchObject({ kind: "confirming", message: "Enter a valid customer email before publishing.", publishDisabled: false });
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
+        confirming: true,
+        publishing: false,
+        preview,
+        error: { message: "Service unavailable.", retryable: true, status: 503, code: "UNAVAILABLE" },
+      }),
+    ).toMatchObject({ kind: "confirming", message: "Service unavailable." });
+    expect(quotePublishBackControls("confirming")).toEqual({ cancelConfirmation: true, jobOverview: false });
+    expect(quotePublishBackControls("publishing")).toEqual({ cancelConfirmation: false, jobOverview: false });
+    expect(quotePublishBackControls("ready")).toEqual({ cancelConfirmation: false, jobOverview: true });
+    expect(quotePublishBackControls("confirming").cancelConfirmation && quotePublishBackControls("confirming").jobOverview).toBe(
+      false,
+    );
     expect(
       presentQuoteReview({
         authStatus: "authenticated",

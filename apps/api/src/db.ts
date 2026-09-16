@@ -5,6 +5,7 @@ export const API_TRANSACTION_STAGES = [
   "database_connect_failed",
   "transaction_start_failed",
   "set_role_failed",
+  "tenant_context_failed",
   "session_query_failed",
 ] as const;
 
@@ -86,7 +87,11 @@ export async function withTenant<T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   return withApiRole(pool, async (client) => {
-    await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [workspaceId, actorId]);
+    try {
+      await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [workspaceId, actorId]);
+    } catch (error) {
+      throw new ApiTransactionError("tenant_context_failed", sqlstateFromUnknown(error));
+    }
     return fn(client);
   });
 }

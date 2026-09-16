@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Pool, PoolClient } from "pg";
-import { ApiTransactionError, sqlstateFromUnknown, withApiRole } from "./db.ts";
+import { ApiTransactionError, sqlstateFromUnknown, withApiRole, withTenant } from "./db.ts";
 
 type Script = {
   connect?: unknown;
   begin?: unknown;
   setRole?: unknown;
+  tenant?: unknown;
   query?: unknown;
   commit?: unknown;
   rows?: unknown[];
@@ -35,6 +36,12 @@ function scriptedPool(script: Script): Pool {
           if (normalized === "set local role api_app") {
             if (script.setRole) {
               throw script.setRole;
+            }
+            return { rows: [] };
+          }
+          if (normalized.includes("set_local_tenant_context")) {
+            if (script.tenant) {
+              throw script.tenant;
             }
             return { rows: [] };
           }
@@ -107,6 +114,21 @@ describe("withApiRole stages", () => {
       sqlstate: "42883",
       message: "unavailable",
     });
+  });
+
+  it("maps tenant context failure without copying identifiers", async () => {
+    const thrown = await withTenant(
+      scriptedPool({ tenant: pgError("42501", "permission denied for function set_local_tenant_context") }),
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+      async () => undefined,
+    ).catch((value) => value);
+    expect(thrown).toMatchObject({
+      stage: "tenant_context_failed",
+      sqlstate: "42501",
+      message: "unavailable",
+    });
+    expect(JSON.stringify(thrown)).not.toMatch(/11111111|set_local_tenant_context|permission denied/i);
   });
 
   it("ignores non-SQLSTATE node codes", () => {

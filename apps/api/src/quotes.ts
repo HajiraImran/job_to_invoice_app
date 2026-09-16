@@ -33,6 +33,14 @@ import { payloadFromJson } from "./drafts.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { fail, success } from "./envelope.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
+import {
+  quotePublishDatabaseStage,
+  quotePublishSafeEvent,
+  quotePublishSqlstate,
+  writeQuotePublishEvent,
+  type QuotePublishSafeEvent,
+  type QuotePublishStage,
+} from "./publish-log.ts";
 
 const GENERIC_AUTH = "Could not verify your session.";
 const SIGN_IN_REQUIRED = "Sign in required.";
@@ -252,6 +260,14 @@ function approvalSecrets(env: Record<string, unknown>) {
   };
 }
 
+function resolveApprovalSecrets(env: Record<string, unknown>) {
+  try {
+    return approvalSecrets(env);
+  } catch {
+    return undefined;
+  }
+}
+
 export function quoteDocumentSummary(row: {
   id: string;
   number: string;
@@ -397,6 +413,7 @@ export function registerQuotePublishRoutes(
     verifyJwt?: JwtVerifier;
     pool?: Pool;
     documentsStore?: { presignGet: (key: string) => Promise<string> };
+    logQuotePublish?: (event: QuotePublishSafeEvent) => void;
   },
   options: { limiterAllow: (key: string) => { ok: true } | { ok: false; retryAfterSec: number } },
 ): void {
@@ -591,60 +608,88 @@ export function registerQuotePublishRoutes(
   });
 
   app.post("/v1/drafts/:draftId/publish", async (request, reply) => {
+    const emit = (status: number, stage: QuotePublishStage, sqlstate?: string) => {
+      try {
+        const event = quotePublishSafeEvent({ status, stage, sqlstate });
+        if (deps.logQuotePublish) {
+          deps.logQuotePublish(event);
+        } else {
+          writeQuotePublishEvent(event);
+        }
+      } catch {
+        /* diagnostics must not change publish */
+      }
+    };
+    const replyFail = (
+      stage: QuotePublishStage,
+      code: string,
+      message: string,
+      extra?: { field_errors?: { field: string; message: string }[]; retryAfter?: number; sqlstate?: string },
+    ) => {
+      const result = fail(request.id, code, message, { field_errors: extra?.field_errors });
+      if (extra?.retryAfter !== undefined) {
+        void reply.header("Retry-After", String(extra.retryAfter));
+      }
+      emit(result.status, stage, extra?.sqlstate);
+      return reply.status(result.status).send(result.body);
+    };
+
+    emit(0, "request_received");
     const token = bearerToken(request.headers.authorization);
     if (!token) {
-      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+      return replyFail("jwt_rejected", API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
     }
     if (!deps.verifyJwt || !deps.pool) {
-      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
-    }
-    const key = idempotencyKey(request);
-    if (!key || !UUID.test(key)) {
-      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
-        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
-      });
-    }
-    const expectedVersion = ifMatchVersion(request);
-    if (expectedVersion === undefined) {
-      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "If-Match draft version is required.", {
-        field_errors: [{ field: "If-Match", message: "Draft version required" }],
-      });
-    }
-    const params = request.params as { draftId?: string };
-    if (!isClientUuid(params.draftId)) {
-      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
-        field_errors: [{ field: "draftId", message: "A draft UUID is required." }],
-      });
-    }
-    const parsed = parseQuotePublish(request.body ?? {});
-    if (!parsed.ok) {
-      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
-        field_errors: parsed.field_errors,
-      });
+      return replyFail("configuration_unavailable", "UNAVAILABLE", "Service unavailable.");
     }
     let access: VerifiedAccess;
     try {
       access = await deps.verifyJwt(token);
     } catch {
-      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      return replyFail("jwt_rejected", API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
     }
     const parsedEmail = parseOwnerEmail(access.email);
     if (!parsedEmail.ok) {
-      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      return replyFail("jwt_rejected", API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
     }
+    emit(0, "jwt_verified");
     const limited = options.limiterAllow(access.sub);
     if (!limited.ok) {
-      const result = fail(request.id, API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.");
-      void reply.header("Retry-After", String(limited.retryAfterSec));
-      return reply.status(result.status).send(result.body);
+      return replyFail("response_sent", API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.", {
+        retryAfter: limited.retryAfterSec,
+      });
     }
-    const secrets = approvalSecrets(deps.env ?? {});
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return replyFail("validation_failed", API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const expectedVersion = ifMatchVersion(request);
+    if (expectedVersion === undefined) {
+      return replyFail("validation_failed", API_ERROR_CODES.VALIDATION_FAILED, "If-Match draft version is required.", {
+        field_errors: [{ field: "If-Match", message: "Draft version required" }],
+      });
+    }
+    const params = request.params as { draftId?: string };
+    if (!isClientUuid(params.draftId)) {
+      return replyFail("validation_failed", API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "draftId", message: "A draft UUID is required." }],
+      });
+    }
+    const parsed = parseQuotePublish(request.body ?? {});
+    if (!parsed.ok) {
+      return replyFail("validation_failed", API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    const secrets = resolveApprovalSecrets(deps.env ?? {});
     if (!secrets) {
-      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+      return replyFail("configuration_unavailable", "UNAVAILABLE", "Service unavailable.");
     }
     const recipient = parseOwnerEmail(parsed.value.recipient_email);
     if (!recipient.ok) {
-      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+      return replyFail("validation_failed", API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
         field_errors: [{ field: "recipient_email", message: "Enter a valid email address." }],
       });
     }
@@ -663,94 +708,102 @@ export function registerQuotePublishRoutes(
     let deliveryKeyVersion: number;
     let encryptedEmail: Buffer;
     try {
-      encodeFragmentToken(approvalToken);
-      const hashed = hashApprovalToken(approvalToken, secrets.hash);
-      tokenHash = hashed.hash;
-      tokenKeyVersion = hashed.keyVersion;
-      const encrypted = encryptDeliveryToken(approvalToken, secrets.delivery);
-      ciphertext = encrypted.ciphertext;
-      nonce = encrypted.nonce;
-      algorithm = encrypted.algorithm;
-      deliveryKeyVersion = encrypted.keyVersion;
-      const packedEmail = encryptRecipientEmail(recipient.display, secrets.delivery);
-      encryptedEmail = Buffer.concat([packedEmail.nonce, packedEmail.ciphertext]);
+      try {
+        encodeFragmentToken(approvalToken);
+        const hashed = hashApprovalToken(approvalToken, secrets.hash);
+        tokenHash = hashed.hash;
+        tokenKeyVersion = hashed.keyVersion;
+        const encrypted = encryptDeliveryToken(approvalToken, secrets.delivery);
+        ciphertext = encrypted.ciphertext;
+        nonce = encrypted.nonce;
+        algorithm = encrypted.algorithm;
+        deliveryKeyVersion = encrypted.keyVersion;
+        const packedEmail = encryptRecipientEmail(recipient.display, secrets.delivery);
+        encryptedEmail = Buffer.concat([packedEmail.nonce, packedEmail.ciphertext]);
+      } catch {
+        return replyFail("configuration_unavailable", "UNAVAILABLE", "Service unavailable.");
+      }
+      try {
+        const row = await withApiRole(deps.pool, async (client) => {
+          const owner = await client.query<ProvisionRow>(
+            `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
+             from identity.provision_owner($1::uuid, $2, $3)`,
+            [access.sub, parsedEmail.display, parsedEmail.normalized],
+          );
+          const provisioned = owner.rows[0];
+          if (!provisioned) {
+            return undefined;
+          }
+          if (provisioned.account_status === "suspended") {
+            return { kind: "suspended" as const };
+          }
+          if (provisioned.account_status !== "active") {
+            return { kind: "locked" as const };
+          }
+          if (!provisioned.setup_completed) {
+            return { kind: "setup" as const };
+          }
+          const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+          const published = await client.query<PublishRow>(
+            `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date,
+                    currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
+                    request_id, delivery_state, replayed
+             from commercial.publish_quote_draft(
+               $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7,
+               $8, $9, $10, $11::integer, $12::bytea, $13::bytea, $14::bytea, $15, $16::integer, $17::timestamptz, $18::timestamptz
+             )`,
+            [
+              provisioned.actor_id,
+              key,
+              hash,
+              request.id,
+              params.draftId,
+              expectedVersion,
+              parsed.value.preview_hash,
+              recipient.display,
+              null,
+              tokenHash,
+              tokenKeyVersion,
+              encryptedEmail,
+              ciphertext,
+              nonce,
+              algorithm,
+              deliveryKeyVersion,
+              expiresAt.toISOString(),
+              expiresAt.toISOString(),
+            ],
+          );
+          return { kind: "ok" as const, row: published.rows[0] };
+        });
+        if (!row) {
+          return replyFail("response_sent", API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+        }
+        if (row.kind === "suspended") {
+          return replyFail("response_sent", API_ERROR_CODES.ACCOUNT_SUSPENDED, "This account cannot make changes.");
+        }
+        if (row.kind === "locked") {
+          return replyFail("response_sent", API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+        }
+        if (row.kind === "setup") {
+          return replyFail("response_sent", API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+        }
+        if (!row.row) {
+          return replyFail("response_sent", API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+        }
+        emit(202, "response_sent");
+        return reply.status(202).send(success(request.id, presentPublishedQuote(row.row)));
+      } catch (error) {
+        const mapped = mapPublishError(request, reply, error, DRAFT_NOT_FOUND);
+        if (mapped) {
+          emit(reply.statusCode, "response_sent");
+          return mapped;
+        }
+        return replyFail(quotePublishDatabaseStage(error), "UNAVAILABLE", "Service unavailable.", {
+          sqlstate: quotePublishSqlstate(error),
+        });
+      }
     } finally {
       approvalToken.fill(0);
-    }
-    try {
-      const row = await withApiRole(deps.pool, async (client) => {
-        const owner = await client.query<ProvisionRow>(
-          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
-           from identity.provision_owner($1::uuid, $2, $3)`,
-          [access.sub, parsedEmail.display, parsedEmail.normalized],
-        );
-        const provisioned = owner.rows[0];
-        if (!provisioned) {
-          return undefined;
-        }
-        if (provisioned.account_status === "suspended") {
-          return { kind: "suspended" as const };
-        }
-        if (provisioned.account_status !== "active") {
-          return { kind: "locked" as const };
-        }
-        if (!provisioned.setup_completed) {
-          return { kind: "setup" as const };
-        }
-        const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
-        const published = await client.query<PublishRow>(
-          `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date,
-                  currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
-                  request_id, delivery_state, replayed
-           from commercial.publish_quote_draft(
-             $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7,
-             $8, $9, $10, $11::integer, $12::bytea, $13::bytea, $14::bytea, $15, $16::integer, $17::timestamptz, $18::timestamptz
-           )`,
-          [
-            provisioned.actor_id,
-            key,
-            hash,
-            request.id,
-            params.draftId,
-            expectedVersion,
-            parsed.value.preview_hash,
-            recipient.display,
-            null,
-            tokenHash,
-            tokenKeyVersion,
-            encryptedEmail,
-            ciphertext,
-            nonce,
-            algorithm,
-            deliveryKeyVersion,
-            expiresAt.toISOString(),
-            expiresAt.toISOString(),
-          ],
-        );
-        return { kind: "ok" as const, row: published.rows[0] };
-      });
-      if (!row) {
-        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
-      }
-      if (row.kind === "suspended") {
-        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_SUSPENDED, "This account cannot make changes.");
-      }
-      if (row.kind === "locked") {
-        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
-      }
-      if (row.kind === "setup") {
-        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
-      }
-      if (!row.row) {
-        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
-      }
-      return reply.status(202).send(success(request.id, presentPublishedQuote(row.row)));
-    } catch (error) {
-      const mapped = mapPublishError(request, reply, error, DRAFT_NOT_FOUND);
-      if (mapped) {
-        return mapped;
-      }
-      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
     }
   });
 

@@ -203,6 +203,36 @@ describe("confirmed quote publish", () => {
     expect(result.stayedOnPublish).toBe(true);
     expect(result.navigatedTo).toBeUndefined();
     expect(result.publishedNumber).toBeUndefined();
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
+        confirming: true,
+        publishing: false,
+        preview: {
+          ...PREVIEW,
+          preview_expires_at: "2026-09-15T12:10:00.000Z",
+          schema_version: 1,
+          number_label: "Draft",
+          snapshot: {
+            business: { business_name: "Quote Co", legal_name: "Quote Co LLC", contact_name: "Owner", contact_email: "o@example.com" },
+            customer: { name: "Riley" },
+            job: { title: "Faucet", no_site: true, site_address: null },
+            notes: "",
+            terms: "",
+            expiry_days: 14,
+            expiry_local_date: "2026-09-29",
+            issue_date: "2026-09-15",
+            lines: [],
+            net_cents: 0,
+            tax_cents: 0,
+            total_cents: 0,
+            currency: "USD",
+          },
+        },
+        error: { message: "Service unavailable.", retryable: true, status: 503, code: "UNAVAILABLE" },
+      }).kind,
+    ).toBe("confirming");
   });
 
   it("navigates to the job overview after success and no longer presents Draft", async () => {

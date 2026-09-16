@@ -55,6 +55,8 @@ API process (`loadApiEnv`):
 - `APPROVAL_TOKEN_HASH_KEY` — HMAC-SHA256 key for `token_hash`. Never load in the worker.
 - `APPROVAL_DELIVERY_ENCRYPTION_KEY` — AES-256-GCM key for the temporary delivery token.
 
+Development may start the API without those two names so preview and `/v1/me` keep working. `POST /v1/drafts/{id}/publish` then returns `UNAVAILABLE` and emits `quote_publish` stage `configuration_unavailable` before opening a database connection. Do not log the names or values.
+
 Worker process (`loadWorkerEnv`):
 
 - `DATABASE_URL_WORKER`

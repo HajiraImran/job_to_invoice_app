@@ -21,6 +21,7 @@ import {
   presentQuotePdf,
   presentQuotePdfRetry,
   presentQuoteReview,
+  quotePublishBackControls,
   type PublishedQuoteRecord,
   type QuotePdfDownload,
   type QuotePreviewRecord,
@@ -187,6 +188,7 @@ export default function QuotePublishScreen() {
     preview,
     error,
   });
+  const back = quotePublishBackControls(view.kind);
   const snapshot = published?.snapshot ?? preview?.snapshot;
   const publishDisabled = view.publishDisabled || publishing;
   const pdfView = presentQuotePdf(pdfDownload ?? (published ? { state: published.pdf_state, url: null } : undefined));
@@ -478,9 +480,11 @@ export default function QuotePublishScreen() {
           </>
         ) : null}
 
-        <Pressable accessibilityRole="button" onPress={() => router.replace(jobDetailPath(jobId))} style={styles.secondary}>
-          <Text style={styles.secondaryLabel}>{copy.back}</Text>
-        </Pressable>
+        {back.jobOverview ? (
+          <Pressable accessibilityRole="button" onPress={() => router.replace(jobDetailPath(jobId))} style={styles.secondary}>
+            <Text style={styles.secondaryLabel}>{copy.back}</Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
   );
