@@ -32,6 +32,15 @@ describe("worker PDF console events", () => {
     expect(event.stage).toBe("claimed");
   });
 
+  it("keeps an allowlisted SQLSTATE and drops anything else", () => {
+    const kept = workerPdfSafeEvent({ stage: "set_role_failed", sqlstate: "42501" });
+    expect(kept.sqlstate).toBe("42501");
+    expect(workerPdfEventHasOnlySafeFields(kept)).toBe(true);
+    const dropped = workerPdfSafeEvent({ stage: "database_connect_failed", sqlstate: "ECONNREFUSED" });
+    expect(dropped.sqlstate).toBeUndefined();
+    expect(Object.keys(dropped)).not.toContain("sqlstate");
+  });
+
   it("strips extra fields and never serializes secrets, keys, or errors", () => {
     const lines: string[] = [];
     writeWorkerPdfEvent(

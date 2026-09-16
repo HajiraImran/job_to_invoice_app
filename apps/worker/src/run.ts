@@ -1,8 +1,13 @@
 import { loadWorkerEnv, type LoadedEnv, type LoadedWorkerEnv } from "@job-to-invoice/config";
-import { Pool } from "pg";
 import { processGenerateOriginalPdf } from "./outbox.ts";
 import { renderQuoteOriginalPdf } from "./pdf.ts";
 import { createDocumentsObjectStore } from "./documents-store.ts";
+import {
+  WORKER_CLAIM_TIMEOUT_MS,
+  createWorkerPool,
+  withClaimBudget,
+  workerStageFromError,
+} from "./db.ts";
 import { writeWorkerPdfEvent, type WorkerPdfStage } from "./worker-log.ts";
 
 export const WORKER_POLL_MS = 2_000;
@@ -25,20 +30,22 @@ export function workerPollReady(env: LoadedWorkerEnv): "ready" | "missing_databa
 
 export function createWorkerTick(input: {
   run: () => Promise<"idle" | "done" | "retry" | "dead">;
-  onStage?: (stage: WorkerPdfStage) => void;
+  onStage?: (stage: WorkerPdfStage, sqlstate?: string) => void;
   now?: () => number;
   noWorkEveryMs?: number;
+  claimTimeoutMs?: number;
 }): () => Promise<void> {
   let busy = false;
   let lastNoWorkAt = 0;
   const everyMs = input.noWorkEveryMs ?? WORKER_NO_WORK_EVERY_MS;
+  const claimTimeoutMs = input.claimTimeoutMs ?? WORKER_CLAIM_TIMEOUT_MS;
   return async () => {
     if (busy) {
       return;
     }
     busy = true;
     try {
-      const result = await input.run();
+      const result = await withClaimBudget(input.run(), claimTimeoutMs);
       if (result !== "idle") {
         return;
       }
@@ -48,11 +55,37 @@ export function createWorkerTick(input: {
       }
       lastNoWorkAt = now;
       input.onStage?.("no_work");
-    } catch {
-      /* keep polling; stages are allowlisted only */
+    } catch (error) {
+      const failed = workerStageFromError(error);
+      if (failed) {
+        input.onStage?.(failed.stage, failed.sqlstate);
+      }
     } finally {
       busy = false;
     }
+  };
+}
+
+export async function startWorkerPolling(input: {
+  run: () => Promise<"idle" | "done" | "retry" | "dead">;
+  onStage?: (stage: WorkerPdfStage, sqlstate?: string) => void;
+  now?: () => number;
+  noWorkEveryMs?: number;
+  claimTimeoutMs?: number;
+  pollMs?: number;
+  schedule?: (tick: () => void, delayMs: number) => ReturnType<typeof setInterval>;
+}): Promise<{ tick: () => Promise<void>; stop: () => void }> {
+  input.onStage?.("started");
+  const tick = createWorkerTick(input);
+  await tick();
+  const handle = (input.schedule ?? setInterval)(() => {
+    void tick();
+  }, input.pollMs ?? WORKER_POLL_MS);
+  return {
+    tick,
+    stop: () => {
+      clearInterval(handle);
+    },
   };
 }
 
@@ -66,8 +99,8 @@ function workerStore(env: LoadedWorkerEnv) {
 export async function startWorker(): Promise<string> {
   const env = loadWorkerEnv();
   const status = workerStatus(env);
-  writeWorkerPdfEvent({ stage: "started" });
   if (process.env.WORKER_ONCE === "true") {
+    writeWorkerPdfEvent({ stage: "started" });
     return status;
   }
   const ready = workerPollReady(env);
@@ -83,20 +116,17 @@ export async function startWorker(): Promise<string> {
   if (!databaseUrl || !store) {
     throw new Error(`Invalid ${env.APP_ENV} configuration (QA68): worker storage configuration is required`);
   }
-  const pool = new Pool({ connectionString: databaseUrl, max: 4 });
-  const tick = createWorkerTick({
+  const pool = createWorkerPool(databaseUrl);
+  const writeStage = (stage: WorkerPdfStage, sqlstate?: string) => writeWorkerPdfEvent({ stage, sqlstate });
+  await startWorkerPolling({
     run: () =>
       processGenerateOriginalPdf({
         pool,
         store,
         render: renderQuoteOriginalPdf,
-        onStage: (stage) => writeWorkerPdfEvent({ stage }),
+        onStage: writeStage,
       }),
-    onStage: (stage) => writeWorkerPdfEvent({ stage }),
+    onStage: writeStage,
   });
-  void tick();
-  setInterval(() => {
-    void tick();
-  }, WORKER_POLL_MS);
   return status;
 }

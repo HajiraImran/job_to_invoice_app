@@ -114,6 +114,7 @@ export async function processGenerateOriginalPdf(input: {
   render: PdfRenderer;
   onStage?: (stage: WorkerPdfStage) => void;
 }): Promise<"idle" | "done" | "retry" | "dead"> {
+  input.onStage?.("claim_started");
   const claimed = await withWorkerRole(input.pool, async (client) => {
     const result = await client.query<ClaimRow>("select * from commercial.claim_generate_original_pdf()");
     const row = result.rows[0];

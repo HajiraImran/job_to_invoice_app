@@ -193,7 +193,7 @@ describe("generate original PDF outbox", () => {
       onStage: (stage) => stages.push(stage),
     });
     expect(first).toBe("done");
-    expect(stages).toEqual(["claimed", "rendering", "uploading", "completed"]);
+    expect(stages).toEqual(["claim_started", "claimed", "rendering", "uploading", "completed"]);
     const reserved = await running().admin.query<{ payload_json: { artifact_id: string } }>(
       "select payload_json from commercial.outbox_tasks where id = $1",
       [TASK],
@@ -288,7 +288,7 @@ describe("generate original PDF outbox", () => {
         onStage: (stage) => stages.push(stage),
       }),
     ).toBe("retry");
-    expect(stages).toEqual(["claimed", "rendering", "uploading", "retry_scheduled"]);
+    expect(stages).toEqual(["claim_started", "claimed", "rendering", "uploading", "retry_scheduled"]);
     const reserved = await running().admin.query<{ payload_json: { artifact_id: string }; status: string }>(
       "select payload_json, attempts, status from commercial.outbox_tasks where id = $1",
       [retryTask],
@@ -314,7 +314,7 @@ describe("generate original PDF outbox", () => {
         onStage: (stage) => stages.push(stage),
       }),
     ).toBe("dead");
-    expect(stages).toEqual(["claimed", "dead"]);
+    expect(stages).toEqual(["claim_started", "claimed", "dead"]);
     const empty = await running().admin.query("select status, attempts from commercial.outbox_tasks where id = $1", [
       EMPTY_TASK,
     ]);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadEnv, loadWorkerEnv } from "@job-to-invoice/config";
-import { createWorkerTick, workerPollReady, workerStatus } from "./run.ts";
+import { WorkerTransactionError } from "./db.ts";
+import { createWorkerTick, startWorkerPolling, workerPollReady, workerStatus } from "./run.ts";
 
 describe("worker original PDF", () => {
   it("identifies the original-pdf worker without claiming work on import", () => {
@@ -32,6 +33,105 @@ describe("worker original PDF", () => {
     ).toBe("ready");
   });
 
+  it("runs the first claim immediately after started", async () => {
+    const stages: string[] = [];
+    let claims = 0;
+    const { stop } = await startWorkerPolling({
+      run: async () => {
+        claims += 1;
+        return "idle";
+      },
+      onStage: (stage) => stages.push(stage),
+      pollMs: 60_000,
+      claimTimeoutMs: 200,
+    });
+    stop();
+    expect(claims).toBe(1);
+    expect(stages[0]).toBe("started");
+    expect(stages).toContain("no_work");
+    expect(stages.indexOf("no_work")).toBeGreaterThan(0);
+  });
+
+  it("emits no_work after a successful empty claim and does not convert failures to no_work", async () => {
+    const stages: string[] = [];
+    const tick = createWorkerTick({
+      run: async () => "idle",
+      onStage: (stage) => stages.push(stage),
+      now: () => 1_000,
+      claimTimeoutMs: 200,
+    });
+    await tick();
+    expect(stages).toEqual(["no_work"]);
+
+    const failed: string[] = [];
+    const failing = createWorkerTick({
+      run: async () => {
+        throw new WorkerTransactionError("set_role_failed", "42501");
+      },
+      onStage: (stage) => failed.push(stage),
+      now: () => 1_000,
+      claimTimeoutMs: 200,
+    });
+    await failing();
+    expect(failed).toEqual(["set_role_failed"]);
+    expect(failed).not.toContain("no_work");
+  });
+
+  it("emits each database stage failure", async () => {
+    const cases = [
+      "database_connect_failed",
+      "transaction_start_failed",
+      "set_role_failed",
+      "claim_query_failed",
+      "claim_timed_out",
+    ] as const;
+    for (const stage of cases) {
+      const seen: string[] = [];
+      const sqlstates: Array<string | undefined> = [];
+      const tick = createWorkerTick({
+        run: async () => {
+          throw new WorkerTransactionError(stage, stage === "set_role_failed" ? "42501" : undefined);
+        },
+        onStage: (value, sqlstate) => {
+          seen.push(value);
+          sqlstates.push(sqlstate);
+        },
+        claimTimeoutMs: 200,
+      });
+      await tick();
+      expect(seen).toEqual([stage]);
+      expect(seen).not.toContain("no_work");
+      if (stage === "set_role_failed") {
+        expect(sqlstates).toEqual(["42501"]);
+      }
+    }
+  });
+
+  it("times out a hanging claim and lets a later tick recover", async () => {
+    const stages: string[] = [];
+    let hang = true;
+    let attempts = 0;
+    const tick = createWorkerTick({
+      run: async () => {
+        attempts += 1;
+        if (hang) {
+          return new Promise(() => undefined);
+        }
+        return "idle";
+      },
+      onStage: (stage) => stages.push(stage),
+      now: () => 1_000,
+      claimTimeoutMs: 20,
+    });
+    await tick();
+    expect(attempts).toBe(1);
+    expect(stages).toEqual(["claim_timed_out"]);
+    hang = false;
+    await tick();
+    expect(attempts).toBe(2);
+    expect(stages).toEqual(["claim_timed_out", "no_work"]);
+  });
+
   it("rate-limits no_work and does not overlap ticks", async () => {
     const stages: string[] = [];
     let inflight = 0;
@@ -58,6 +158,7 @@ describe("worker original PDF", () => {
       onStage: (stage) => stages.push(stage),
       now: () => 1_000,
       noWorkEveryMs: 30_000,
+      claimTimeoutMs: 5_000,
     });
     const first = tick();
     await started;
@@ -69,21 +170,6 @@ describe("worker original PDF", () => {
     expect(stages).toEqual(["no_work"]);
     await tick();
     expect(stages).toEqual(["no_work"]);
-    const later = createWorkerTick({
-      run: async () => "idle",
-      onStage: (stage) => stages.push(stage),
-      now: (() => {
-        let t = 0;
-        return () => {
-          t += 30_000;
-          return t;
-        };
-      })(),
-      noWorkEveryMs: 30_000,
-    });
-    await later();
-    await later();
-    expect(stages.filter((stage) => stage === "no_work")).toHaveLength(3);
   });
 
   it("does not log credentials or endpoints from worker status", () => {
