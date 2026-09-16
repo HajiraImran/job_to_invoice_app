@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
+  encodeFragmentToken,
+  encryptDeliveryToken,
+  encryptRecipientEmail,
+  generateApprovalToken,
+  hashApprovalToken,
+  parseVersionedSecret,
+} from "@job-to-invoice/config";
+import {
   buildQuoteSnapshot,
   canonicalizeToBytes,
   isDomainError,
@@ -12,6 +20,7 @@ import {
   API_ERROR_CODES,
   endOfLocalDateUtc,
   isClientUuid,
+  maskEmail,
   parseDraftPayload,
   parseOwnerEmail,
   parseQuotePublish,
@@ -83,6 +92,8 @@ type PublishRow = {
   schema_version: number;
   snapshot_sha256: string;
   pdf_state: string;
+  request_id?: string;
+  delivery_state?: string;
   replayed?: boolean;
 };
 
@@ -180,10 +191,64 @@ export function presentPublishedQuote(row: PublishRow, pdfState = row.pdf_state)
     snapshot_sha256: row.snapshot_sha256,
     preview_hash: row.snapshot_sha256,
     pdf_state: pdfState,
+    request_id: row.request_id ?? null,
+    delivery_state: row.delivery_state ?? null,
     snapshot,
     net_cents: asCents(row.net_cents),
     tax_cents: asCents(row.tax_cents),
     total_cents: asCents(row.total_cents),
+  };
+}
+
+const TERMINAL_DELIVERY = new Set(["delivered", "bounced", "complained", "failed"]);
+
+export function presentOwnerRequest(row: {
+  request_id: string;
+  document_id: string;
+  job_id: string;
+  number: string;
+  revision_no: number;
+  template_id: string;
+  delivery_state: string;
+  recipient_email: string;
+  last_event_at: Date | string;
+  retry_count: string | number;
+  created_at: Date | string;
+  updated_at: Date | string;
+}) {
+  return {
+    request_id: row.request_id,
+    document_id: row.document_id,
+    job_id: row.job_id,
+    number: row.number,
+    revision_label: `R${row.revision_no}`,
+    revision_no: row.revision_no,
+    template_id: row.template_id,
+    delivery_state: row.delivery_state,
+    recipient_email_masked: maskEmail(row.recipient_email),
+    last_event_at: asIso(row.last_event_at),
+    retry_count: asCents(row.retry_count),
+    created_at: asIso(row.created_at),
+    updated_at: asIso(row.updated_at),
+    retryable: !TERMINAL_DELIVERY.has(row.delivery_state),
+    terminal: TERMINAL_DELIVERY.has(row.delivery_state),
+  };
+}
+
+function envSecret(env: Record<string, unknown>, name: string): string | undefined {
+  const value = env[name];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function approvalSecrets(env: Record<string, unknown>) {
+  const hashKey = envSecret(env, "APPROVAL_TOKEN_HASH_KEY");
+  const deliveryKey = envSecret(env, "APPROVAL_DELIVERY_ENCRYPTION_KEY");
+  if (!hashKey || !deliveryKey) {
+    return undefined;
+  }
+  return {
+    hash: parseVersionedSecret("APPROVAL_TOKEN_HASH_KEY", hashKey),
+    delivery: parseVersionedSecret("APPROVAL_DELIVERY_ENCRYPTION_KEY", deliveryKey),
   };
 }
 
@@ -311,6 +376,14 @@ function mapPublishError(
       "This quote is already published.",
     );
   }
+  if (code === "P0012") {
+    return sendFail(
+      request,
+      reply,
+      API_ERROR_CODES.APPROVAL_PENDING,
+      "This job already has a pending approval request.",
+    );
+  }
   if (code === "23514" || code === "22023") {
     return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
   }
@@ -320,6 +393,7 @@ function mapPublishError(
 export function registerQuotePublishRoutes(
   app: FastifyInstance,
   deps: {
+    env?: Record<string, unknown>;
     verifyJwt?: JwtVerifier;
     pool?: Pool;
     documentsStore?: { presignGet: (key: string) => Promise<string> };
@@ -564,11 +638,45 @@ export function registerQuotePublishRoutes(
       void reply.header("Retry-After", String(limited.retryAfterSec));
       return reply.status(result.status).send(result.body);
     }
+    const secrets = approvalSecrets(deps.env ?? {});
+    if (!secrets) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    const recipient = parseOwnerEmail(parsed.value.recipient_email);
+    if (!recipient.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "recipient_email", message: "Enter a valid email address." }],
+      });
+    }
     const hash = requestHash({
       draftId: params.draftId,
       preview_hash: parsed.value.preview_hash,
       expectedVersion,
+      recipient_email: recipient.normalized,
     });
+    const approvalToken = generateApprovalToken();
+    let tokenHash: string;
+    let tokenKeyVersion: number;
+    let ciphertext: Buffer;
+    let nonce: Buffer;
+    let algorithm: string;
+    let deliveryKeyVersion: number;
+    let encryptedEmail: Buffer;
+    try {
+      encodeFragmentToken(approvalToken);
+      const hashed = hashApprovalToken(approvalToken, secrets.hash);
+      tokenHash = hashed.hash;
+      tokenKeyVersion = hashed.keyVersion;
+      const encrypted = encryptDeliveryToken(approvalToken, secrets.delivery);
+      ciphertext = encrypted.ciphertext;
+      nonce = encrypted.nonce;
+      algorithm = encrypted.algorithm;
+      deliveryKeyVersion = encrypted.keyVersion;
+      const packedEmail = encryptRecipientEmail(recipient.display, secrets.delivery);
+      encryptedEmail = Buffer.concat([packedEmail.nonce, packedEmail.ciphertext]);
+    } finally {
+      approvalToken.fill(0);
+    }
     try {
       const row = await withApiRole(deps.pool, async (client) => {
         const owner = await client.query<ProvisionRow>(
@@ -589,11 +697,14 @@ export function registerQuotePublishRoutes(
         if (!provisioned.setup_completed) {
           return { kind: "setup" as const };
         }
+        const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
         const published = await client.query<PublishRow>(
           `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date,
-                  currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state, replayed
+                  currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
+                  request_id, delivery_state, replayed
            from commercial.publish_quote_draft(
-             $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7
+             $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7,
+             $8, $9, $10, $11::integer, $12::bytea, $13::bytea, $14::bytea, $15, $16::integer, $17::timestamptz, $18::timestamptz
            )`,
           [
             provisioned.actor_id,
@@ -603,6 +714,17 @@ export function registerQuotePublishRoutes(
             params.draftId,
             expectedVersion,
             parsed.value.preview_hash,
+            recipient.display,
+            null,
+            tokenHash,
+            tokenKeyVersion,
+            encryptedEmail,
+            ciphertext,
+            nonce,
+            algorithm,
+            deliveryKeyVersion,
+            expiresAt.toISOString(),
+            expiresAt.toISOString(),
           ],
         );
         return { kind: "ok" as const, row: published.rows[0] };
@@ -706,6 +828,56 @@ export function registerQuotePublishRoutes(
         state: row.download_state,
         url: null,
       });
+    } catch {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
+  app.get("/v1/jobs/:jobId/request", async (request, reply) => {
+    const owner = await requireOwner(request, reply);
+    if (!owner || !deps.pool) {
+      return;
+    }
+    const params = request.params as { jobId?: string };
+    if (!isClientUuid(params.jobId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "jobId", message: "A job UUID is required." }],
+      });
+    }
+    try {
+      const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
+        const job = await client.query(`select id from commercial.jobs where id = $1`, [params.jobId]);
+        if (!job.rows[0]) {
+          return { kind: "missing" as const };
+        }
+        const result = await client.query<{
+          request_id: string;
+          document_id: string;
+          job_id: string;
+          number: string;
+          revision_no: number;
+          template_id: string;
+          delivery_state: string;
+          recipient_email: string;
+          last_event_at: Date | string;
+          retry_count: string | number;
+          created_at: Date | string;
+          updated_at: Date | string;
+        }>(
+          `select request_id, document_id, job_id, number, revision_no, template_id, delivery_state,
+                  recipient_email, last_event_at, retry_count, created_at, updated_at
+           from commercial.owner_job_request($1::uuid, $2::uuid)`,
+          [owner.workspace_id, params.jobId],
+        );
+        if (!result.rows[0]) {
+          return { kind: "missing" as const };
+        }
+        return { kind: "ok" as const, row: result.rows[0] };
+      });
+      if (!row || row.kind === "missing") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, "Request was not found.");
+      }
+      return success(request.id, presentOwnerRequest(row.row));
     } catch {
       return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
     }

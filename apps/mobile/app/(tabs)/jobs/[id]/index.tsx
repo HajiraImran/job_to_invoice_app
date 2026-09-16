@@ -5,7 +5,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
 import { nextActionCopy, presentJobDetail, type JobDetail } from "../../../../src/jobs/presentation.ts";
-import { jobQuotePath, jobPublishPath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
+import { jobQuotePath, jobPublishPath, jobRequestPath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
 import { quoteActionLabel } from "../../../../src/quotes/presentation.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
@@ -177,6 +177,13 @@ export default function JobDetailScreen() {
                   style={styles.primary}
                 >
                   <Text style={styles.primaryLabel}>{copy.viewPublishedQuote}</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => router.push(jobRequestPath(jobId))}
+                  style={styles.secondary}
+                >
+                  <Text style={styles.secondaryLabel}>{copy.viewRequestStatus}</Text>
                 </Pressable>
               </>
             ) : null}

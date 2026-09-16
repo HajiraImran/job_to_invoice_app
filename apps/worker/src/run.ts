@@ -1,5 +1,6 @@
 import { loadWorkerEnv, type LoadedEnv, type LoadedWorkerEnv } from "@job-to-invoice/config";
 import { processGenerateOriginalPdf } from "./outbox.ts";
+import { processSendEmail } from "./email.ts";
 import { renderQuoteOriginalPdf } from "./pdf.ts";
 import { createDocumentsObjectStore } from "./documents-store.ts";
 import { createWorkerPool, workerStageFromError } from "./db.ts";
@@ -9,7 +10,7 @@ export const WORKER_POLL_MS = 2_000;
 export const WORKER_NO_WORK_EVERY_MS = 30_000;
 
 export function workerStatus(env: LoadedEnv | LoadedWorkerEnv): string {
-  return `worker original-pdf (${env.APP_ENV})`;
+  return `worker original-pdf email01 (${env.APP_ENV})`;
 }
 
 export function workerPollReady(env: LoadedWorkerEnv): "ready" | "missing_database" | "missing_storage" {
@@ -110,14 +111,32 @@ export async function startWorker(): Promise<string> {
   }
   const pool = createWorkerPool(databaseUrl);
   const writeStage = (stage: WorkerPdfStage, sqlstate?: string) => writeWorkerPdfEvent({ stage, sqlstate });
+  const apiKey = env.EMAIL_API_KEY;
+  const fromDomain = env.EMAIL_FROM_DOMAIN;
+  const deliveryKey = env.APPROVAL_DELIVERY_ENCRYPTION_KEY;
+  if (!apiKey || !fromDomain || !deliveryKey) {
+    throw new Error(`Invalid ${env.APP_ENV} configuration (QA68): email delivery configuration is required`);
+  }
   await startWorkerPolling({
-    run: () =>
-      processGenerateOriginalPdf({
+    run: async () => {
+      const pdf = await processGenerateOriginalPdf({
         pool,
         store,
         render: renderQuoteOriginalPdf,
         onStage: writeStage,
-      }),
+      });
+      if (pdf !== "idle") {
+        return pdf;
+      }
+      return processSendEmail({
+        pool,
+        deliverySecret: deliveryKey,
+        apiKey,
+        fromDomain,
+        portalOrigin: env.PORTAL_ORIGIN ?? "http://localhost:3000",
+        appName: env.PUBLIC_APP_NAME,
+      });
+    },
     onStage: writeStage,
   });
   return status;

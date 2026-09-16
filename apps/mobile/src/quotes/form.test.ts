@@ -7,10 +7,18 @@ import {
   liveTotals,
   moveLine,
   payloadFromForm,
+  quotePublishBody,
   type QuoteDraftRecord,
 } from "./form.ts";
-import { presentQuoteEditor, presentQuotePdf, presentQuotePdfRetry, presentQuoteReview, quoteActionLabel } from "./presentation.ts";
-import { jobQuotePath } from "../jobs/routes.ts";
+import {
+  presentDeliveryStatus,
+  presentQuoteEditor,
+  presentQuotePdf,
+  presentQuotePdfRetry,
+  presentQuoteReview,
+  quoteActionLabel,
+} from "./presentation.ts";
+import { jobQuotePath, jobRequestPath } from "../jobs/routes.ts";
 
 const F01_LINE = {
   client_line_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -238,5 +246,65 @@ describe("quote editor states", () => {
         error: { message: "paywall", retryable: false, status: 403, code: "ENTITLEMENT_REQUIRED" },
       }).kind,
     ).toBe("entitlement");
+  });
+
+  it("validates recipient email on publish and presents S12 delivery states", () => {
+    expect(quotePublishBody("ab".repeat(32), "not-an-email").ok).toBe(false);
+    expect(quotePublishBody("ab".repeat(32), "customer@example.com")).toEqual({
+      ok: true,
+      value: { preview_hash: "ab".repeat(32), recipient_email: "customer@example.com" },
+    });
+    expect(jobRequestPath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(
+      "/(tabs)/jobs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/request",
+    );
+    const base = {
+      authStatus: "authenticated",
+      loading: false,
+      checking: false,
+      request: {
+        request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        document_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        job_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        number: "Q-000001",
+        revision_label: "R1",
+        revision_no: 1,
+        template_id: "EMAIL01",
+        delivery_state: "queued",
+        recipient_email_masked: "c***@example.com",
+        last_event_at: "2026-09-16T00:00:00.000Z",
+        retry_count: 0,
+        retryable: true,
+        terminal: false,
+      },
+    };
+    expect(presentDeliveryStatus(base).kind).toBe("queued");
+    expect(presentDeliveryStatus({ ...base, request: { ...base.request, delivery_state: "submitting" } }).kind).toBe(
+      "sending",
+    );
+    const accepted = presentDeliveryStatus({
+      ...base,
+      request: { ...base.request, delivery_state: "accepted_by_provider" },
+    });
+    expect(accepted.kind).toBe("accepted");
+    expect(accepted.kind).not.toBe("delivered");
+    expect(accepted.acceptedNotDelivered).toBe(true);
+    expect(accepted.label).toContain("not yet confirmed delivered");
+    expect(presentDeliveryStatus({ ...base, request: { ...base.request, delivery_state: "delivered" } }).kind).toBe(
+      "delivered",
+    );
+    expect(presentDeliveryStatus({ ...base, request: { ...base.request, delivery_state: "bounced" } }).kind).toBe(
+      "bounced",
+    );
+    expect(presentDeliveryStatus({ ...base, request: { ...base.request, delivery_state: "complained" } }).kind).toBe(
+      "complained",
+    );
+    expect(presentDeliveryStatus({ ...base, request: { ...base.request, delivery_state: "failed" } }).kind).toBe(
+      "failed",
+    );
+    expect(presentDeliveryStatus({ ...base, loading: true, request: undefined }).kind).toBe("loading");
+    expect(presentDeliveryStatus({ ...base, authStatus: "offline_cached" }).kind).toBe("offline");
+    const retryBusy = presentDeliveryStatus({ ...base, checking: true });
+    expect(retryBusy.retryBusy).toBe(true);
+    expect(retryBusy.showRetry).toBe(true);
   });
 });

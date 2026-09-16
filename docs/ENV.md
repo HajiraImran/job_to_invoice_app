@@ -44,6 +44,37 @@ That command is `expo start --go`. It does not replace `pnpm --filter @job-to-in
 - `STORAGE_WORKER_ACCESS_KEY_ID` / `STORAGE_WORKER_SECRET_ACCESS_KEY` — bucket-scoped Object Read & Write. Worker PutObject only. Never `EXPO_PUBLIC_*`. Must differ from the API pair.
 - `STORAGE_API_ACCESS_KEY_ID` / `STORAGE_API_SECRET_ACCESS_KEY` — bucket-scoped Object Read-only. API 5-minute presigned GET only. Never `EXPO_PUBLIC_*`.
 
+## Quote approval-request delivery (D-017)
+
+Empty names only in `.env.example`. Never put values in git.
+
+API process (`loadApiEnv`):
+
+- `DATABASE_URL_API`
+- `EMAIL_WEBHOOK_SECRET` — Resend/Svix signing secret with the `whsec_` prefix. Never load in the worker.
+- `APPROVAL_TOKEN_HASH_KEY` — HMAC-SHA256 key for `token_hash`. Never load in the worker.
+- `APPROVAL_DELIVERY_ENCRYPTION_KEY` — AES-256-GCM key for the temporary delivery token.
+
+Worker process (`loadWorkerEnv`):
+
+- `DATABASE_URL_WORKER`
+- `EMAIL_API_KEY` — Resend send credential. Never load in the API.
+- `EMAIL_FROM_DOMAIN`
+- `APPROVAL_DELIVERY_ENCRYPTION_KEY`
+- `PORTAL_ORIGIN` — EMAIL01 href is exactly `{PORTAL_ORIGIN}/review#{token}`
+- `PUBLIC_APP_NAME`
+
+Purge process:
+
+- `DATABASE_URL_PURGE`
+
+Not used by this slice:
+
+- `APPROVAL_EVIDENCE_ENCRYPTION_KEY`
+- `OTP_HASH_KEY`
+
+None of these names may enter `EXPO_PUBLIC_*`. Logs must redact configuration and secret material. Webhook verification uses official Svix headers (`svix-id`, `svix-timestamp`, `svix-signature`) with a five-minute timestamp tolerance in every `APP_ENV`. Do not fall back to an arbitrary shared-secret header.
+
 Do not use `STORAGE_SERVICE_KEY` or Supabase `service_role` for document PDFs. Production remains private Cloudflare R2. Development may use private MinIO on the same S3 API. `R2_ACCOUNT_ID` may derive `https://<account>.r2.cloudflarestorage.com` when `STORAGE_ENDPOINT` is unset; R2 defaults are region `auto` and `STORAGE_FORCE_PATH_STYLE=false`.
 
 If MinIO is already running locally (`http://127.0.0.1:9000`, private bucket `job-to-invoice-documents-development`, console `http://127.0.0.1:9001`), do not recreate the bucket. Point API and worker at it with process-local variables only. The console is operator-only on loopback; the physical phone uses `STORAGE_DOWNLOAD_ENDPOINT` on port 9000, never 9001.

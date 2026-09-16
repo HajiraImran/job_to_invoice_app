@@ -91,7 +91,7 @@ function asDocument(row: SourceRow): QuotePdfDocument {
 
 export const WORKER_LEASE_HEARTBEAT_MS = 15_000;
 
-async function whileLeased<T>(
+export async function whileLeased<T>(
   pool: Pool,
   taskId: string,
   fn: () => Promise<T>,

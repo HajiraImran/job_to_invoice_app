@@ -143,7 +143,7 @@ Foreign keys:
 | catalogue_items | description, unit, custom_unit_label?, default_quantity, unit_price_cents, discount_cents, tax_bp, archived_at?, version |
 | jobs | customer_id, title, site_address_json?, no_site bool, lifecycle, archived_from_state?, current_quote_id?, active_invoice_id?, scope_version default 0, first_published_at?, entitlement_origin free/trial/paid?, completion_right bool, internal_notes, related_job_id?, mode quote/direct_invoice, version |
 
-Job lifecycle: `draft`, `active`, `invoiced`, `finished`, `canceled`, `archived` plus `archived_from_state` (JOB01). New jobs start as `draft`. `mode` is `quote` or `direct_invoice` (JRN06, API04). Quote-mode draft jobs open one editing `document_drafts` row via `POST /v1/jobs/{id}/quote`. Direct-invoice jobs do not enter the quote editor. First quote publication allocates `Q-000001` `R1`, inserts `documents` / `document_lines`, consumes one free job slot, sets `jobs.lifecycle=active`, and queues `generate_original_pdf`. Email delivery and approval requests are not created in this slice.
+Job lifecycle: `draft`, `active`, `invoiced`, `finished`, `canceled`, `archived` plus `archived_from_state` (JOB01). New jobs start as `draft`. `mode` is `quote` or `direct_invoice` (JRN06, API04). Quote-mode draft jobs open one editing `document_drafts` row via `POST /v1/jobs/{id}/quote`. Direct-invoice jobs do not enter the quote editor. First quote publication allocates `Q-000001` `R1`, inserts `documents` / `document_lines`, consumes one free job slot, sets `jobs.lifecycle=active`, inserts a pending hashed `approval_requests` row, queues `generate_original_pdf`, and queues EMAIL01 `send_email`.
 
 `completion_right` is write-once. First successful TX01/TX03 publication sets it true. UPDATE that clears it is forbidden except `purge_app` account deletion. `entitlement_snapshots` must not write this column.
 
@@ -261,7 +261,7 @@ Composite FKs:
 
 Delivery attempt states: queued, submitting, accepted_by_provider, delivered, bounced, complained, failed (NTF03).
 
-`effect_key` for first-send email is `(workspace_id, document_id, template_id, recipient_id)`. `generate_original_pdf` uses `{workspace_id}:{document_id}:original_pdf`. Lease retries update the same `outbox_tasks` row, persist `artifact_id` in `payload_json` before upload, and reuse that object key. Never insert a second original PDF or approval token on retry. Backoff: 30s, 2m, 10m, 30m; max 5 attempts (D-016).
+`effect_key` for first-send EMAIL01 is `{workspace_id}:{document_id}:EMAIL01:{request_id}`. `generate_original_pdf` uses `{workspace_id}:{document_id}:original_pdf`. Email backoff: 1m, 5m, 30m, 2h, 8h; max 5 attempts (D-017). PDF backoff remains 30s, 2m, 10m, 30m (D-016). Encrypted delivery payloads are purged within 24 hours of terminal delivery (`delivered`/`bounced`/`complained`/`failed`). Do not purge `queued`/`submitting`/`accepted_by_provider`.
 
 Idempotency: rows for publish, approve, invoice, credit, payment, refund, reverse, deletion and entitlement are `permanence=financial` and **never expire**. Unique `operation_id` is also stored on the money/effect row (`ledger_entries.operation_id`, document issue, decision). Only non-financial cached response bodies may set `expires_at` (30 days). Deleting an expired ephemeral row must not allow a second financial write.
 

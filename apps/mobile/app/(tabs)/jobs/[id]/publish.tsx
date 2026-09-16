@@ -1,11 +1,12 @@
 import { formatUsdCents } from "@job-to-invoice/schemas";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
-import { jobDetailPath, jobQuotePath } from "../../../../src/jobs/routes.ts";
+import { jobDetailPath, jobQuotePath, jobRequestPath } from "../../../../src/jobs/routes.ts";
 import type { JobDetail } from "../../../../src/jobs/presentation.ts";
+import { quotePublishBody } from "../../../../src/quotes/form.ts";
 import {
   presentQuotePdf,
   presentQuotePdfRetry,
@@ -34,6 +35,7 @@ export default function QuotePublishScreen() {
   const [pdfError, setPdfError] = useState<string | undefined>();
   const [pdfChecking, setPdfChecking] = useState(false);
   const [pdfStillPreparing, setPdfStillPreparing] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState("");
   const pdfInFlight = useRef(false);
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number; code?: string } | undefined>();
   const publishKey = useRef<string | undefined>(undefined);
@@ -94,6 +96,10 @@ export default function QuotePublishScreen() {
       setPreview(result.data);
       setPublished(undefined);
       setPdfDownload(undefined);
+      const existing = result.data.snapshot.customer.email?.trim();
+      if (existing) {
+        setRecipientEmail(existing);
+      }
     } else {
       setError({
         message:
@@ -208,10 +214,20 @@ export default function QuotePublishScreen() {
     setPublishing(true);
     setConfirming(false);
     publishKey.current = retainOrCreateSetupIdempotencyKey(publishKey.current);
+    const body = quotePublishBody(preview.preview_hash, recipientEmail);
+    if (!body.ok) {
+      setPublishing(false);
+      setError({
+        message: copy.quoteRecipientRequired,
+        retryable: false,
+        status: 422,
+      });
+      return;
+    }
     const result = await runOwnerRequest<PublishedQuoteRecord>({
       path: `/v1/drafts/${preview.draft_id}/publish`,
       method: "POST",
-      body: { preview_hash: preview.preview_hash },
+      body: body.value,
       idempotencyKey: publishKey.current,
       ifMatch: preview.version,
     });
@@ -368,17 +384,33 @@ export default function QuotePublishScreen() {
                     <Text style={styles.secondaryLabel}>{pdfRetry.label}</Text>
                   </Pressable>
                 )}
+                <Pressable accessibilityRole="button" onPress={() => router.push(jobRequestPath(jobId))} style={styles.secondary}>
+                  <Text style={styles.secondaryLabel}>{copy.viewRequestStatus}</Text>
+                </Pressable>
               </>
             ) : null}
             {view.kind === "confirming" ? (
               <>
+                <Text style={styles.section}>{copy.quoteRecipientEmail}</Text>
+                <TextInput
+                  value={recipientEmail}
+                  onChangeText={setRecipientEmail}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoComplete="email"
+                  keyboardType="email-address"
+                  textContentType="emailAddress"
+                  accessibilityLabel={copy.quoteRecipientEmail}
+                  style={styles.input}
+                />
+                <Text style={styles.hint}>{copy.quoteRecipientHint}</Text>
                 <Text accessibilityLiveRegion="polite" style={styles.banner}>
                   {copy.quoteConfirmPublish}
                 </Text>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityState={{ disabled: publishing }}
-                  disabled={publishing}
+                  accessibilityState={{ disabled: publishing || !preview || !quotePublishBody(preview.preview_hash, recipientEmail).ok }}
+                  disabled={publishing || !preview || !quotePublishBody(preview.preview_hash, recipientEmail).ok}
                   onPress={() => void confirmPublish()}
                   style={styles.primary}
                 >
@@ -418,6 +450,16 @@ const styles = StyleSheet.create({
   section: { color: colors.text, fontSize: type.section, fontWeight: "600", marginTop: space.scale },
   body: { color: colors.text, fontSize: type.body },
   hint: { color: colors.secondary, fontSize: type.secondary },
+  input: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: space.radius,
+    paddingHorizontal: space.scale,
+    color: colors.text,
+    fontSize: type.body,
+    backgroundColor: "#FFFFFF",
+  },
   banner: { color: colors.navy, fontSize: type.secondary },
   error: { color: colors.danger, fontSize: type.secondary },
   card: {

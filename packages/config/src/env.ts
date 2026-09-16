@@ -32,6 +32,10 @@ function httpsUrl(name: string) {
   return secret(name).refine((value) => value.startsWith("https://"), `${name} must be https`);
 }
 
+function webhookSecret(name: string) {
+  return secret(name).refine((value) => value.startsWith("whsec_"), `${name} must use the whsec_ prefix`);
+}
+
 const optionalStorageShape = {
   STORAGE_ENDPOINT: z.string().optional(),
   STORAGE_DOWNLOAD_ENDPOINT: z.string().optional(),
@@ -77,6 +81,13 @@ const developmentSchema = z.object({
   AUTH_JWKS_JSON: z.string().optional(),
   DATABASE_URL_API: z.string().optional(),
   DATABASE_URL_WORKER: z.string().optional(),
+  APPROVAL_TOKEN_HASH_KEY: z.string().optional(),
+  APPROVAL_DELIVERY_ENCRYPTION_KEY: z.string().optional(),
+  APPROVAL_EVIDENCE_ENCRYPTION_KEY: z.string().optional(),
+  OTP_HASH_KEY: z.string().optional(),
+  EMAIL_API_KEY: z.string().optional(),
+  EMAIL_WEBHOOK_SECRET: z.string().optional(),
+  EMAIL_FROM_DOMAIN: z.string().optional(),
   ...optionalStorageShape,
 });
 
@@ -93,6 +104,13 @@ const stagingSchema = z.object({
   DATABASE_URL_WORKER: secret("DATABASE_URL_WORKER"),
   DATABASE_URL_PURGE: secret("DATABASE_URL_PURGE"),
   DATABASE_URL_MIGRATIONS: secret("DATABASE_URL_MIGRATIONS"),
+  APPROVAL_TOKEN_HASH_KEY: secret("APPROVAL_TOKEN_HASH_KEY"),
+  APPROVAL_DELIVERY_ENCRYPTION_KEY: secret("APPROVAL_DELIVERY_ENCRYPTION_KEY"),
+  APPROVAL_EVIDENCE_ENCRYPTION_KEY: z.string().optional(),
+  OTP_HASH_KEY: z.string().optional(),
+  EMAIL_API_KEY: secret("EMAIL_API_KEY"),
+  EMAIL_WEBHOOK_SECRET: webhookSecret("EMAIL_WEBHOOK_SECRET"),
+  EMAIL_FROM_DOMAIN: secret("EMAIL_FROM_DOMAIN"),
   ...optionalStorageShape,
 });
 
@@ -114,6 +132,7 @@ const productionSchema = z.object({
   DATABASE_URL_MIGRATIONS: secret("DATABASE_URL_MIGRATIONS"),
   ...optionalStorageShape,
   APPROVAL_TOKEN_HASH_KEY: secret("APPROVAL_TOKEN_HASH_KEY"),
+  APPROVAL_DELIVERY_ENCRYPTION_KEY: secret("APPROVAL_DELIVERY_ENCRYPTION_KEY"),
   OTP_HASH_KEY: secret("OTP_HASH_KEY"),
   APPROVAL_EVIDENCE_ENCRYPTION_KEY: secret("APPROVAL_EVIDENCE_ENCRYPTION_KEY"),
   REVENUECAT_PUBLIC_IOS_KEY: secret("REVENUECAT_PUBLIC_IOS_KEY"),
@@ -122,7 +141,7 @@ const productionSchema = z.object({
   MONTHLY_PRODUCT_ID: secret("MONTHLY_PRODUCT_ID"),
   ANNUAL_PRODUCT_ID: secret("ANNUAL_PRODUCT_ID"),
   EMAIL_API_KEY: secret("EMAIL_API_KEY"),
-  EMAIL_WEBHOOK_SECRET: secret("EMAIL_WEBHOOK_SECRET"),
+  EMAIL_WEBHOOK_SECRET: webhookSecret("EMAIL_WEBHOOK_SECRET"),
   EMAIL_FROM_DOMAIN: secret("EMAIL_FROM_DOMAIN"),
   ERROR_REPORTING_DSN: secret("ERROR_REPORTING_DSN"),
   STAFF_AUTH_CONFIG: secret("STAFF_AUTH_CONFIG"),
@@ -148,11 +167,36 @@ export type LoadedWorkerEnv = Omit<LoadedEnv, ApiCredentialField> & {
   documentsStorage?: WorkerDocumentsStorageConfig;
 };
 
+export const WORKER_ONLY_SECRET_FIELDS = [
+  "STORAGE_WORKER_ACCESS_KEY_ID",
+  "STORAGE_WORKER_SECRET_ACCESS_KEY",
+  "R2_WORKER_ACCESS_KEY_ID",
+  "R2_WORKER_SECRET_ACCESS_KEY",
+  "EMAIL_API_KEY",
+  "EMAIL_FROM_DOMAIN",
+  "DATABASE_URL_WORKER",
+] as const;
+
+export const API_ONLY_SECRET_FIELDS = [
+  "STORAGE_API_ACCESS_KEY_ID",
+  "STORAGE_API_SECRET_ACCESS_KEY",
+  "R2_API_ACCESS_KEY_ID",
+  "R2_API_SECRET_ACCESS_KEY",
+  "EMAIL_WEBHOOK_SECRET",
+  "APPROVAL_TOKEN_HASH_KEY",
+  "APPROVAL_EVIDENCE_ENCRYPTION_KEY",
+  "OTP_HASH_KEY",
+  "DATABASE_URL_API",
+] as const;
+
 const workerCredentialOmit = {
   STORAGE_WORKER_ACCESS_KEY_ID: true,
   STORAGE_WORKER_SECRET_ACCESS_KEY: true,
   R2_WORKER_ACCESS_KEY_ID: true,
   R2_WORKER_SECRET_ACCESS_KEY: true,
+  EMAIL_API_KEY: true,
+  EMAIL_FROM_DOMAIN: true,
+  DATABASE_URL_WORKER: true,
 } as const;
 
 const apiCredentialOmit = {
@@ -160,6 +204,11 @@ const apiCredentialOmit = {
   STORAGE_API_SECRET_ACCESS_KEY: true,
   R2_API_ACCESS_KEY_ID: true,
   R2_API_SECRET_ACCESS_KEY: true,
+  EMAIL_WEBHOOK_SECRET: true,
+  APPROVAL_TOKEN_HASH_KEY: true,
+  APPROVAL_EVIDENCE_ENCRYPTION_KEY: true,
+  OTP_HASH_KEY: true,
+  DATABASE_URL_API: true,
 } as const;
 
 function schemaFor(appEnv: string | undefined) {
@@ -241,7 +290,7 @@ export function loadApiEnv(source: NodeJS.Dict<string> = process.env): LoadedApi
       APP_ENV: parsed.APP_ENV,
     });
     return {
-      ...omitFields(parsed, WORKER_CREDENTIAL_FIELDS),
+      ...omitFields(parsed, WORKER_ONLY_SECRET_FIELDS),
       documentsStorage,
     };
   } catch (error) {
@@ -257,7 +306,7 @@ export function loadWorkerEnv(source: NodeJS.Dict<string> = process.env): Loaded
       APP_ENV: parsed.APP_ENV,
     });
     return {
-      ...omitFields(parsed, API_CREDENTIAL_FIELDS),
+      ...omitFields(parsed, API_ONLY_SECRET_FIELDS),
       documentsStorage,
     };
   } catch (error) {

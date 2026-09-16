@@ -39,7 +39,7 @@ Every data screen implements UI04: loading, empty, loaded, refresh failure, offl
 | S09 | Quote editor | mobile | `/(tabs)/jobs/[id]/quote` | Edit lines | JRN01, JRN06, JRN07 | — | S06 Quote, revision |
 | S10 | Line editor | mobile | `/(tabs)/jobs/[id]/line` | Save line | JRN01, JRN03, JRN06 | — | S09, S13 |
 | S11 | Preview and publish | mobile | `/(tabs)/jobs/[id]/publish` | Confirm publish | JRN01 | `document_published` | S09 |
-| S12 | Request detail | mobile | `/(tabs)/jobs/[id]/request` | Resend, withdraw, replace | JRN01–JRN04 | `request_delivery_result` | S08 |
+| S12 | Request detail | mobile | `/(tabs)/jobs/[id]/request` | Read-only delivery status (resend/withdraw/replace later) | JRN01–JRN04 | `request_delivery_result` | S08 |
 | S13 | Extra work editor | mobile | `/(tabs)/jobs/[id]/change` | Publish extra | JRN03 | `change_started` | S08 after accepted quote |
 | S14 | Reduction editor | mobile | `/(tabs)/jobs/[id]/reduce` | Publish reduction | JRN04 | `change_started` | S08 |
 | S15 | Invoice preview | mobile | `/(tabs)/jobs/[id]/invoice` | Issue invoice | JRN05, JRN06 | `invoice_issued` | S08 |
@@ -137,11 +137,11 @@ Line fields are edited on the S09 cards in this slice. Catalogue copy-on-use is 
 
 Frozen-looking preview, expiry, confirm. Show slot/paywall before submit. Stale preview → PREVIEW_CHANGED.
 
-Implemented route: `/(tabs)/jobs/[id]/publish`. Review uses `POST /drafts/{id}/preview`. Confirm publishes `POST /drafts/{id}/publish`. After success, the same route is a read-only published quote with Preparing PDF, Download/View PDF when ready, and a safe retryable generation-failed state. Physical Expo Go (2026-09-16) generated and downloaded an original published-quote PDF in development. That is IMPLEMENTED development evidence, not production VERIFIED. Recipient email and approval links are not in this slice.
+Implemented route: `/(tabs)/jobs/[id]/publish`. Review uses `POST /drafts/{id}/preview`. Confirm publishes `POST /drafts/{id}/publish`. After success, the same route is a read-only published quote with Preparing PDF, Download/View PDF when ready, and a safe retryable generation-failed state. Physical Expo Go (2026-09-16) generated and downloaded an original published-quote PDF in development. That is IMPLEMENTED development evidence, not production VERIFIED. Recipient email and EMAIL01 are collected on S11 publish confirmation. Live production delivery is not VERIFIED.
 
 ### S12 Request detail
 
-Status, revision, sent-to, delivery and decision events. Resend, withdraw, replace as permitted. Queued is not Delivered (NTF03).
+Implemented route: `/(tabs)/jobs/[id]/request`. Read-only delivery status with masked recipient, quote number/revision, and states Loading, Queued, Sending, Accepted by email provider — not yet confirmed delivered, Delivered, Bounced, Complained, Failed, Offline, Retry status check. Retry issues one GET. Resend, withdraw, and replace remain later. Queued/accepted is not Delivered (NTF03).
 
 ### S13 Extra work editor
 

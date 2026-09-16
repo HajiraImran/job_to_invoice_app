@@ -2,6 +2,7 @@ import { calculateDraftDocument, isDomainError } from "@job-to-invoice/domain";
 import {
   dollarsStringToCents,
   parseDraftPayload,
+  parseQuotePublish,
   parseTaxPercentToBp,
   taxBpToPercentLabel,
   type DraftPayloadInput,
@@ -179,6 +180,10 @@ export function moveLine(lines: QuoteLineForm[], index: number, direction: -1 | 
 
 export function firstQuoteFieldError(errors: Record<string, string>): string | undefined {
   return Object.keys(errors)[0];
+}
+
+export function quotePublishBody(previewHash: string, recipientEmail: string) {
+  return parseQuotePublish({ preview_hash: previewHash, recipient_email: recipientEmail });
 }
 
 export type DraftPayload = DraftPayloadInput;

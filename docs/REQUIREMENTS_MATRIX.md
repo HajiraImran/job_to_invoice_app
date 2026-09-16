@@ -36,7 +36,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | INV01 | Integer cents; qty 3-decimal string; no binary float; server authoritative; shared package | packages/domain | S10 S11 | calculate | document_lines | — | packages/domain fixtures.test.ts F01–F12; 40 passing domain tests | FIN01 | VERIFIED | Shared BigInt engine; mobile/API/PDF must import this package |
 | INV02 | Accepted commercial facts immutable; corrections via new version/reversal/credit | apps/api | S08 | triggers | documents ledger_entries | — | QA26 | DB04 | PENDING | |
 | INV03 | Canonical snapshot SHA-256; separate PDF digest; integrity not legal ID | packages/domain apps/worker | S11 S26 | hash | documents.snapshot_sha256 artifacts | packages/domain/src/snapshot.test.ts; apps/api/src/quotes.test.ts | QA24 QA30 | QUO02A | IMPLEMENTED | Preview/publish store SHA-256 of canonical commercial bytes. PDF digest later. Not VERIFIED on device |
-| INV04 | At most one pending approval per job; lock; one terminal winner | apps/api | S12 | TX01 TX02 | approval_requests | — | QA16 QA20 | DB03 | PENDING | |
+| INV04 | At most one pending approval per job; lock; one terminal winner | apps/api | S12 | TX01 TX02 | approval_requests | — | QA16 QA20 | DB03 | IMPLEMENTED | First-send uniqueness. Terminal approve/decline later |
 | INV05 | Additions/reductions update scope atomically; invoice locks scope | apps/api | S13 S15 | TX02 TX03 | scope_entries jobs.scope_version | — | QA31 QA32 | CHG | PENDING | |
 | INV06 | Unique monotonic numbers; never reuse after void | apps/api | S11 S15 | counters | document_counters | apps/api/src/quotes.test.ts Q-000001..Q-000003 | QA09 QA43 | QUO02 | IMPLEMENTED | Quote counters allocate Q-00000N R1 uniquely per workspace. Void reuse later. Not hosted-verified |
 | INV07 | Payment status derived; Mark paid is an entry flow | apps/api | S16 S17 | TX04 | ledger_entries | payment_recorded | QA37 | BIL08 | PENDING | |
@@ -65,7 +65,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | S09 | Quote editor; save indicators; conflict | apps/mobile | S09 | PATCH /drafts/{id} | document_drafts | — | apps/api/src/drafts.test.ts; apps/mobile/src/quotes/form.test.ts | SYNC02 | IMPLEMENTED | Create/open one editing quote draft; line cards; notes/terms/expiry; 500ms debounce save; If-Match conflict keep-server; Review quote. Encrypted local SQLite and device QA not in this slice. Not VERIFIED on device |
 | S10 | Line editor; live net/tax; optional item copy | apps/mobile | S10 | domain calc | document_drafts | — | packages/domain/src/boundaries.test.ts; apps/mobile/src/quotes/form.test.ts F01 | VAL03 | IMPLEMENTED | Description, unit, qty, unit price, discount, tax on quote cards with live FIN01 totals. Catalogue picker later. Not VERIFIED on device |
 | S11 | Preview publish; slot/paywall; stale recovery | apps/mobile | S11 | TX01 | documents | document_published | apps/api/src/quotes.test.ts; apps/mobile/src/quotes/form.test.ts; pnpm test:db; physical Expo Go 2026-09-16 original PDF generate+download | QA09 QA10 | QUO02A | IMPLEMENTED | Review preview, confirm publish, published read-only screen, preparing/ready/failed PDF download. Physical Expo Go (2026-09-16) generated and downloaded the original quote PDF in development. Not production VERIFIED. Recipient email later. |
-| S12 | Request detail; resend withdraw replace | apps/mobile | S12 | requests | approval_requests delivery_attempts | request_delivery_result | QA17 | NTF04 | PENDING | |
+| S12 | Request detail; resend withdraw replace | apps/mobile | S12 | requests | approval_requests delivery_attempts | request_delivery_result | QA17 | NTF04 | IMPLEMENTED | Read-only delivery status and EMAIL01 first send. Resend/withdraw/replace remain later |
 | S13 | Extra work; after accept before invoice | apps/mobile | S13 | changes | document_drafts | change_started | QA27 | CHG01 | PENDING | |
 | S14 | Reduction; bound max; block all-zero | apps/mobile | S14 | changes | document_lines | change_started | QA28 | CHG03 | PENDING | |
 | S15 | Invoice preview; block unresolved; direct label | apps/mobile | S15 | TX03 | documents | invoice_issued | QA31 QA44 | BIL01 | PENDING | |
@@ -104,7 +104,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | CHG03 | Source remaining caps; recheck in txn | packages/domain apps/api | S14 | TX02 | scope_entries | — | QA28 F06 fixtures.test.ts | FIN03 | PENDING | Domain cap CREDIT_EXCEEDS_SOURCE verified; TX02 lock recheck still pending |
 | CHG04 | CO-000001; previous/change/new totals; decline applies nothing | apps/api | S13 S26 | TX02 | documents | — | QA27 | — | PENDING | |
 | CHG05 | No silent rollback; reverse via new reduction/addition | apps/api | S13 S14 | — | scope_entries | — | QA27 | SUB05 | PENDING | |
-| APR01 | 256-bit token hashed; fragment URL; purge payload 24h; no-store | apps/portal apps/api | S25 | exchange | approval_requests | — | QA63 | SEC01 | PENDING | |
+| APR01 | 256-bit token hashed; fragment URL; purge payload 24h; no-store | apps/portal apps/api | S25 | exchange | approval_requests | — | QA63 | SEC01 | IMPLEMENTED | Hash/encrypt/purge and EMAIL01 href. Portal OTP exchange later |
 | APR01A | 20-min preverify; CSRF in memory; Origin check | apps/portal | S25 S26 | CSRF | approval_sessions | — | QA18 | — | PENDING | |
 | APR02 | Pre-verify reveal only name/type/mask; OTP limits | apps/portal | S25 | code send | approval_challenges | — | QA19 | EMAIL03 | PENDING | |
 | APR03 | 1h session; 90d access; rotate on replace; worker retry no rotate | apps/api | S25 S12 | sessions | approval_sessions | — | QA17 | — | PENDING | |
@@ -161,10 +161,10 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | EXP02 | Consistent cutoff; 24h link; 7d delete; 2/day | apps/worker | S24 | exports | exports | — | QA56 | EMAIL10 | PENDING | |
 | NTF01 | Email + in-app + share sheet; no SMS/push/marketing | apps/worker | S12 | Resend | delivery_attempts | request_delivery_result | NTF01 | — | PENDING | Push deferred |
 | NTF02 | Verified domain SPF/DKIM/DMARC; From product-controlled | apps/worker | — | Resend | — | — | NTF02 | EMAIL* | PENDING | |
-| NTF03 | Delivery states; retry schedule; bounce/complaint | apps/worker | S12 | webhooks/email | delivery_attempts | request_delivery_result | QA34 QA35 | — | PENDING | Accepted ≠ Delivered |
+| NTF03 | Delivery states; retry schedule; bounce/complaint | apps/worker | S12 | webhooks/email | delivery_attempts | request_delivery_result | QA34 QA35 | — | IMPLEMENTED | Accepted ≠ Delivered. Live webhook/SPF not VERIFIED |
 | NTF04 | Resend ≤3/day ≥10 min; reconcile before retry | apps/api | S12 | resend | delivery_attempts | — | QA34 | — | PENDING | |
 | NTF05 | Exact offline/conflict/expiry/ledger/plan copy | apps/mobile apps/portal | S11 S23 S26 S17 S21 | — | — | — | Copy QA | — | PENDING | |
-| EMAIL01 | Review quote {number} from {business} | apps/worker | S25 | outbox | delivery_attempts | request_delivery_result | QA09 | APR01 | PENDING | No tracking pixel |
+| EMAIL01 | Review quote {number} from {business} | apps/worker | S25 | outbox | delivery_attempts | request_delivery_result | QA09 | APR01 | IMPLEMENTED | No tracking pixel; live Resend/SPF not VERIFIED |
 | EMAIL02 | Review a change… | apps/worker | S25 | outbox | delivery_attempts | — | JRN03 | — | PENDING | |
 | EMAIL03 | Verification code | apps/worker | S25 | OTP | — | — | QA19 | APR02 | PENDING | |
 | EMAIL04 | Decision receipt | apps/worker | S27 | outbox | — | — | APR08 | — | PENDING | |
@@ -190,7 +190,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | API03 | Reject unknown fields; server-owned calculated fields | apps/api | — | schemas | — | — | apps/api/src/workspace.test.ts owner_user_id/workspace_id/currency; packages/schemas/src/draft.test.ts total_cents | — | IMPLEMENTED | Enforced on analytics batch, POST /workspace, and quote draft payloads |
 | API04 | Direct invoice via generic draft routes | apps/api | S06 S15 | drafts | document_drafts | invoice_issued | QA44 | JRN06 | PENDING | |
 | API05 | view_only purpose; no decision; access expiry | apps/api apps/portal | S25–S27 | portal | approval_requests | — | API05 | EMAIL06 | PENDING | |
-| TX01 | Publish algorithm | apps/api | S11 | publish | documents outbox_tasks | document_published | apps/api/src/quotes.test.ts | QA09 | QUO02 | IMPLEMENTED | Preview hash, slot, number, snapshot, draft preserved published, PDF queued. Approval request and email later. Not hosted-verified |
+| TX01 | Publish algorithm | apps/api | S11 | publish | documents outbox_tasks | document_published | apps/api/src/quotes.test.ts | QA09 | QUO02 | IMPLEMENTED | Preview hash, slot, number, snapshot, hashed approval request, PDF and EMAIL01 queued. Live delivery not VERIFIED |
 | TX02 | Approve algorithm | apps/api | S26 | decision | approval_decisions scope_entries | approval_completed | QA20–QA23 | APR06 | PENDING | |
 | TX03 | Invoice issue algorithm | apps/api | S15 | issue | documents | invoice_issued | QA32 QA33 | BIL02 | PENDING | |
 | TX04 | Credit/payment/refund/reversal algorithm | apps/api | S16–S18 | ledger | ledger_entries | payment_recorded | QA37–QA41 | BIL | PENDING | |

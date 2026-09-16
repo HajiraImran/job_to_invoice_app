@@ -58,7 +58,7 @@ export type QuotePreviewRecord = {
   number_label: string;
   snapshot: {
     business: { business_name: string; legal_name: string; contact_name: string; contact_email: string };
-    customer: { name: string };
+    customer: { name: string; email?: string | null };
     job: { title: string; no_site: boolean; site_address: { line1: string; city: string; state: string; postal_code: string } | null };
     notes: string;
     terms: string;
@@ -192,4 +192,91 @@ export function presentQuotePdfRetry(input: {
     return { busy: false, label: copy.quotePdfRetry, acknowledgement: copy.quotePdfStillPreparing };
   }
   return { busy: false, label: copy.quotePdfRetry };
+}
+
+export type OwnerRequestRecord = {
+  request_id: string;
+  document_id: string;
+  job_id: string;
+  number: string;
+  revision_label: string;
+  revision_no: number;
+  template_id: string;
+  delivery_state: string;
+  recipient_email_masked: string;
+  last_event_at: string;
+  retry_count: number;
+  retryable: boolean;
+  terminal: boolean;
+};
+
+export type DeliveryStatusKind =
+  | "loading"
+  | "queued"
+  | "sending"
+  | "accepted"
+  | "delivered"
+  | "bounced"
+  | "complained"
+  | "failed"
+  | "offline"
+  | "error";
+
+export function presentDeliveryStatus(input: {
+  authStatus: string;
+  loading: boolean;
+  checking: boolean;
+  request?: OwnerRequestRecord;
+  error?: { message: string; retryable: boolean; status: number };
+}): { kind: DeliveryStatusKind; label: string; showRetry: boolean; retryBusy: boolean; acceptedNotDelivered: boolean } {
+  if (input.authStatus === "offline_cached") {
+    return {
+      kind: "offline",
+      label: copy.requestOffline,
+      showRetry: true,
+      retryBusy: false,
+      acceptedNotDelivered: false,
+    };
+  }
+  if (input.loading && !input.request) {
+    return { kind: "loading", label: copy.requestLoading, showRetry: false, retryBusy: false, acceptedNotDelivered: false };
+  }
+  if (input.error && !input.request) {
+    return {
+      kind: "error",
+      label: input.error.message,
+      showRetry: input.error.retryable || input.error.status === 0,
+      retryBusy: false,
+      acceptedNotDelivered: false,
+    };
+  }
+  const state = input.request?.delivery_state;
+  if (state === "queued") {
+    return { kind: "queued", label: copy.requestQueued, showRetry: true, retryBusy: input.checking, acceptedNotDelivered: false };
+  }
+  if (state === "submitting") {
+    return { kind: "sending", label: copy.requestSending, showRetry: true, retryBusy: input.checking, acceptedNotDelivered: false };
+  }
+  if (state === "accepted_by_provider") {
+    return {
+      kind: "accepted",
+      label: copy.requestAccepted,
+      showRetry: true,
+      retryBusy: input.checking,
+      acceptedNotDelivered: true,
+    };
+  }
+  if (state === "delivered") {
+    return { kind: "delivered", label: copy.requestDelivered, showRetry: true, retryBusy: input.checking, acceptedNotDelivered: false };
+  }
+  if (state === "bounced") {
+    return { kind: "bounced", label: copy.requestBounced, showRetry: true, retryBusy: input.checking, acceptedNotDelivered: false };
+  }
+  if (state === "complained") {
+    return { kind: "complained", label: copy.requestComplained, showRetry: true, retryBusy: input.checking, acceptedNotDelivered: false };
+  }
+  if (state === "failed") {
+    return { kind: "failed", label: copy.requestFailed, showRetry: true, retryBusy: input.checking, acceptedNotDelivered: false };
+  }
+  return { kind: "loading", label: copy.requestLoading, showRetry: true, retryBusy: input.checking, acceptedNotDelivered: false };
 }

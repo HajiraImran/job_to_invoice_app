@@ -339,3 +339,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | No for R2 key layout and Playwright template once hosted-applied |
 | Escalation category | architecture |
 
+### D-017 — Resend HTTPS EMAIL01 with isolated delivery encryption
+
+| Field | Value |
+| --- | --- |
+| ID | D-017 |
+| Date | 2026-09-16 |
+| Status | Resolved |
+| Decision | First quote-request delivery uses Resend HTTPS POST `https://api.resend.com/emails` via Node `fetch`. No Resend SDK and no Svix package. The API generates a 256-bit token, HMAC-SHA256 hashes it with `APPROVAL_TOKEN_HASH_KEY`, AES-256-GCM encrypts it with `APPROVAL_DELIVERY_ENCRYPTION_KEY` (12-byte nonce, token+tag ciphertext), and atomically inserts `approval_requests`, `delivery_attempts`, `encrypted_delivery_payloads`, `generate_original_pdf`, and `send_email` during TX01. The API never calls Resend and never returns the token or fragment URL to mobile. The worker decrypts the token in memory only after the original PDF artifact is ready, sends EMAIL01 with href `{PORTAL_ORIGIN}/review#{token}`, uses `delivery_attempts.effect_key` as the Resend Idempotency-Key, and persists `provider_message_id` before completing the outbox. Webhooks are verified on `POST /webhooks/email` with the official Svix headers, `whsec_` HMAC-SHA256, five-minute timestamp tolerance in every `APP_ENV`, and `timingSafeEqual` over v1 signatures. JSON is parsed only after verification. Ciphertext is purged within 24 hours of a terminal delivery state. `APPROVAL_EVIDENCE_ENCRYPTION_KEY` is not used for delivery. |
+| Reason | Stage 2 D remainder requires EMAIL01 and S12 without exposing tokens to mobile or mixing API webhook secrets with worker send credentials. |
+| Evidence | `supabase/migrations/0010_quote_approval_request.sql`; `apps/api` publish/S12/webhook; `apps/worker` EMAIL01; `apps/mobile` S11 recipient + S12; `packages/config` approval-crypto and Resend webhook verifier |
+| Owner | Engineering lead |
+| PRD implication | EMAIL01 and S12 are implemented locally. Portal OTP/review/approve, resend/withdraw/replace, customer PDF download, and production SPF/DKIM/DMARC remain later. Live Resend delivery is not VERIFIED. |
+| Impacted requirement IDs | EMAIL01, S12, APR01, NTF02, NTF03, TX01, INV04, SEC01, SEC02 |
+| Impacted test IDs | `packages/config/src/resend-webhook.test.ts`; `packages/config/src/approval-crypto.test.ts`; `apps/api/src/quotes.test.ts`; `apps/worker/src/email.test.ts`; `apps/mobile/src/quotes/form.test.ts`; `pnpm test:db` |
+| Migration implications | Forward-only `0010_quote_approval_request.sql`. Do not edit or replay `0001`–`0009`. Hosted apply of pending `0009` remains `APPLY_0009`. This slice does not dispatch hosted apply and does not apply `0010` to hosted development. |
+| Reversible | No for hashed tokens and EMAIL01 outbox once hosted-applied |
+| Escalation category | architecture |
+

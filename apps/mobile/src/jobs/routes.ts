@@ -18,6 +18,10 @@ export function jobPublishPath(jobId: string): string {
   return `/(tabs)/jobs/${jobId}/publish`;
 }
 
+export function jobRequestPath(jobId: string): string {
+  return `/(tabs)/jobs/${jobId}/request`;
+}
+
 export function canOpenCreateJob(status: string): boolean {
   return status === "authenticated" || status === "offline_cached";
 }

@@ -20,8 +20,15 @@ import {
 import { registerDraftRoutes } from "./drafts.ts";
 import { registerJobRoutes } from "./jobs.ts";
 import { registerQuotePublishRoutes } from "./quotes.ts";
+import { registerEmailWebhookRoutes } from "./webhooks-email.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
+
+declare module "fastify" {
+  interface FastifyRequest {
+    rawBody?: Buffer;
+  }
+}
 
 export type AppDeps = {
   env: LoadedEnv | LoadedApiEnv;
@@ -29,6 +36,7 @@ export type AppDeps = {
   pool?: Pool;
   logOwnerMe?: (event: OwnerMeSafeEvent) => void;
   documentsStore?: { presignGet: (key: string) => Promise<string> };
+  nowSec?: () => number;
 };
 
 type ProvisionRow = {
@@ -108,9 +116,28 @@ function idempotencyKey(request: FastifyRequest): string | undefined {
 }
 
 export function buildApp(deps: AppDeps) {
-  const app = Fastify({ logger: false, genReqId: requestId });
+  const app = Fastify({ logger: false, genReqId: requestId, bodyLimit: 1_048_576 });
   const limiter = new RateLimiter(120, 60_000);
   const idempotency = new Map<string, { hash: string; status: number; body: unknown }>();
+
+  app.addContentTypeParser("application/json", { parseAs: "buffer" }, (request, body, done) => {
+    const raw = Buffer.isBuffer(body) ? body : Buffer.from(body);
+    const path = request.url.split("?")[0];
+    if (path === "/webhooks/email") {
+      request.rawBody = raw;
+      done(null, null);
+      return;
+    }
+    if (raw.byteLength === 0) {
+      done(null, {});
+      return;
+    }
+    try {
+      done(null, JSON.parse(raw.toString("utf8")) as unknown);
+    } catch (error) {
+      done(error as Error, undefined);
+    }
+  });
 
   app.addHook("onRequest", async (request, reply) => {
     const origin = request.headers.origin;
@@ -391,6 +418,7 @@ export function buildApp(deps: AppDeps) {
   registerQuotePublishRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
+  registerEmailWebhookRoutes(app, deps);
 
   return app;
 }

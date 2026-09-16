@@ -37,16 +37,17 @@ const PRODUCTION_BASE = {
   DATABASE_URL_WORKER: "postgres://worker:stored@db:5432/app",
   DATABASE_URL_PURGE: "postgres://purge:stored@db:5432/app",
   DATABASE_URL_MIGRATIONS: "postgres://migrator:stored@db:5432/app",
-  APPROVAL_TOKEN_HASH_KEY: "token-key",
-  OTP_HASH_KEY: "otp-key",
-  APPROVAL_EVIDENCE_ENCRYPTION_KEY: "evidence-key",
+  APPROVAL_TOKEN_HASH_KEY: "token-key-material-ok",
+  APPROVAL_DELIVERY_ENCRYPTION_KEY: "delivery-key-material-ok",
+  OTP_HASH_KEY: "otp-key-material-ok",
+  APPROVAL_EVIDENCE_ENCRYPTION_KEY: "evidence-key-material-ok",
   REVENUECAT_PUBLIC_IOS_KEY: "rc-public",
   REVENUECAT_SECRET_KEY: "rc-secret",
-  WEBHOOK_AUTH_SECRET: "webhook",
+  WEBHOOK_AUTH_SECRET: "webhook-auth-ok",
   MONTHLY_PRODUCT_ID: "monthly",
   ANNUAL_PRODUCT_ID: "annual",
-  EMAIL_API_KEY: "email-key",
-  EMAIL_WEBHOOK_SECRET: "email-webhook",
+  EMAIL_API_KEY: "email-key-material-ok",
+  EMAIL_WEBHOOK_SECRET: "whsec_dGVzdF9lbWFpbF93ZWJob29rX2tleQ",
   EMAIL_FROM_DOMAIN: "mail.jobtoinvoice.test",
   ERROR_REPORTING_DSN: "https://sentry.jobtoinvoice.test/1",
   STAFF_AUTH_CONFIG: "staff",
@@ -123,9 +124,9 @@ describe("loadApiEnv", () => {
     expect(env.documentsStorage?.api.accessKeyId).toBe("api_access_dev01");
     expect(env.documentsStorage).not.toHaveProperty("worker");
     expect("STORAGE_WORKER_ACCESS_KEY_ID" in env).toBe(false);
-    expect("STORAGE_WORKER_SECRET_ACCESS_KEY" in env).toBe(false);
-    expect("R2_WORKER_ACCESS_KEY_ID" in env).toBe(false);
-    expect("R2_WORKER_SECRET_ACCESS_KEY" in env).toBe(false);
+    expect("EMAIL_API_KEY" in env).toBe(false);
+    expect("EMAIL_FROM_DOMAIN" in env).toBe(false);
+    expect("DATABASE_URL_WORKER" in env).toBe(false);
     expect(JSON.stringify(env)).not.toContain("wk_access_dev01");
     expect(JSON.stringify(env)).not.toContain("wk_secret_dev01_value");
     expect(JSON.stringify(Object.keys(env))).not.toMatch(/EXPO_PUBLIC_/);
@@ -171,6 +172,11 @@ describe("loadApiEnv", () => {
     expect(env.documentsStorage?.bucket).toBe("job-to-invoice-documents-production");
     expect(env.documentsStorage).not.toHaveProperty("worker");
     expect("R2_WORKER_ACCESS_KEY_ID" in env).toBe(false);
+    expect("EMAIL_API_KEY" in env).toBe(false);
+    expect("EMAIL_FROM_DOMAIN" in env).toBe(false);
+    expect("EMAIL_WEBHOOK_SECRET" in env).toBe(true);
+    expect("APPROVAL_TOKEN_HASH_KEY" in env).toBe(true);
+    expect("APPROVAL_DELIVERY_ENCRYPTION_KEY" in env).toBe(true);
   });
 });
 
@@ -181,9 +187,11 @@ describe("loadWorkerEnv", () => {
     expect(env.documentsStorage?.worker.accessKeyId).toBe("wk_access_dev01");
     expect(env.documentsStorage).not.toHaveProperty("api");
     expect("STORAGE_API_ACCESS_KEY_ID" in env).toBe(false);
-    expect("STORAGE_API_SECRET_ACCESS_KEY" in env).toBe(false);
-    expect("R2_API_ACCESS_KEY_ID" in env).toBe(false);
-    expect("R2_API_SECRET_ACCESS_KEY" in env).toBe(false);
+    expect("EMAIL_WEBHOOK_SECRET" in env).toBe(false);
+    expect("APPROVAL_TOKEN_HASH_KEY" in env).toBe(false);
+    expect("APPROVAL_EVIDENCE_ENCRYPTION_KEY" in env).toBe(false);
+    expect("OTP_HASH_KEY" in env).toBe(false);
+    expect("DATABASE_URL_API" in env).toBe(false);
     expect(JSON.stringify(env)).not.toContain("api_access_dev01");
     expect(JSON.stringify(env)).not.toContain("api_secret_dev01_value");
   });
@@ -228,6 +236,11 @@ describe("loadWorkerEnv", () => {
     expect(env.documentsStorage?.bucket).toBe("job-to-invoice-documents-production");
     expect(env.documentsStorage).not.toHaveProperty("api");
     expect("R2_API_ACCESS_KEY_ID" in env).toBe(false);
+    expect("EMAIL_WEBHOOK_SECRET" in env).toBe(false);
+    expect("APPROVAL_TOKEN_HASH_KEY" in env).toBe(false);
+    expect("APPROVAL_EVIDENCE_ENCRYPTION_KEY" in env).toBe(false);
+    expect("EMAIL_API_KEY" in env).toBe(true);
+    expect("APPROVAL_DELIVERY_ENCRYPTION_KEY" in env).toBe(true);
   });
 
   it("rejects minioadmin placeholders and production private endpoints", () => {

@@ -3,7 +3,14 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  encryptDeliveryToken,
+  generateApprovalToken,
+  hashApprovalToken,
+  parseVersionedSecret,
+} from "@job-to-invoice/config";
+import { processSendEmail } from "./email.ts";
 import { processGenerateOriginalPdf } from "./outbox.ts";
 // @ts-expect-error test harness is outside the worker package
 import { applyCleanMigrations } from "../../scripts/db-admin.mjs";
@@ -546,5 +553,334 @@ describe("generate original PDF outbox", () => {
     expect(counted.heartbeats.count).toBeGreaterThanOrEqual(2);
     const done = await running().admin.query("select status from commercial.outbox_tasks where id = $1", [ids.task]);
     expect(done.rows[0]?.status).toBe("done");
+  });
+
+  const DELIVERY_KEY = "delivery-key-material-ok";
+
+  async function insertEmail01(ids: {
+    job: string;
+    doc: string;
+    request: string;
+    attempt: string;
+    payload: string;
+    task: string;
+    event: string;
+  }) {
+    const secret = parseVersionedSecret("APPROVAL_DELIVERY_ENCRYPTION_KEY", DELIVERY_KEY);
+    const token = generateApprovalToken();
+    const hashed = hashApprovalToken(token, secret);
+    const encrypted = encryptDeliveryToken(token, secret);
+    const effect = `${WS}:${ids.doc}:EMAIL01:${ids.request}`;
+    await running().admin.query(
+      `insert into commercial.approval_requests (
+        workspace_id, id, job_id, document_id, purpose, recipient_email, token_hash,
+        token_key_version, state, expected_scope_version, expires_at, access_until
+      ) values ($1, $2, $3, $4, 'approval', 'customer@example.com', $5, $6, 'pending', 0, now() + interval '14 days', now() + interval '90 days')`,
+      [WS, ids.request, ids.job, ids.doc, hashed.hash, hashed.keyVersion],
+    );
+    await running().admin.query(
+      `insert into commercial.delivery_attempts (
+        workspace_id, id, document_id, request_id, template_id, recipient_email_encrypted, state, effect_key
+      ) values ($1, $2, $3, $4, 'EMAIL01', $5, 'queued', $6)`,
+      [WS, ids.attempt, ids.doc, ids.request, Buffer.alloc(32, 7), effect],
+    );
+    await running().admin.query(
+      `insert into commercial.encrypted_delivery_payloads (
+        workspace_id, id, delivery_attempt_id, algorithm, key_version, nonce, ciphertext
+      ) values ($1, $2, $3, 'aes-256-gcm', $4, $5, $6)`,
+      [WS, ids.payload, ids.attempt, encrypted.keyVersion, encrypted.nonce, encrypted.ciphertext],
+    );
+    await running().admin.query(
+      `insert into commercial.outbox_tasks (
+        workspace_id, id, event_id, task_type, aggregate_id, payload_json, status, effect_key
+      ) values ($1, $2, $3, 'send_email', $4, $5::jsonb, 'pending', $6)`,
+      [
+        WS,
+        ids.task,
+        ids.event,
+        ids.request,
+        JSON.stringify({ document_id: ids.doc, request_id: ids.request, template_id: "EMAIL01" }),
+        effect,
+      ],
+    );
+    token.fill(0);
+    return effect;
+  }
+
+  it("does not claim EMAIL01 until the original PDF is ready and fails without send when PDF is dead", async () => {
+    const ids = {
+      job: "aaaae055-aaaa-4555-8555-aaaaaaaaaaaa",
+      doc: "aaaae077-aaaa-4777-8777-aaaaaaaaaaaa",
+      line: "aaaae088-aaaa-4888-8888-aaaaaaaaaaaa",
+      task: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb20",
+      event: "cccc1111-cccc-4111-8ccc-cccccccccc20",
+      number: "Q-000020",
+      request: "aaaae012-aaaa-4999-8999-aaaaaaaaaaaa",
+      attempt: "aaaae013-aaaa-4999-8999-aaaaaaaaaaaa",
+      payload: "aaaae014-aaaa-4999-8999-aaaaaaaaaaaa",
+      emailTask: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb21",
+      emailEvent: "cccc1111-cccc-4111-8ccc-cccccccccc21",
+    };
+    await seedQuoteTask(ids);
+    await insertEmail01({
+      job: ids.job,
+      doc: ids.doc,
+      request: ids.request,
+      attempt: ids.attempt,
+      payload: ids.payload,
+      task: ids.emailTask,
+      event: ids.emailEvent,
+    });
+    const send = vi.fn(async () => ({ ok: true as const, id: "msg_should_not_send" }));
+    expect(
+      await processSendEmail({
+        pool: running().pool,
+        deliverySecret: DELIVERY_KEY,
+        apiKey: "email-key-material-ok",
+        fromDomain: "mail.test",
+        portalOrigin: "https://portal.example.test",
+        appName: "Job to Invoice",
+        send,
+      }),
+    ).toBe("idle");
+    expect(send).not.toHaveBeenCalled();
+    await running().admin.query("update commercial.outbox_tasks set status = 'dead' where id = $1", [ids.task]);
+    expect(
+      await processSendEmail({
+        pool: running().pool,
+        deliverySecret: DELIVERY_KEY,
+        apiKey: "email-key-material-ok",
+        fromDomain: "mail.test",
+        portalOrigin: "https://portal.example.test",
+        appName: "Job to Invoice",
+        send,
+      }),
+    ).toBe("dead");
+    expect(send).not.toHaveBeenCalled();
+    const delivery = await running().admin.query("select state from commercial.delivery_attempts where id = $1", [
+      ids.attempt,
+    ]);
+    expect(delivery.rows[0]?.state).toBe("failed");
+  });
+
+  it("sends EMAIL01 after PDF ready with fragment href, persists provider id, retries 429, and reuses the effect", async () => {
+    const ids = {
+      job: "aaaae155-aaaa-4555-8555-aaaaaaaaaaaa",
+      doc: "aaaae177-aaaa-4777-8777-aaaaaaaaaaaa",
+      line: "aaaae188-aaaa-4888-8888-aaaaaaaaaaaa",
+      task: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb30",
+      event: "cccc1111-cccc-4111-8ccc-cccccccccc30",
+      number: "Q-000030",
+      request: "aaaae112-aaaa-4999-8999-aaaaaaaaaaaa",
+      attempt: "aaaae113-aaaa-4999-8999-aaaaaaaaaaaa",
+      payload: "aaaae114-aaaa-4999-8999-aaaaaaaaaaaa",
+      emailTask: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb31",
+      emailEvent: "cccc1111-cccc-4111-8ccc-cccccccccc31",
+    };
+    await seedQuoteTask(ids);
+    const effect = await insertEmail01({
+      job: ids.job,
+      doc: ids.doc,
+      request: ids.request,
+      attempt: ids.attempt,
+      payload: ids.payload,
+      task: ids.emailTask,
+      event: ids.emailEvent,
+    });
+    expect(
+      await processGenerateOriginalPdf({
+        pool: running().pool,
+        store: { putObject: async () => undefined },
+        render: async () => Buffer.from("%PDF-1.4 email"),
+      }),
+    ).toBe("done");
+    const calls: string[] = [];
+    expect(
+      await processSendEmail({
+        pool: running().pool,
+        deliverySecret: DELIVERY_KEY,
+        apiKey: "email-key-material-ok",
+        fromDomain: "mail.test",
+        portalOrigin: "https://portal.example.test",
+        appName: "Job to Invoice",
+        send: async (input) => {
+          calls.push(input.idempotencyKey);
+          expect(input.html).toContain("https://portal.example.test/review#");
+          expect(input.html).not.toContain("?token=");
+          expect(input.html.toLowerCase()).not.toContain("attachment");
+          expect(input.idempotencyKey).toBe(effect);
+          return { ok: false, retryable: true, status: 429 };
+        },
+      }),
+    ).toBe("retry");
+    const before = await running().admin.query(
+      "select ciphertext from commercial.encrypted_delivery_payloads where id = $1",
+      [ids.payload],
+    );
+    await rewind(ids.emailTask);
+    expect(
+      await processSendEmail({
+        pool: running().pool,
+        deliverySecret: DELIVERY_KEY,
+        apiKey: "email-key-material-ok",
+        fromDomain: "mail.test",
+        portalOrigin: "https://portal.example.test",
+        appName: "Job to Invoice",
+        send: async (input) => {
+          calls.push(input.idempotencyKey);
+          return { ok: true, id: "msg_email_1" };
+        },
+      }),
+    ).toBe("done");
+    const after = await running().admin.query(
+      "select ciphertext from commercial.encrypted_delivery_payloads where id = $1",
+      [ids.payload],
+    );
+    expect(after.rows[0]?.ciphertext).toEqual(before.rows[0]?.ciphertext);
+    expect(calls).toEqual([effect, effect]);
+    const delivery = await running().admin.query(
+      "select state, provider_message_id from commercial.delivery_attempts where id = $1",
+      [ids.attempt],
+    );
+    expect(delivery.rows[0]).toMatchObject({ state: "accepted_by_provider", provider_message_id: "msg_email_1" });
+    expect(delivery.rows[0]?.state).not.toBe("delivered");
+    await running().admin.query(
+      "update commercial.outbox_tasks set status = 'pending', available_at = now() - interval '1 second', lease_until = null where id = $1",
+      [ids.emailTask],
+    );
+    const replaySend = vi.fn(async () => ({ ok: true as const, id: "msg_should_not_resend" }));
+    expect(
+      await processSendEmail({
+        pool: running().pool,
+        deliverySecret: DELIVERY_KEY,
+        apiKey: "email-key-material-ok",
+        fromDomain: "mail.test",
+        portalOrigin: "https://portal.example.test",
+        appName: "Job to Invoice",
+        send: replaySend,
+      }),
+    ).toBe("done");
+    expect(replaySend).not.toHaveBeenCalled();
+    expect(
+      await processSendEmail({
+        pool: running().pool,
+        deliverySecret: DELIVERY_KEY,
+        apiKey: "email-key-material-ok",
+        fromDomain: "mail.test",
+        portalOrigin: "https://portal.example.test",
+        appName: "Job to Invoice",
+        send: async () => ({ ok: false, retryable: false, status: 422 }),
+      }),
+    ).toBe("idle");
+  });
+
+  it("does not overlap EMAIL01 processing", async () => {
+    const ids = {
+      job: "aaaae255-aaaa-4555-8555-aaaaaaaaaaaa",
+      doc: "aaaae277-aaaa-4777-8777-aaaaaaaaaaaa",
+      line: "aaaae288-aaaa-4888-8888-aaaaaaaaaaaa",
+      task: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb40",
+      event: "cccc1111-cccc-4111-8ccc-cccccccccc40",
+      number: "Q-000040",
+      request: "aaaae212-aaaa-4999-8999-aaaaaaaaaaaa",
+      attempt: "aaaae213-aaaa-4999-8999-aaaaaaaaaaaa",
+      payload: "aaaae214-aaaa-4999-8999-aaaaaaaaaaaa",
+      emailTask: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb41",
+      emailEvent: "cccc1111-cccc-4111-8ccc-cccccccccc41",
+    };
+    await seedQuoteTask(ids);
+    await insertEmail01({
+      job: ids.job,
+      doc: ids.doc,
+      request: ids.request,
+      attempt: ids.attempt,
+      payload: ids.payload,
+      task: ids.emailTask,
+      event: ids.emailEvent,
+    });
+    expect(
+      await processGenerateOriginalPdf({
+        pool: running().pool,
+        store: { putObject: async () => undefined },
+        render: async () => Buffer.from("%PDF-1.4 overlap-email"),
+      }),
+    ).toBe("done");
+    let releases!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releases = resolve;
+    });
+    const first = processSendEmail({
+      pool: running().pool,
+      deliverySecret: DELIVERY_KEY,
+      apiKey: "email-key-material-ok",
+      fromDomain: "mail.test",
+      portalOrigin: "https://portal.example.test",
+      appName: "Job to Invoice",
+      send: async () => {
+        await held;
+        return { ok: true, id: "msg_overlap" };
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = processSendEmail({
+      pool: running().pool,
+      deliverySecret: DELIVERY_KEY,
+      apiKey: "email-key-material-ok",
+      fromDomain: "mail.test",
+      portalOrigin: "https://portal.example.test",
+      appName: "Job to Invoice",
+      send: async () => ({ ok: true, id: "msg_overlap_other" }),
+    });
+    releases();
+    const [left, right] = await Promise.all([first, second]);
+    expect([left, right].sort()).toEqual(["done", "idle"]);
+  });
+
+  it("marks EMAIL01 dead on a permanent provider 4xx", async () => {
+    const ids = {
+      job: "aaaae355-aaaa-4555-8555-aaaaaaaaaaaa",
+      doc: "aaaae377-aaaa-4777-8777-aaaaaaaaaaaa",
+      line: "aaaae388-aaaa-4888-8888-aaaaaaaaaaaa",
+      task: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb50",
+      event: "cccc1111-cccc-4111-8ccc-cccccccccc50",
+      number: "Q-000050",
+      request: "aaaae312-aaaa-4999-8999-aaaaaaaaaaaa",
+      attempt: "aaaae313-aaaa-4999-8999-aaaaaaaaaaaa",
+      payload: "aaaae314-aaaa-4999-8999-aaaaaaaaaaaa",
+      emailTask: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb51",
+      emailEvent: "cccc1111-cccc-4111-8ccc-cccccccccc51",
+    };
+    await seedQuoteTask(ids);
+    await insertEmail01({
+      job: ids.job,
+      doc: ids.doc,
+      request: ids.request,
+      attempt: ids.attempt,
+      payload: ids.payload,
+      task: ids.emailTask,
+      event: ids.emailEvent,
+    });
+    expect(
+      await processGenerateOriginalPdf({
+        pool: running().pool,
+        store: { putObject: async () => undefined },
+        render: async () => Buffer.from("%PDF-1.4 reject"),
+      }),
+    ).toBe("done");
+    expect(
+      await processSendEmail({
+        pool: running().pool,
+        deliverySecret: DELIVERY_KEY,
+        apiKey: "email-key-material-ok",
+        fromDomain: "mail.test",
+        portalOrigin: "https://portal.example.test",
+        appName: "Job to Invoice",
+        send: async () => ({ ok: false, retryable: false, status: 422 }),
+      }),
+    ).toBe("dead");
+    const delivery = await running().admin.query("select state from commercial.delivery_attempts where id = $1", [
+      ids.attempt,
+    ]);
+    expect(delivery.rows[0]?.state).toBe("failed");
   });
 });

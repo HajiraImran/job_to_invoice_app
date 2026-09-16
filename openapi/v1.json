@@ -370,7 +370,7 @@
           }
         },
         "responses": {
-          "202": { "description": "Published quote; original PDF queued" },
+          "202": { "description": "Published quote; original PDF and EMAIL01 queued" },
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
           "404": { "description": "Unknown or cross-tenant draft" },
@@ -418,6 +418,57 @@
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant document" },
           "422": { "description": "Invalid document id" }
+        }
+      }
+    },
+    "/v1/jobs/{jobId}/request": {
+      "get": {
+        "summary": "Read-only owner delivery status for the job approval request (S12)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Masked recipient, template_id, delivery state, and safe timestamps" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant job or request" },
+          "422": { "description": "Invalid job id" }
+        }
+      }
+    },
+    "/webhooks/email": {
+      "post": {
+        "summary": "Verified Resend/Svix email delivery events",
+        "security": [],
+        "parameters": [
+          {
+            "name": "svix-id",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "svix-timestamp",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "svix-signature",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Verified event accepted or duplicate ignored" },
+          "401": { "description": "Missing or invalid signature" }
         }
       }
     }
@@ -478,9 +529,10 @@
       "QuotePublish": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["preview_hash"],
+        "required": ["preview_hash", "recipient_email"],
         "properties": {
-          "preview_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          "preview_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "recipient_email": { "type": "string", "maxLength": 254 }
         }
       }
     }

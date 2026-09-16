@@ -1,4 +1,4 @@
-import { loadEnv } from "@job-to-invoice/config";
+import { loadEnv, RESEND_WEBHOOK_FIXTURE } from "@job-to-invoice/config";
 import { originalPdfObjectKey } from "@job-to-invoice/domain";
 import { createJwtFixture } from "@job-to-invoice/testing";
 import { createHash } from "node:crypto";
@@ -107,11 +107,18 @@ describe("quote publish API", () => {
     pool = new Pool({ connectionString: resolved.url, max: 8 });
     const fixture = await createJwtFixture();
     sign = fixture.sign;
-    const env = loadEnv({ APP_ENV: "development", PORTAL_ORIGIN: "http://localhost:3000" });
+    const env = loadEnv({
+      APP_ENV: "development",
+      PORTAL_ORIGIN: "http://localhost:3000",
+      APPROVAL_TOKEN_HASH_KEY: "token-key-material-ok",
+      APPROVAL_DELIVERY_ENCRYPTION_KEY: "delivery-key-material-ok",
+      EMAIL_WEBHOOK_SECRET: RESEND_WEBHOOK_FIXTURE.secret,
+    });
     const SIGNED = "https://r2.invalid/original.pdf?X-Amz-Expires=300";
     app = buildApp({
       env,
       pool,
+      nowSec: () => 1_731_705_121,
       logOwnerMe: () => undefined,
       documentsStore: {
         presignGet: async (key) => `${SIGNED}&key=${encodeURIComponent(key)}`,
@@ -207,7 +214,14 @@ describe("quote publish API", () => {
     });
   }
 
-  async function publish(token: string, draftId: string, version: number, previewHash: string, key: string) {
+  async function publish(
+    token: string,
+    draftId: string,
+    version: number,
+    previewHash: string,
+    key: string,
+    recipientEmail = "customer@example.com",
+  ) {
     return running().app.inject({
       method: "POST",
       url: `/v1/drafts/${draftId}/publish`,
@@ -217,7 +231,7 @@ describe("quote publish API", () => {
         "idempotency-key": key,
         "if-match": String(version),
       },
-      payload: { preview_hash: previewHash },
+      payload: { preview_hash: previewHash, recipient_email: recipientEmail },
     });
   }
 
@@ -256,6 +270,46 @@ describe("quote publish API", () => {
     expect(doc.revision_label).toBe("R1");
     expect(doc.lifecycle).toBe("issued");
     expect(doc.pdf_state).toBe("preparing");
+    expect(doc.delivery_state).toBe("queued");
+    expect(doc.request_id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(doc.token).toBeUndefined();
+    expect(doc.href).toBeUndefined();
+    expect(JSON.stringify(doc)).not.toContain("ciphertext");
+    expect(JSON.stringify(doc)).not.toContain("whsec_");
+    expect(JSON.stringify(doc)).not.toContain("customer@example.com");
+    const missingRecipient = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${draft.id}/publish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEY_6,
+        "if-match": String(draft.version),
+      },
+      payload: { preview_hash: previewed.preview_hash },
+    });
+    expect(missingRecipient.statusCode).toBe(422);
+    const status = await running().app.inject({
+      method: "GET",
+      url: `/v1/jobs/${JOB_1}/request`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().data.delivery_state).toBe("queued");
+    expect(status.json().data.recipient_email_masked).toMatch(/^c\*\*\*@/);
+    expect(JSON.stringify(status.json())).not.toContain("customer@example.com");
+    expect(status.json().data.token).toBeUndefined();
+    const emailTask = await running().admin.query(
+      `select payload_json, effect_key from commercial.outbox_tasks where task_type = 'send_email' and payload_json->>'document_id' = $1`,
+      [doc.id],
+    );
+    expect(emailTask.rows[0]?.payload_json).toEqual({
+      document_id: doc.id,
+      request_id: doc.request_id,
+      template_id: "EMAIL01",
+    });
+    expect(JSON.stringify(emailTask.rows[0]?.payload_json)).not.toContain("customer@example.com");
+    expect(JSON.stringify(emailTask.rows[0]?.payload_json)).not.toMatch(/token_hash|"token"|href|ciphertext/i);
     expect(doc.net_cents).toBe(24000);
     expect(doc.snapshot.notes).toBe("Replace cartridge.");
     expect(doc.snapshot.terms).toBe("Net 14.");
@@ -264,6 +318,16 @@ describe("quote publish API", () => {
     expect(replay.statusCode).toBe(202);
     expect(replay.json().data.id).toBe(doc.id);
     expect(replay.json().data.number).toBe("Q-000001");
+    const mismatchedRecipient = await publish(
+      token,
+      draft.id,
+      draft.version,
+      previewed.preview_hash,
+      KEY_5,
+      "other.customer@example.com",
+    );
+    expect(mismatchedRecipient.statusCode).toBe(409);
+    expect(mismatchedRecipient.json().error.code).toBe("IDEMPOTENCY_MISMATCH");
     const loaded = await running().app.inject({
       method: "GET",
       url: `/v1/documents/${doc.id}`,
@@ -509,6 +573,14 @@ describe("quote publish API", () => {
       headers: { authorization: `Bearer ${tokenP}` },
     });
     expect(leakDownload.statusCode).toBe(404);
+    const leakRequest = await running().app.inject({
+      method: "GET",
+      url: `/v1/jobs/${JOB_S}/request`,
+      headers: { authorization: `Bearer ${tokenP}` },
+    });
+    expect(leakRequest.statusCode).toBe(404);
+    expect(JSON.stringify(leakRequest.json())).not.toContain("@example.com");
+    expect(JSON.stringify(leakRequest.json())).not.toMatch(/token|href|ciphertext/i);
     expect(JSON.stringify(leakDownload.json())).not.toMatch(/r2\.invalid|original\.pdf/i);
     const steal = await publish(
       tokenP,
@@ -563,5 +635,44 @@ describe("quote publish API", () => {
     expect(previewed.statusCode).toBe(401);
     const published = await running().app.inject({ method: "POST", url: "/v1/drafts/36363636-3636-4363-8363-363636363631/publish" });
     expect(published.statusCode).toBe(401);
+  });
+
+  it("verifies Resend webhooks and ignores unsigned or replayed events", async () => {
+    const headers = {
+      "content-type": "application/json",
+      "svix-id": RESEND_WEBHOOK_FIXTURE.svixId,
+      "svix-timestamp": RESEND_WEBHOOK_FIXTURE.svixTimestamp,
+      "svix-signature": RESEND_WEBHOOK_FIXTURE.svixSignature,
+    };
+    const accepted = await running().app.inject({
+      method: "POST",
+      url: "/webhooks/email",
+      headers,
+      payload: RESEND_WEBHOOK_FIXTURE.rawPayload,
+    });
+    expect(accepted.statusCode).toBe(200);
+    const replay = await running().app.inject({
+      method: "POST",
+      url: "/webhooks/email",
+      headers,
+      payload: RESEND_WEBHOOK_FIXTURE.rawPayload,
+    });
+    expect(replay.statusCode).toBe(200);
+    const altered = await running().app.inject({
+      method: "POST",
+      url: "/webhooks/email",
+      headers,
+      payload: '{"event_type":"ping","data":{"success":false}}',
+    });
+    expect(altered.statusCode).toBe(401);
+    const unsigned = await running().app.inject({
+      method: "POST",
+      url: "/webhooks/email",
+      headers: { "content-type": "application/json" },
+      payload: RESEND_WEBHOOK_FIXTURE.rawPayload,
+    });
+    expect(unsigned.statusCode).toBe(401);
+    expect(JSON.stringify(accepted.json())).not.toContain(RESEND_WEBHOOK_FIXTURE.secret);
+    expect(JSON.stringify(accepted.json())).not.toContain("success");
   });
 });

@@ -384,7 +384,7 @@ try {
       );
       assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
     }
-    assert(setRoleFiles === 7, "expected SET ROLE migrator in 0002, 0003, 0004, 0005, 0006, 0007, and 0008");
+    assert(setRoleFiles === 8, "expected SET ROLE migrator in 0002–0008 and 0010");
   });
 
   await test("migration history inserts succeed as the restored bootstrap role", async () => {
@@ -392,8 +392,8 @@ try {
       "select version from supabase_migrations.schema_migrations order by version",
     );
     assert(
-      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006,0007,0008,0009",
-      "bootstrap role must record 0001-0009 after RESET ROLE",
+      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010",
+      "bootstrap role must record 0001-0010 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {
@@ -1171,6 +1171,333 @@ try {
       /check|due/i,
       "due days over 365",
     );
+  });
+
+  await test("api_app cannot read encrypted delivery ciphertext and worker cannot read approval tables", async () => {
+    await expectFail(
+      () =>
+        withApi(admin, async () => {
+          await admin.query("select identity.set_local_tenant_context($1, $2)", [A.ws, A.user]);
+          await admin.query("select ciphertext from commercial.encrypted_delivery_payloads");
+        }),
+      /permission denied/i,
+      "api_app ciphertext select",
+    );
+    await expectFail(
+      async () => {
+        await admin.query("set role worker_app");
+        try {
+          await admin.query("select token_hash from commercial.approval_requests");
+        } finally {
+          await admin.query("reset role");
+        }
+      },
+      /permission denied/i,
+      "worker_app approval_requests select",
+    );
+  });
+
+  await test("email retry delays are not the PDF schedule", async () => {
+    const delays = await admin.query(`
+      select
+        commercial.email_retry_delay_for_attempt(1) = interval '1 minute' as a1,
+        commercial.email_retry_delay_for_attempt(2) = interval '5 minutes' as a2,
+        commercial.email_retry_delay_for_attempt(5) = interval '8 hours' as a5,
+        commercial.retry_delay_for_attempt(1) = interval '30 seconds' as pdf1
+    `);
+    assert(delays.rows[0].a1 === true, "email first delay is 1 minute");
+    assert(delays.rows[0].a2 === true, "email second delay is 5 minutes");
+    assert(delays.rows[0].a5 === true, "email fifth delay is 8 hours");
+    assert(delays.rows[0].pdf1 === true, "pdf first delay remains 30 seconds");
+  });
+
+  const emailJob = "aaaae010-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const emailDoc = "aaaae011-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const emailReq = "aaaae012-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const emailAttempt = "aaaae013-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const emailPayload = "aaaae014-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const emailTask = "aaaae015-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const emailEvent = "aaaae016-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const emailPdfTask = "aaaae017-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const emailPdfEvent = "aaaae018-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+  await test("pending approval is unique per workspace job and composite FKs hold", async () => {
+    await admin.query(
+      `insert into commercial.jobs (workspace_id, id, customer_id, title, no_site, lifecycle, mode)
+       values ($1, $2, $3, 'Email job', true, 'draft', 'quote')`,
+      [A.ws, emailJob, A.customer],
+    );
+    await admin.query(
+      `insert into commercial.documents (
+        workspace_id, id, created_by, job_id, kind, number, revision_no, lifecycle,
+        issued_at, issue_date, currency, net_cents, tax_cents, total_cents,
+        snapshot_json, canonical_snapshot_bytes, schema_version, snapshot_sha256
+      ) values ($1, $2, $3, $4, 'quote', 'Q-000101', 1, 'issued', now(), current_date, 'USD', 0, 0, 0, $5::jsonb, $6::bytea, 1, $7)`,
+      [
+        A.ws,
+        emailDoc,
+        A.user,
+        emailJob,
+        JSON.stringify({ schema_version: 1, kind: "quote", lines: [] }),
+        Buffer.from("{}"),
+        "ef".repeat(32),
+      ],
+    );
+    const effect = `${A.ws}:${emailDoc}:EMAIL01:${emailReq}`;
+    await admin.query(
+      `insert into commercial.approval_requests (
+        workspace_id, id, job_id, document_id, purpose, recipient_email, token_hash,
+        token_key_version, state, expected_scope_version, expires_at, access_until
+      ) values ($1, $2, $3, $4, 'approval', 'customer@example.com', $5, 1, 'pending', 0, now() + interval '14 days', now() + interval '90 days')`,
+      [A.ws, emailReq, emailJob, emailDoc, "11".repeat(32)],
+    );
+    await admin.query(
+      `insert into commercial.delivery_attempts (
+        workspace_id, id, document_id, request_id, template_id, recipient_email_encrypted, state, effect_key
+      ) values ($1, $2, $3, $4, 'EMAIL01', $5, 'queued', $6)`,
+      [A.ws, emailAttempt, emailDoc, emailReq, Buffer.alloc(32, 9), effect],
+    );
+    await admin.query(
+      `insert into commercial.encrypted_delivery_payloads (
+        workspace_id, id, delivery_attempt_id, algorithm, key_version, nonce, ciphertext
+      ) values ($1, $2, $3, 'aes-256-gcm', 1, $4, $5)`,
+      [A.ws, emailPayload, emailAttempt, Buffer.alloc(12, 3), Buffer.alloc(48, 4)],
+    );
+    await admin.query(
+      `insert into commercial.outbox_tasks (
+        workspace_id, id, event_id, task_type, aggregate_id, payload_json, status, effect_key
+      ) values ($1, $2, $3, 'send_email', $4, $5::jsonb, 'pending', $6)`,
+      [
+        A.ws,
+        emailTask,
+        emailEvent,
+        emailReq,
+        JSON.stringify({ document_id: emailDoc, request_id: emailReq, template_id: "EMAIL01" }),
+        effect,
+      ],
+    );
+    await expectFail(
+      () =>
+        admin.query(
+          `insert into commercial.approval_requests (
+            workspace_id, id, job_id, document_id, purpose, recipient_email, token_hash,
+            token_key_version, state, expected_scope_version, expires_at, access_until
+          ) values ($1, $2, $3, $4, 'approval', 'other@example.com', $5, 1, 'pending', 0, now() + interval '14 days', now() + interval '90 days')`,
+          [A.ws, "aaaae019-aaaa-4aaa-8aaa-aaaaaaaaaaaa", emailJob, emailDoc, "12".repeat(32)],
+        ),
+      /unique|duplicate/i,
+      "pending approval uniqueness",
+    );
+    await expectFail(
+      () =>
+        admin.query(
+          `insert into commercial.approval_requests (
+            workspace_id, id, job_id, document_id, purpose, recipient_email, token_hash,
+            token_key_version, state, expected_scope_version, expires_at, access_until
+          ) values ($1, $2, $3, $4, 'approval', 'cross@example.com', $5, 1, 'pending', 0, now() + interval '14 days', now() + interval '90 days')`,
+          [A.ws, "aaaae020-aaaa-4aaa-8aaa-aaaaaaaaaaaa", B.job, emailDoc, "13".repeat(32)],
+        ),
+      /foreign key|violates/i,
+      "cross-tenant approval job fk",
+    );
+  });
+
+  await test("EMAIL01 claim waits for original PDF and fails without send when PDF is dead", async () => {
+    await admin.query("begin");
+    try {
+      await admin.query("set local role worker_app");
+      const blocked = await admin.query("select id from commercial.claim_send_email()");
+      assert(blocked.rows.length === 0, "claim must wait until original PDF is ready");
+    } finally {
+      await admin.query("rollback");
+    }
+    await admin.query(
+      `insert into commercial.outbox_tasks (
+        workspace_id, id, event_id, task_type, aggregate_id, payload_json, status, effect_key
+      ) values ($1, $2, $3, 'generate_original_pdf', $4, $5::jsonb, 'dead', $6)`,
+      [
+        A.ws,
+        emailPdfTask,
+        emailPdfEvent,
+        emailDoc,
+        JSON.stringify({ document_id: emailDoc, kind: "quote" }),
+        `${A.ws}:${emailDoc}:original_pdf`,
+      ],
+    );
+    await admin.query("begin");
+    try {
+      await admin.query("set local role worker_app");
+      const failed = await admin.query("select fail_without_send, ciphertext from commercial.claim_send_email()");
+      assert(failed.rows[0]?.fail_without_send === true, "PDF dead must fail EMAIL01 without send");
+      assert(failed.rows[0]?.ciphertext == null, "fail without send must not return ciphertext");
+      await admin.query("commit");
+    } catch (error) {
+      await admin.query("rollback");
+      throw error;
+    }
+    const delivery = await admin.query("select state from commercial.delivery_attempts where id = $1", [emailAttempt]);
+    assert(delivery.rows[0]?.state === "failed", "PDF dead marks delivery failed");
+    const outbox = await admin.query("select status from commercial.outbox_tasks where id = $1", [emailTask]);
+    assert(outbox.rows[0]?.status === "dead", "PDF dead marks send_email dead");
+  });
+
+  await test("duplicate EMAIL01 claims respect the lease and terminal payloads are purge-eligible", async () => {
+    const readyJob = "aaaae030-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const readyDoc = "aaaae031-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const readyReq = "aaaae032-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const readyAttempt = "aaaae033-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const readyPayload = "aaaae034-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const readyTask = "aaaae035-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const readyEvent = "aaaae036-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const readyPdfTask = "aaaae037-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const readyPdfEvent = "aaaae038-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const readyArtifact = "aaaae039-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await admin.query(
+      `insert into commercial.jobs (workspace_id, id, customer_id, title, no_site, lifecycle, mode)
+       values ($1, $2, $3, 'Ready email', true, 'draft', 'quote')`,
+      [A.ws, readyJob, A.customer],
+    );
+    await admin.query(
+      `insert into commercial.documents (
+        workspace_id, id, created_by, job_id, kind, number, revision_no, lifecycle,
+        issued_at, issue_date, currency, net_cents, tax_cents, total_cents,
+        snapshot_json, canonical_snapshot_bytes, schema_version, snapshot_sha256
+      ) values ($1, $2, $3, $4, 'quote', 'Q-000102', 1, 'issued', now(), current_date, 'USD', 0, 0, 0, $5::jsonb, $6::bytea, 1, $7)`,
+      [
+        A.ws,
+        readyDoc,
+        A.user,
+        readyJob,
+        JSON.stringify({ schema_version: 1, kind: "quote", lines: [] }),
+        Buffer.from("{}"),
+        "fa".repeat(32),
+      ],
+    );
+    const effect = `${A.ws}:${readyDoc}:EMAIL01:${readyReq}`;
+    await admin.query(
+      `insert into commercial.approval_requests (
+        workspace_id, id, job_id, document_id, purpose, recipient_email, token_hash,
+        token_key_version, state, expected_scope_version, expires_at, access_until
+      ) values ($1, $2, $3, $4, 'approval', 'customer@example.com', $5, 1, 'pending', 0, now() + interval '14 days', now() + interval '90 days')`,
+      [A.ws, readyReq, readyJob, readyDoc, "14".repeat(32)],
+    );
+    await admin.query(
+      `insert into commercial.delivery_attempts (
+        workspace_id, id, document_id, request_id, template_id, recipient_email_encrypted, state, effect_key
+      ) values ($1, $2, $3, $4, 'EMAIL01', $5, 'queued', $6)`,
+      [A.ws, readyAttempt, readyDoc, readyReq, Buffer.alloc(32, 8), effect],
+    );
+    await admin.query(
+      `insert into commercial.encrypted_delivery_payloads (
+        workspace_id, id, delivery_attempt_id, algorithm, key_version, nonce, ciphertext
+      ) values ($1, $2, $3, 'aes-256-gcm', 1, $4, $5)`,
+      [A.ws, readyPayload, readyAttempt, Buffer.alloc(12, 5), Buffer.alloc(48, 6)],
+    );
+    await admin.query(
+      `insert into commercial.outbox_tasks (
+        workspace_id, id, event_id, task_type, aggregate_id, payload_json, status, effect_key
+      ) values ($1, $2, $3, 'send_email', $4, $5::jsonb, 'pending', $6)`,
+      [
+        A.ws,
+        readyTask,
+        readyEvent,
+        readyReq,
+        JSON.stringify({ document_id: readyDoc, request_id: readyReq, template_id: "EMAIL01" }),
+        effect,
+      ],
+    );
+    await admin.query(
+      `insert into commercial.outbox_tasks (
+        workspace_id, id, event_id, task_type, aggregate_id, payload_json, status, effect_key
+      ) values ($1, $2, $3, 'generate_original_pdf', $4, $5::jsonb, 'pending', $6)`,
+      [
+        A.ws,
+        readyPdfTask,
+        readyPdfEvent,
+        readyDoc,
+        JSON.stringify({ document_id: readyDoc, kind: "quote" }),
+        `${A.ws}:${readyDoc}:original_pdf`,
+      ],
+    );
+    await admin.query("begin");
+    try {
+      await admin.query("set local role worker_app");
+      await admin.query("select commercial.complete_original_pdf($1::uuid, $2::uuid, $3, $4, $5::bigint)", [
+        readyPdfTask,
+        readyArtifact,
+        `workspaces/${A.ws}/documents/${readyDoc}/revisions/1/original/${readyArtifact}.pdf`,
+        "ab".repeat(32),
+        12,
+      ]);
+      await admin.query("commit");
+    } catch (error) {
+      await admin.query("rollback");
+      throw error;
+    }
+    await admin.query("begin");
+    try {
+      await admin.query("set local role worker_app");
+      const first = await admin.query("select id from commercial.claim_send_email()");
+      assert(first.rows.length === 1, "ready PDF allows EMAIL01 claim");
+      await admin.query("commit");
+    } catch (error) {
+      await admin.query("rollback");
+      throw error;
+    }
+    await admin.query("begin");
+    try {
+      await admin.query("set local role worker_app");
+      const second = await admin.query("select id from commercial.claim_send_email()");
+      assert(second.rows.length === 0, "leased EMAIL01 must not be claimed twice");
+    } finally {
+      await admin.query("rollback");
+    }
+    await admin.query(
+      `update commercial.delivery_attempts
+         set state = 'delivered', provider_message_id = 'msg_db_1'
+       where id = $1`,
+      [readyAttempt],
+    );
+    await admin.query(
+      `update commercial.encrypted_delivery_payloads
+         set purge_after = now() - interval '1 second'
+       where id = $1`,
+      [readyPayload],
+    );
+    await admin.query("begin");
+    try {
+      await admin.query("set local role purge_app");
+      const purged = await admin.query("select commercial.purge_expired_delivery_payloads() as n");
+      assert(Number(purged.rows[0]?.n) >= 1, "terminal payloads must be purge-eligible after 24h");
+      await admin.query("commit");
+    } catch (error) {
+      await admin.query("rollback");
+      throw error;
+    }
+    const payload = await admin.query(
+      "select octet_length(ciphertext) as n, purged_at is not null as purged from commercial.encrypted_delivery_payloads where id = $1",
+      [readyPayload],
+    );
+    assert(payload.rows[0]?.n === 0 && payload.rows[0]?.purged === true, "purged ciphertext must be empty");
+    const applied = await admin.query(
+      `select applied, delivery_state, template_id from commercial.apply_resend_email_event($1, 'email.delivered', 'msg_db_1')`,
+      ["msg_event_db_1"],
+    );
+    assert(applied.rows[0]?.delivery_state === "delivered", "verified delivered event keeps delivered");
+    assert(applied.rows[0]?.template_id === "EMAIL01", "analytics template stays EMAIL01");
+    const analytics = await admin.query(
+      `select safe_properties_json from commercial.analytics_events
+       where event_name = 'request_delivery_result' and workspace_id = $1
+       order by occurred_at desc limit 1`,
+      [A.ws],
+    );
+    assert(
+      JSON.stringify(analytics.rows[0]?.safe_properties_json) ===
+        JSON.stringify({ result: "delivered", template_id: "EMAIL01" }),
+      "delivery analytics must be allowlisted",
+    );
+    const ownerB = await admin.query("select request_id from commercial.owner_job_request($1, $2)", [B.ws, readyJob]);
+    assert(ownerB.rows.length === 0, "cross-tenant request lookup is empty");
   });
 
   console.log(`${passed} passed, ${failed} failed`);
