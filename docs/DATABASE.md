@@ -46,6 +46,8 @@ Supabase `service_role` is forbidden as an application connection. Client roles 
 
 `db.<project-ref>.supabase.co:5432` is IPv6-only. On an IPv4-only network `supabase db push --linked` times out while `supabase db query --linked` still works (HTTPS). Hosted applies from this network must use the IPv4 **session** pooler, not `--linked`, not `migrate:clean`, and not transaction-mode port `6543`.
 
+Runtime `DATABASE_URL_API` and `DATABASE_URL_WORKER` stay on that same session pooler. One process-level node-postgres pool per API/worker process. Transient connect failures may be retried only before `BEGIN`. Do not change credentials or switch to port `6543` because a TCP probe succeeded.
+
 Required URL shape:
 
 `postgres://postgres.<linked-project-ref>:<percent-encoded-password>@aws-0-<region>.pooler.supabase.com:5432/postgres`

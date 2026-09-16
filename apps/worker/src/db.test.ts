@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Pool, PoolClient } from "pg";
 import {
+  CONNECT_MAX_ATTEMPTS,
   WorkerTransactionError,
+  acquirePooledClient,
+  connectErrorSqlstate,
   sqlstateFromUnknown,
   withClaimBudget,
   withWorkerRole,
@@ -9,6 +12,7 @@ import {
 
 type Script = {
   connect?: unknown;
+  connectErrors?: unknown[];
   hangConnect?: boolean;
   hangQuery?: boolean;
   delayQuery?: (resolve: (value: { rows: unknown[] }) => void) => void;
@@ -24,8 +28,16 @@ function pgError(code: string, message: string): Error {
   return error;
 }
 
-function scriptedPool(script: Script): { pool: Pool; release: ReturnType<typeof vi.fn>; commits: { count: number } } {
+function scriptedPool(script: Script): {
+  pool: Pool;
+  release: ReturnType<typeof vi.fn>;
+  commits: { count: number };
+  connects: { count: number };
+  begins: { count: number };
+} {
   const commits = { count: 0 };
+  const connects = { count: 0 };
+  const begins = { count: 0 };
   let rejectHang: ((error: Error) => void) | undefined;
   const release = vi.fn((destroy?: boolean | Error) => {
     if (destroy && rejectHang) {
@@ -35,8 +47,13 @@ function scriptedPool(script: Script): { pool: Pool; release: ReturnType<typeof 
   });
   const pool = {
     connect: async () => {
+      connects.count += 1;
       if (script.hangConnect) {
         return new Promise(() => undefined);
+      }
+      const queued = script.connectErrors?.[connects.count - 1];
+      if (queued) {
+        throw queued;
       }
       if (script.connect) {
         throw script.connect;
@@ -53,6 +70,7 @@ function scriptedPool(script: Script): { pool: Pool; release: ReturnType<typeof 
             });
           }
           if (normalized === "begin") {
+            begins.count += 1;
             if (script.begin) {
               throw script.begin;
             }
@@ -84,13 +102,15 @@ function scriptedPool(script: Script): { pool: Pool; release: ReturnType<typeof 
       return client as unknown as PoolClient;
     },
   } as unknown as Pool;
-  return { pool, release, commits };
+  return { pool, release, commits, connects, begins };
 }
 
 describe("withWorkerRole stages", () => {
+  const noSleep = { sleep: async () => undefined, random: () => 0.5 };
+
   it("maps connect failure without copying the error message", async () => {
     const error = pgError("08006", "could not connect to host.example.invalid");
-    const thrown = await withWorkerRole(scriptedPool({ connect: error }).pool, async () => undefined).catch(
+    const thrown = await withWorkerRole(scriptedPool({ connect: error }).pool, async () => undefined, noSleep).catch(
       (value) => value,
     );
     expect(thrown).toBeInstanceOf(WorkerTransactionError);
@@ -250,9 +270,53 @@ describe("withWorkerRole stages", () => {
     }
   });
 
-  it("ignores non-SQLSTATE node codes", () => {
-    expect(sqlstateFromUnknown({ code: "ECONNREFUSED" })).toBeUndefined();
+  it("categorizes node connect failures as allowlisted SQLSTATE classes", () => {
+    expect(connectErrorSqlstate({ code: "ETIMEDOUT" })).toBe("08006");
+    expect(connectErrorSqlstate({ code: "ECONNRESET" })).toBe("08006");
+    expect(connectErrorSqlstate({ code: "ECONNREFUSED" })).toBe("08001");
+    expect(sqlstateFromUnknown({ code: "ECONNREFUSED" })).toBe("08001");
     expect(sqlstateFromUnknown({ code: "42501" })).toBe("42501");
     expect(sqlstateFromUnknown(new Error("secret"))).toBeUndefined();
+  });
+
+  it("retries a timed-out connect then begins once", async () => {
+    const scripted = scriptedPool({ connectErrors: [pgError("ETIMEDOUT", "connect ETIMEDOUT db.example.invalid")] });
+    const result = await withWorkerRole(scripted.pool, async () => "claimed", noSleep);
+    expect(result).toBe("claimed");
+    expect(scripted.connects.count).toBe(2);
+    expect(scripted.begins.count).toBe(1);
+    expect(scripted.commits.count).toBe(1);
+    expect(scripted.release).toHaveBeenCalledWith(false);
+  });
+
+  it("exhausts connect failures without beginning a transaction", async () => {
+    const scripted = scriptedPool({ connect: pgError("ECONNREFUSED", "connect ECONNREFUSED 10.0.0.1") });
+    const thrown = await withWorkerRole(scripted.pool, async () => "claimed", noSleep).catch((value) => value);
+    expect(thrown).toMatchObject({
+      stage: "database_connect_failed",
+      sqlstate: "08001",
+      message: "unavailable",
+    });
+    expect(scripted.connects.count).toBe(CONNECT_MAX_ATTEMPTS);
+    expect(scripted.begins.count).toBe(0);
+    expect(JSON.stringify(thrown)).not.toMatch(/10\.0\.0\.1|ECONNREFUSED|postgres:\/\//i);
+  });
+
+  it("does not retry after BEGIN may have executed", async () => {
+    const scripted = scriptedPool({ begin: pgError("08006", "server closed the connection unexpectedly") });
+    await expect(withWorkerRole(scripted.pool, async () => "claimed", noSleep)).rejects.toMatchObject({
+      stage: "transaction_start_failed",
+    });
+    expect(scripted.connects.count).toBe(1);
+    expect(scripted.begins.count).toBe(1);
+  });
+
+  it("destroys a client attached to a failed connect attempt", async () => {
+    const release = vi.fn();
+    const failed = Object.assign(pgError("ETIMEDOUT", "connect ETIMEDOUT 10.0.0.1"), { client: { release } });
+    await expect(
+      acquirePooledClient({ connect: async () => Promise.reject(failed) }, { ...noSleep, maxAttempts: 1 }),
+    ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+    expect(release).toHaveBeenCalledWith(true);
   });
 });

@@ -214,7 +214,7 @@ SREF01–SREF08 are normative references for implementation, not skippable produ
 | NFR03 | Load targets 100 owners / p95 read 500ms write 800ms; PDF 15s/60s | apps/api apps/worker | — | — | — | — | QA67 | — | PENDING | Targets not claimed current |
 | NFR04 | 99.9% API/portal; RPO 15m RTO 4h; object restore verified | ops | — | backups | — | — | QA66 | OPS06 | PENDING | |
 | NFR05 | Drafts survive terminate after Saved; no fake empty/success | apps/mobile apps/api | S09 S11 | — | — | — | QA05 QA06 | SYNC | PENDING | |
-| NFR06 | Timeouts and no non-idempotent auto-retry | apps/mobile apps/api apps/worker | — | — | — | — | QA34 | ARC04 | PENDING | |
+| NFR06 | Timeouts and no non-idempotent auto-retry | apps/mobile apps/api apps/worker | — | — | — | — | QA34; apps/api/src/db.test.ts; apps/worker/src/db.test.ts; apps/worker/src/run.test.ts | ARC04 | PENDING | API/worker retry only pre-BEGIN pool connect with bounded jitter. Never replay after BEGIN. Connect exhaustion is 503 / worker poll later. Session pooler 5432 unchanged. |
 | ANA01 | First-party schema; forbid PII list | apps/api | — | batch | analytics_events | all events | packages/schemas/src/workspace-setup.test.ts; workspace.test.ts onboarding PII absent | DEC12 | IMPLEMENTED | signup_verified + onboarding_completed server-side; client PII and client onboarding_completed rejected |
 | ANA02 | Server authoritative; batch 50/7d; exclude sandbox | apps/api | — | analytics | analytics_events | — | ANA02 | — | PENDING | |
 | ANA03 | No ad SDK; experiments not on money/consent/entitlement | all | S21 | — | — | paywall_viewed | ANA03 | DEC12 | PENDING | |

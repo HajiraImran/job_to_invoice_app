@@ -99,9 +99,9 @@ Owner command:
 
 1. Verify JWT signature, issuer, audience, expiry, account status (ACC02, SREF06).
 2. Resolve workspace membership from verified identity via `identity.provision_owner`. A route/body `workspace_id` is ignored as evidence.
-3. Checkout one pool client.
+3. Checkout one client from the process-level node-postgres pool. Before `BEGIN`, retry only transient connect failures (`ETIMEDOUT`, `ECONNRESET`, `ECONNREFUSED`, connection termination) with short jittered backoff, a per-attempt connect timeout, and an overall deadline. Destroy a client/socket involved in those failures. Never retry after `BEGIN` may have executed. Keep the canonical session pooler on port 5432; do not switch to transaction-mode port 6543 because it is reachable.
 4. `BEGIN`.
-5. `SET LOCAL app.workspace_id` and `SET LOCAL app.actor_id` from that verified identity only.
+5. `SET LOCAL ROLE` plus `SET LOCAL app.workspace_id` and `SET LOCAL app.actor_id` from that verified identity only, in the same transaction.
 6. Execute the authorized command (RLS still enforced).
 7. `COMMIT` or `ROLLBACK`. `SET LOCAL` ends with the transaction; do not `SET`/`RESET` at session scope.
 
@@ -124,7 +124,7 @@ Worker:
 
 1. Claims `outbox_tasks` with `SKIP LOCKED` on `worker_app`.
 2. Locks the aggregate row; derives `workspace_id` from that row, never from `payload_json`.
-3. Same algorithm: checkout → `BEGIN` → `SET LOCAL` from the locked row → function → commit/rollback.
+3. Same algorithm: bounded pre-BEGIN checkout from the process-level pool → `BEGIN` → `SET LOCAL` from the locked row → function → commit/rollback. Do not replay after `BEGIN`. On connect exhaustion, emit `database_connect_failed`, release busy state, and poll later.
 4. A forged payload `workspace_id` cannot change context.
 
 ## RLS and tenant isolation

@@ -127,6 +127,25 @@ describe("worker original PDF", () => {
     expect(stages).toEqual(["claim_timed_out", "no_work"]);
   });
 
+  it("releases busy after database_connect_failed so the next tick can run", async () => {
+    const stages: string[] = [];
+    let fail = true;
+    const tick = createWorkerTick({
+      run: async () => {
+        if (fail) {
+          throw new WorkerTransactionError("database_connect_failed", "08006");
+        }
+        return "idle";
+      },
+      onStage: (stage) => stages.push(stage),
+      now: () => 1_000,
+    });
+    await tick();
+    fail = false;
+    await tick();
+    expect(stages).toEqual(["database_connect_failed", "no_work"]);
+  });
+
   it("does not emit claim_timed_out or overlap when rendering exceeds 8 seconds", async () => {
     const stages: string[] = [];
     let inflight = 0;
