@@ -254,6 +254,41 @@ try {
       );
     },
   });
+  await test("0009 grants worker_app membership so SET LOCAL ROLE worker_app succeeds", async () => {
+    const attrs = await admin.query(`
+      select rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication
+      from pg_roles
+      where rolname = 'worker_app'
+    `);
+    const role = attrs.rows[0];
+    assert(role, "worker_app must exist");
+    assert(role.rolcanlogin === false, "worker_app must remain nologin");
+    assert(role.rolsuper === false, "worker_app must not be superuser");
+    assert(role.rolbypassrls === false, "worker_app must not bypass RLS");
+    assert(role.rolcreatedb === false, "worker_app must not createdb");
+    assert(role.rolcreaterole === false, "worker_app must not createrole");
+    assert(role.rolreplication === false, "worker_app must not replicate");
+    const membership = await admin.query(
+      "select pg_has_role(current_user, 'worker_app', 'MEMBER') as member",
+    );
+    assert(
+      membership.rows[0].member === true,
+      "migration current_user must be a member of worker_app after 0009",
+    );
+    await admin.query("begin");
+    try {
+      await admin.query("set local role worker_app");
+      const who = await admin.query("select current_user as role");
+      assert(who.rows[0].role === "worker_app", "SET LOCAL ROLE worker_app must succeed");
+      await expectFail(
+        () => admin.query("select id from commercial.documents"),
+        /permission denied/i,
+        "worker_app documents select",
+      );
+    } finally {
+      await admin.query("rollback");
+    }
+  });
   await admin.query(
     "grant api_app, worker_app, purge_app, anon, authenticated, migrator to current_user",
   );
@@ -314,6 +349,19 @@ try {
     }
   });
 
+  await test("0009 grants only worker_app membership to current_user", async () => {
+    const sql = readFileSync(join(root, "supabase", "migrations", "0009_worker_app_membership.sql"), "utf8")
+      .replace(/--[^\n]*/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .trim();
+    assert(
+      /^\s*grant\s+worker_app\s+to\s+current_user\s*;\s*$/i.test(sql),
+      "0009 must grant only worker_app to current_user",
+    );
+    assert(!/\bpassword\b/i.test(sql), "0009 must not contain a password");
+    assert(!/\bgrant\s+(migrator|api_app|purge_app|anon|authenticated)\b/i.test(sql), "0009 must not grant other roles");
+  });
+
   await test("SET ROLE migrations end with RESET ROLE and nothing after it", async () => {
     const dir = join(root, "supabase", "migrations");
     let setRoleFiles = 0;
@@ -344,8 +392,8 @@ try {
       "select version from supabase_migrations.schema_migrations order by version",
     );
     assert(
-      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006,0007,0008",
-      "bootstrap role must record 0001-0008 after RESET ROLE",
+      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006,0007,0008,0009",
+      "bootstrap role must record 0001-0009 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {
