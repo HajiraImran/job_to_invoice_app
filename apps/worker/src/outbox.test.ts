@@ -383,4 +383,168 @@ describe("generate original PDF outbox", () => {
     ]);
     expect(artifacts.rows).toHaveLength(0);
   });
+
+  async function seedQuoteTask(ids: { job: string; doc: string; line: string; task: string; event: string; number: string }) {
+    const snapshot = f01Snapshot();
+    const canonical = Buffer.from(JSON.stringify(snapshot));
+    await running().admin.query(
+      `insert into commercial.jobs (workspace_id, id, customer_id, title, no_site, lifecycle, mode)
+       values ($1, $2, $3, 'Slow PDF', true, 'draft', 'quote')`,
+      [WS, ids.job, CUSTOMER],
+    );
+    await running().admin.query(
+      `insert into commercial.documents (
+        workspace_id, id, created_by, job_id, kind, number, revision_no, lifecycle,
+        issued_at, issue_date, currency, net_cents, tax_cents, total_cents,
+        snapshot_json, canonical_snapshot_bytes, schema_version, snapshot_sha256
+      ) values ($1, $2, $3, $4, 'quote', $5, 1, 'issued', now(), date '2026-09-15', 'USD', $6, $7, $8, $9::jsonb, $10, 1, $11)`,
+      [
+        WS,
+        ids.doc,
+        USER,
+        ids.job,
+        ids.number,
+        snapshot.net_cents,
+        snapshot.tax_cents,
+        snapshot.total_cents,
+        JSON.stringify(snapshot),
+        canonical,
+        createHash("sha256").update(canonical).digest("hex"),
+      ],
+    );
+    const line = snapshot.lines[0];
+    if (!line) {
+      throw new Error("expected F01 line");
+    }
+    await running().admin.query(
+      `insert into commercial.document_lines (
+        workspace_id, id, document_id, position, line_kind, description, quantity, unit,
+        unit_price_cents, discount_cents, net_cents, tax_bp, tax_cents, total_cents
+      ) values ($1, $2, $3, 1, 'source', 'Labour hour', 2.5, 'hour', 10000, 1000, $4, 825, $5, $6)`,
+      [WS, ids.line, ids.doc, line.net_cents, line.tax_cents, line.total_cents],
+    );
+    await insertTask(ids.task, ids.event, ids.doc, { document_id: ids.doc, kind: "quote" });
+  }
+
+  function countingPool(pool: Pool) {
+    const heartbeats = { count: 0 };
+    const wrapped = {
+      connect: async () => {
+        const client = await pool.connect();
+        const query = client.query.bind(client) as (sql: string, values?: unknown[]) => ReturnType<typeof client.query>;
+        client.query = ((sql: string, values?: unknown[]) => {
+          if (sql.includes("heartbeat_outbox_task")) {
+            heartbeats.count += 1;
+          }
+          return query(sql, values);
+        }) as typeof client.query;
+        return client;
+      },
+    } as Pool;
+    return { pool: wrapped, heartbeats };
+  }
+
+  it("keeps one serialized render that exceeds 8 seconds with heartbeat and no claim timeout", async () => {
+    const ids = {
+      job: "ffff5555-ffff-4555-8555-ffffffffffff",
+      doc: "ffff7777-ffff-4777-8777-ffffffffffff",
+      line: "ffff8888-ffff-4888-8888-ffffffffffff",
+      task: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb10",
+      event: "cccc1111-cccc-4111-8ccc-cccccccccc10",
+      number: "Q-000010",
+    };
+    await seedQuoteTask(ids);
+    const keys: string[] = [];
+    const stages: string[] = [];
+    let sawRendering!: () => void;
+    const rendering = new Promise<void>((resolve) => {
+      sawRendering = resolve;
+    });
+    const counted = countingPool(running().pool);
+    const store = {
+      putObject: async ({ key }: { key: string }) => {
+        keys.push(key);
+      },
+    };
+    const first = processGenerateOriginalPdf({
+      pool: counted.pool,
+      store,
+      render: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 8_500));
+        return Buffer.from("%PDF-1.4 slow-render");
+      },
+      onStage: (stage) => {
+        stages.push(stage);
+        if (stage === "rendering") {
+          sawRendering();
+        }
+      },
+      heartbeatMs: 1_000,
+    });
+    await rendering;
+    const second = processGenerateOriginalPdf({
+      pool: counted.pool,
+      store,
+      render: async () => Buffer.from("%PDF-1.4 overlap"),
+    });
+    const [left, right] = await Promise.all([first, second]);
+    expect([left, right].sort()).toEqual(["done", "idle"]);
+    expect(keys).toHaveLength(1);
+    expect(stages).toEqual(["claim_started", "claimed", "rendering", "uploading", "completed"]);
+    expect(stages).not.toContain("claim_timed_out");
+    expect(counted.heartbeats.count).toBeGreaterThanOrEqual(2);
+    const done = await running().admin.query("select status from commercial.outbox_tasks where id = $1", [ids.task]);
+    expect(done.rows[0]?.status).toBe("done");
+  });
+
+  it("keeps one serialized upload that exceeds 8 seconds with heartbeat and no claim timeout", async () => {
+    const ids = {
+      job: "aaaa5555-aaaa-4555-8555-aaaaaaaaaa10",
+      doc: "aaaa7777-aaaa-4777-8777-aaaaaaaaaa10",
+      line: "aaaa8888-aaaa-4888-8888-aaaaaaaaaa10",
+      task: "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb11",
+      event: "cccc1111-cccc-4111-8ccc-cccccccccc11",
+      number: "Q-000011",
+    };
+    await seedQuoteTask(ids);
+    const keys: string[] = [];
+    const stages: string[] = [];
+    let sawUploading!: () => void;
+    const uploading = new Promise<void>((resolve) => {
+      sawUploading = resolve;
+    });
+    const counted = countingPool(running().pool);
+    const store = {
+      putObject: async ({ key }: { key: string }) => {
+        keys.push(key);
+        await new Promise((resolve) => setTimeout(resolve, 8_500));
+      },
+    };
+    const first = processGenerateOriginalPdf({
+      pool: counted.pool,
+      store,
+      render: async () => Buffer.from("%PDF-1.4 slow-upload"),
+      onStage: (stage) => {
+        stages.push(stage);
+        if (stage === "uploading") {
+          sawUploading();
+        }
+      },
+      heartbeatMs: 1_000,
+    });
+    await uploading;
+    const second = processGenerateOriginalPdf({
+      pool: counted.pool,
+      store,
+      render: async () => Buffer.from("%PDF-1.4 overlap-upload"),
+    });
+    const [left, right] = await Promise.all([first, second]);
+    expect([left, right].sort()).toEqual(["done", "idle"]);
+    expect(keys).toHaveLength(1);
+    expect(stages).toEqual(["claim_started", "claimed", "rendering", "uploading", "completed"]);
+    expect(stages).not.toContain("claim_timed_out");
+    expect(counted.heartbeats.count).toBeGreaterThanOrEqual(2);
+    const done = await running().admin.query("select status from commercial.outbox_tasks where id = $1", [ids.task]);
+    expect(done.rows[0]?.status).toBe("done");
+  });
 });

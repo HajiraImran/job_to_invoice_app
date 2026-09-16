@@ -6,7 +6,7 @@ import {
   type QuoteSnapshotV1,
 } from "@job-to-invoice/domain";
 import type { Pool } from "pg";
-import { withWorkerRole } from "./db.ts";
+import { withWorkerRole, WORKER_CLAIM_TIMEOUT_MS, WORKER_STATEMENT_TIMEOUT_MS } from "./db.ts";
 import type { DocumentsObjectStore } from "./documents-store.ts";
 import type { WorkerPdfStage } from "./worker-log.ts";
 
@@ -89,9 +89,14 @@ function asDocument(row: SourceRow): QuotePdfDocument {
   };
 }
 
-const HEARTBEAT_MS = 15_000;
+export const WORKER_LEASE_HEARTBEAT_MS = 15_000;
 
-async function whileLeased<T>(pool: Pool, taskId: string, fn: () => Promise<T>): Promise<T> {
+async function whileLeased<T>(
+  pool: Pool,
+  taskId: string,
+  fn: () => Promise<T>,
+  heartbeatMs = WORKER_LEASE_HEARTBEAT_MS,
+): Promise<T> {
   const beat = async () => {
     await withWorkerRole(pool, async (client) => {
       await client.query("select commercial.heartbeat_outbox_task($1::uuid)", [taskId]);
@@ -100,7 +105,7 @@ async function whileLeased<T>(pool: Pool, taskId: string, fn: () => Promise<T>):
   await beat();
   const timer = setInterval(() => {
     void beat().catch(() => undefined);
-  }, HEARTBEAT_MS);
+  }, heartbeatMs);
   try {
     return await fn();
   } finally {
@@ -113,20 +118,25 @@ export async function processGenerateOriginalPdf(input: {
   store: DocumentsObjectStore;
   render: PdfRenderer;
   onStage?: (stage: WorkerPdfStage) => void;
+  heartbeatMs?: number;
 }): Promise<"idle" | "done" | "retry" | "dead"> {
   input.onStage?.("claim_started");
-  const claimed = await withWorkerRole(input.pool, async (client) => {
-    const result = await client.query<ClaimRow>("select * from commercial.claim_generate_original_pdf()");
-    const row = result.rows[0];
-    if (!row) {
-      return undefined;
-    }
-    await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
-      row.workspace_id,
-      row.created_by,
-    ]);
-    return row;
-  });
+  const claimed = await withWorkerRole(
+    input.pool,
+    async (client) => {
+      const result = await client.query<ClaimRow>("select * from commercial.claim_generate_original_pdf()");
+      const row = result.rows[0];
+      if (!row) {
+        return undefined;
+      }
+      await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+        row.workspace_id,
+        row.created_by,
+      ]);
+      return row;
+    },
+    { timeoutMs: WORKER_CLAIM_TIMEOUT_MS, statementTimeoutMs: WORKER_STATEMENT_TIMEOUT_MS },
+  );
   if (!claimed) {
     return "idle";
   }
@@ -158,13 +168,18 @@ export async function processGenerateOriginalPdf(input: {
       revision: source.row.revision_no,
       artifactId: source.artifactId,
     });
-    const bytes = await whileLeased(input.pool, claimed.id, async () => {
-      input.onStage?.("rendering");
-      const rendered = await input.render(document);
-      input.onStage?.("uploading");
-      await input.store.putObject({ key, body: rendered, contentType: "application/pdf" });
-      return rendered;
-    });
+    const bytes = await whileLeased(
+      input.pool,
+      claimed.id,
+      async () => {
+        input.onStage?.("rendering");
+        const rendered = await input.render(document);
+        input.onStage?.("uploading");
+        await input.store.putObject({ key, body: rendered, contentType: "application/pdf" });
+        return rendered;
+      },
+      input.heartbeatMs,
+    );
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     await withWorkerRole(input.pool, async (client) => {
       await client.query(

@@ -2,12 +2,7 @@ import { loadWorkerEnv, type LoadedEnv, type LoadedWorkerEnv } from "@job-to-inv
 import { processGenerateOriginalPdf } from "./outbox.ts";
 import { renderQuoteOriginalPdf } from "./pdf.ts";
 import { createDocumentsObjectStore } from "./documents-store.ts";
-import {
-  WORKER_CLAIM_TIMEOUT_MS,
-  createWorkerPool,
-  withClaimBudget,
-  workerStageFromError,
-} from "./db.ts";
+import { createWorkerPool, workerStageFromError } from "./db.ts";
 import { writeWorkerPdfEvent, type WorkerPdfStage } from "./worker-log.ts";
 
 export const WORKER_POLL_MS = 2_000;
@@ -33,19 +28,17 @@ export function createWorkerTick(input: {
   onStage?: (stage: WorkerPdfStage, sqlstate?: string) => void;
   now?: () => number;
   noWorkEveryMs?: number;
-  claimTimeoutMs?: number;
 }): () => Promise<void> {
   let busy = false;
   let lastNoWorkAt = 0;
   const everyMs = input.noWorkEveryMs ?? WORKER_NO_WORK_EVERY_MS;
-  const claimTimeoutMs = input.claimTimeoutMs ?? WORKER_CLAIM_TIMEOUT_MS;
   return async () => {
     if (busy) {
       return;
     }
     busy = true;
     try {
-      const result = await withClaimBudget(input.run(), claimTimeoutMs);
+      const result = await input.run();
       if (result !== "idle") {
         return;
       }
@@ -71,7 +64,6 @@ export async function startWorkerPolling(input: {
   onStage?: (stage: WorkerPdfStage, sqlstate?: string) => void;
   now?: () => number;
   noWorkEveryMs?: number;
-  claimTimeoutMs?: number;
   pollMs?: number;
   schedule?: (tick: () => void, delayMs: number) => ReturnType<typeof setInterval>;
 }): Promise<{ tick: () => Promise<void>; stop: () => void }> {

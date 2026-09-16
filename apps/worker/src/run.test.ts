@@ -43,7 +43,6 @@ describe("worker original PDF", () => {
       },
       onStage: (stage) => stages.push(stage),
       pollMs: 60_000,
-      claimTimeoutMs: 200,
     });
     stop();
     expect(claims).toBe(1);
@@ -58,7 +57,6 @@ describe("worker original PDF", () => {
       run: async () => "idle",
       onStage: (stage) => stages.push(stage),
       now: () => 1_000,
-      claimTimeoutMs: 200,
     });
     await tick();
     expect(stages).toEqual(["no_work"]);
@@ -70,7 +68,6 @@ describe("worker original PDF", () => {
       },
       onStage: (stage) => failed.push(stage),
       now: () => 1_000,
-      claimTimeoutMs: 200,
     });
     await failing();
     expect(failed).toEqual(["set_role_failed"]);
@@ -96,7 +93,6 @@ describe("worker original PDF", () => {
           seen.push(value);
           sqlstates.push(sqlstate);
         },
-        claimTimeoutMs: 200,
       });
       await tick();
       expect(seen).toEqual([stage]);
@@ -107,7 +103,7 @@ describe("worker original PDF", () => {
     }
   });
 
-  it("times out a hanging claim and lets a later tick recover", async () => {
+  it("recovers on a later tick after a claim timeout", async () => {
     const stages: string[] = [];
     let hang = true;
     let attempts = 0;
@@ -115,13 +111,12 @@ describe("worker original PDF", () => {
       run: async () => {
         attempts += 1;
         if (hang) {
-          return new Promise(() => undefined);
+          throw new WorkerTransactionError("claim_timed_out");
         }
         return "idle";
       },
       onStage: (stage) => stages.push(stage),
       now: () => 1_000,
-      claimTimeoutMs: 20,
     });
     await tick();
     expect(attempts).toBe(1);
@@ -130,6 +125,57 @@ describe("worker original PDF", () => {
     await tick();
     expect(attempts).toBe(2);
     expect(stages).toEqual(["claim_timed_out", "no_work"]);
+  });
+
+  it("does not emit claim_timed_out or overlap when rendering exceeds 8 seconds", async () => {
+    const stages: string[] = [];
+    let inflight = 0;
+    let maxInflight = 0;
+    let completions = 0;
+    const tick = createWorkerTick({
+      run: async () => {
+        inflight += 1;
+        maxInflight = Math.max(maxInflight, inflight);
+        await new Promise((resolve) => setTimeout(resolve, 8_500));
+        completions += 1;
+        inflight -= 1;
+        return "done";
+      },
+      onStage: (stage) => stages.push(stage),
+    });
+    const first = tick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const overlapping = tick();
+    await Promise.all([first, overlapping]);
+    expect(maxInflight).toBe(1);
+    expect(completions).toBe(1);
+    expect(stages).not.toContain("claim_timed_out");
+  });
+
+  it("does not emit claim_timed_out or overlap when uploading exceeds 8 seconds", async () => {
+    const stages: string[] = [];
+    let inflight = 0;
+    let maxInflight = 0;
+    let uploads = 0;
+    const tick = createWorkerTick({
+      run: async () => {
+        inflight += 1;
+        maxInflight = Math.max(maxInflight, inflight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 8_500));
+        uploads += 1;
+        inflight -= 1;
+        return "done";
+      },
+      onStage: (stage) => stages.push(stage),
+    });
+    const first = tick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const overlapping = tick();
+    await Promise.all([first, overlapping]);
+    expect(maxInflight).toBe(1);
+    expect(uploads).toBe(1);
+    expect(stages).not.toContain("claim_timed_out");
   });
 
   it("rate-limits no_work and does not overlap ticks", async () => {
@@ -158,7 +204,6 @@ describe("worker original PDF", () => {
       onStage: (stage) => stages.push(stage),
       now: () => 1_000,
       noWorkEveryMs: 30_000,
-      claimTimeoutMs: 5_000,
     });
     const first = tick();
     await started;

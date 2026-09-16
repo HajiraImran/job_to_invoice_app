@@ -51,19 +51,21 @@ function stageError(stage: WorkerTransactionStage, error: unknown): WorkerTransa
   if (error instanceof WorkerTransactionError) {
     return error;
   }
-  if (isTimeoutError(error)) {
-    return new WorkerTransactionError("claim_timed_out", sqlstateFromUnknown(error));
-  }
   return new WorkerTransactionError(stage, sqlstateFromUnknown(error));
 }
 
-export async function withClaimBudget<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+export async function withClaimBudget<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  onTimeout?: () => void,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       work,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          onTimeout?.();
           reject(new WorkerTransactionError("claim_timed_out"));
         }, timeoutMs);
       }),
@@ -88,51 +90,90 @@ export async function withWorkerRole<T>(
   fn: (client: PoolClient) => Promise<T>,
   options?: { timeoutMs?: number; statementTimeoutMs?: number },
 ): Promise<T> {
-  const timeoutMs = options?.timeoutMs ?? WORKER_CLAIM_TIMEOUT_MS;
+  const claimTimeoutMs = options?.timeoutMs;
   const statementTimeoutMs = options?.statementTimeoutMs ?? WORKER_STATEMENT_TIMEOUT_MS;
-  return withClaimBudget(
-    (async () => {
-      let client: PoolClient | undefined;
+  let client: PoolClient | undefined;
+  let timedOut = false;
+  let released = false;
+
+  const releaseClient = (destroy = false) => {
+    if (!client || released) {
+      return;
+    }
+    released = true;
+    try {
+      client.release(destroy);
+    } catch {
+      /* already released */
+    }
+    client = undefined;
+  };
+
+  const abortClaim = () => {
+    timedOut = true;
+    releaseClient(true);
+  };
+
+  const throwIfClaimTimedOut = () => {
+    if (timedOut) {
+      throw new WorkerTransactionError("claim_timed_out");
+    }
+  };
+
+  const run = async (): Promise<T> => {
+    try {
       try {
-        try {
-          client = await pool.connect();
-        } catch (error) {
-          throw stageError("database_connect_failed", error);
-        }
-        try {
-          await client.query("begin");
-          const timeout = Math.max(1, Math.floor(statementTimeoutMs));
-          await client.query(`set local statement_timeout = ${timeout}`);
-        } catch (error) {
-          throw stageError("transaction_start_failed", error);
-        }
-        try {
-          await client.query("set local role worker_app");
-        } catch (error) {
-          throw stageError("set_role_failed", error);
-        }
-        try {
-          const result = await fn(client);
-          await client.query("commit");
-          return result;
-        } catch (error) {
-          throw stageError("claim_query_failed", error);
-        }
+        client = await pool.connect();
       } catch (error) {
-        if (client) {
-          try {
-            await client.query("rollback");
-          } catch {
-            /* already aborted */
-          }
-        }
-        throw error;
-      } finally {
-        client?.release();
+        throw stageError("database_connect_failed", error);
       }
-    })(),
-    timeoutMs,
-  );
+      throwIfClaimTimedOut();
+      try {
+        await client.query("begin");
+        const timeout = Math.max(1, Math.floor(statementTimeoutMs));
+        await client.query(`set local statement_timeout = ${timeout}`);
+      } catch (error) {
+        throw stageError("transaction_start_failed", error);
+      }
+      throwIfClaimTimedOut();
+      try {
+        await client.query("set local role worker_app");
+      } catch (error) {
+        throw stageError("set_role_failed", error);
+      }
+      throwIfClaimTimedOut();
+      try {
+        const result = await fn(client);
+        throwIfClaimTimedOut();
+        await client.query("commit");
+        throwIfClaimTimedOut();
+        return result;
+      } catch (error) {
+        if (claimTimeoutMs !== undefined && (timedOut || isTimeoutError(error))) {
+          throw new WorkerTransactionError("claim_timed_out", sqlstateFromUnknown(error));
+        }
+        throw stageError("claim_query_failed", error);
+      }
+    } catch (error) {
+      if (client && !released) {
+        try {
+          await client.query("rollback");
+        } catch {
+          /* already aborted */
+        }
+      }
+      throw error;
+    } finally {
+      releaseClient(timedOut);
+    }
+  };
+
+  const work = run();
+  void work.catch(() => undefined);
+  if (claimTimeoutMs === undefined) {
+    return work;
+  }
+  return withClaimBudget(work, claimTimeoutMs, abortClaim);
 }
 
 export function workerStageFromError(error: unknown): { stage: WorkerPdfStage; sqlstate?: string } | undefined {
