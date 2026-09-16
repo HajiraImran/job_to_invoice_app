@@ -1,14 +1,14 @@
-import { loadEnv, type LoadedEnv } from "@job-to-invoice/config";
+import { loadWorkerEnv, type LoadedEnv, type LoadedWorkerEnv } from "@job-to-invoice/config";
 import { Pool } from "pg";
 import { processGenerateOriginalPdf } from "./outbox.ts";
 import { renderQuoteOriginalPdf } from "./pdf.ts";
 import { createDocumentsObjectStore } from "./documents-store.ts";
 
-export function workerStatus(env: LoadedEnv): string {
+export function workerStatus(env: LoadedEnv | LoadedWorkerEnv): string {
   return `worker original-pdf (${env.APP_ENV})`;
 }
 
-function workerStore(env: LoadedEnv) {
+function workerStore(env: LoadedWorkerEnv) {
   if (!env.documentsStorage) {
     return undefined;
   }
@@ -16,7 +16,7 @@ function workerStore(env: LoadedEnv) {
 }
 
 export async function startWorker(): Promise<string> {
-  const env = loadEnv();
+  const env = loadWorkerEnv();
   const status = workerStatus(env);
   const databaseUrl = "DATABASE_URL_WORKER" in env ? env.DATABASE_URL_WORKER : undefined;
   if (!databaseUrl || process.env.WORKER_ONCE === "true") {

@@ -1,5 +1,5 @@
 import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
-import type { LoadedEnv } from "@job-to-invoice/config";
+import type { LoadedApiEnv, LoadedEnv } from "@job-to-invoice/config";
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -73,7 +73,7 @@ export function createJwtVerifier(options: {
   };
 }
 
-export function jwtVerifierFromEnv(env: LoadedEnv): JwtVerifier | undefined {
+export function jwtVerifierFromEnv(env: LoadedEnv | LoadedApiEnv): JwtVerifier | undefined {
   const issuer =
     "AUTH_ISSUER" in env && env.AUTH_ISSUER
       ? env.AUTH_ISSUER

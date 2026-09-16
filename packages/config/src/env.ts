@@ -1,14 +1,21 @@
 import { z } from "zod";
 import { PLACEHOLDER_PATTERN } from "./placeholders.ts";
 import {
-  resolveDocumentsStorage,
-  type DocumentsStorageConfig,
+  API_CREDENTIAL_FIELDS,
+  WORKER_CREDENTIAL_FIELDS,
+  resolveApiDocumentsStorage,
+  resolveWorkerDocumentsStorage,
+  type ApiDocumentsStorageConfig,
+  type WorkerDocumentsStorageConfig,
 } from "./storage.ts";
 
 export { PLACEHOLDER_PATTERN };
 
 const APP_ENVS = ["development", "staging", "production"] as const;
 export type AppEnvName = (typeof APP_ENVS)[number];
+
+type WorkerCredentialField = (typeof WORKER_CREDENTIAL_FIELDS)[number];
+type ApiCredentialField = (typeof API_CREDENTIAL_FIELDS)[number];
 
 function nonEmpty(name: string) {
   return z.string().trim().min(1, `${name} is required`);
@@ -128,13 +135,32 @@ const productionSchema = z.object({
   LIMITS_VERSION: secret("LIMITS_VERSION"),
 });
 
-export type LoadedEnv = (
+export type LoadedEnv =
   | z.infer<typeof developmentSchema>
   | z.infer<typeof stagingSchema>
-  | z.infer<typeof productionSchema>
-) & {
-  documentsStorage?: DocumentsStorageConfig;
+  | z.infer<typeof productionSchema>;
+
+export type LoadedApiEnv = Omit<LoadedEnv, WorkerCredentialField> & {
+  documentsStorage?: ApiDocumentsStorageConfig;
 };
+
+export type LoadedWorkerEnv = Omit<LoadedEnv, ApiCredentialField> & {
+  documentsStorage?: WorkerDocumentsStorageConfig;
+};
+
+const workerCredentialOmit = {
+  STORAGE_WORKER_ACCESS_KEY_ID: true,
+  STORAGE_WORKER_SECRET_ACCESS_KEY: true,
+  R2_WORKER_ACCESS_KEY_ID: true,
+  R2_WORKER_SECRET_ACCESS_KEY: true,
+} as const;
+
+const apiCredentialOmit = {
+  STORAGE_API_ACCESS_KEY_ID: true,
+  STORAGE_API_SECRET_ACCESS_KEY: true,
+  R2_API_ACCESS_KEY_ID: true,
+  R2_API_SECRET_ACCESS_KEY: true,
+} as const;
 
 function schemaFor(appEnv: string | undefined) {
   if (appEnv === "production") {
@@ -146,23 +172,95 @@ function schemaFor(appEnv: string | undefined) {
   return developmentSchema;
 }
 
-export function loadEnv(source: NodeJS.Dict<string> = process.env): LoadedEnv {
+function parseWithSchema(source: NodeJS.Dict<string>, schema: z.ZodType): LoadedEnv {
   const appEnv = source.APP_ENV ?? "development";
-  const parsed = schemaFor(appEnv).safeParse({ ...source, APP_ENV: appEnv });
+  const parsed = schema.safeParse({ ...source, APP_ENV: appEnv });
   if (!parsed.success) {
     const details = parsed.error.issues
       .map((issue) => `${issue.path.join(".") || "env"}: ${issue.message}`)
       .join("; ");
     throw new Error(`Invalid ${appEnv} configuration (QA68): ${details}`);
   }
+  return parsed.data as LoadedEnv;
+}
+
+function parseEnv(source: NodeJS.Dict<string>): LoadedEnv {
+  return parseWithSchema(source, schemaFor(source.APP_ENV));
+}
+
+function parseApiEnv(source: NodeJS.Dict<string>): LoadedEnv {
+  const appEnv = source.APP_ENV ?? "development";
+  if (appEnv === "production") {
+    return parseWithSchema(source, productionSchema.omit(workerCredentialOmit));
+  }
+  if (appEnv === "staging") {
+    return parseWithSchema(source, stagingSchema.omit(workerCredentialOmit));
+  }
+  return parseWithSchema(source, developmentSchema.omit(workerCredentialOmit));
+}
+
+function parseWorkerEnv(source: NodeJS.Dict<string>): LoadedEnv {
+  const appEnv = source.APP_ENV ?? "development";
+  if (appEnv === "production") {
+    return parseWithSchema(source, productionSchema.omit(apiCredentialOmit));
+  }
+  if (appEnv === "staging") {
+    return parseWithSchema(source, stagingSchema.omit(apiCredentialOmit));
+  }
+  return parseWithSchema(source, developmentSchema.omit(apiCredentialOmit));
+}
+
+function omitFields<T extends Record<string, unknown>, K extends string>(
+  value: T,
+  fields: readonly K[],
+): Omit<T, K> {
+  const excluded = new Set<string>(fields);
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!excluded.has(key)) {
+      next[key] = entry;
+    }
+  }
+  return next as Omit<T, K>;
+}
+
+function wrapStorageConfigError(appEnv: string, error: unknown): never {
+  const message = error instanceof Error ? error.message : "invalid storage configuration";
+  throw new Error(`Invalid ${appEnv} configuration (QA68): ${message}`, { cause: error });
+}
+
+export function loadEnv(source: NodeJS.Dict<string> = process.env): LoadedEnv {
+  return parseEnv(source);
+}
+
+export function loadApiEnv(source: NodeJS.Dict<string> = process.env): LoadedApiEnv {
+  const parsed = parseApiEnv(source);
   try {
-    const documentsStorage = resolveDocumentsStorage({
-      ...parsed.data,
-      APP_ENV: parsed.data.APP_ENV,
+    const documentsStorage = resolveApiDocumentsStorage({
+      ...parsed,
+      APP_ENV: parsed.APP_ENV,
     });
-    return { ...parsed.data, documentsStorage };
+    return {
+      ...omitFields(parsed, WORKER_CREDENTIAL_FIELDS),
+      documentsStorage,
+    };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "invalid storage configuration";
-    throw new Error(`Invalid ${appEnv} configuration (QA68): ${message}`, { cause: error });
+    wrapStorageConfigError(parsed.APP_ENV, error);
+  }
+}
+
+export function loadWorkerEnv(source: NodeJS.Dict<string> = process.env): LoadedWorkerEnv {
+  const parsed = parseWorkerEnv(source);
+  try {
+    const documentsStorage = resolveWorkerDocumentsStorage({
+      ...parsed,
+      APP_ENV: parsed.APP_ENV,
+    });
+    return {
+      ...omitFields(parsed, API_CREDENTIAL_FIELDS),
+      documentsStorage,
+    };
+  } catch (error) {
+    wrapStorageConfigError(parsed.APP_ENV, error);
   }
 }

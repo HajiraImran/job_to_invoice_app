@@ -8,15 +8,35 @@ export type DocumentsCredentialPair = {
   secretAccessKey: string;
 };
 
-export type DocumentsStorageConfig = {
+export type DocumentsStorageBase = {
   endpoint: string;
   downloadEndpoint?: string;
   region: string;
   bucket: string;
   forcePathStyle: boolean;
-  worker: DocumentsCredentialPair;
+};
+
+export type ApiDocumentsStorageConfig = DocumentsStorageBase & {
   api: DocumentsCredentialPair;
 };
+
+export type WorkerDocumentsStorageConfig = DocumentsStorageBase & {
+  worker: DocumentsCredentialPair;
+};
+
+export const API_CREDENTIAL_FIELDS = [
+  "STORAGE_API_ACCESS_KEY_ID",
+  "STORAGE_API_SECRET_ACCESS_KEY",
+  "R2_API_ACCESS_KEY_ID",
+  "R2_API_SECRET_ACCESS_KEY",
+] as const;
+
+export const WORKER_CREDENTIAL_FIELDS = [
+  "STORAGE_WORKER_ACCESS_KEY_ID",
+  "STORAGE_WORKER_SECRET_ACCESS_KEY",
+  "R2_WORKER_ACCESS_KEY_ID",
+  "R2_WORKER_SECRET_ACCESS_KEY",
+] as const;
 
 export type S3CompatibleClientOptions = {
   region: string;
@@ -25,28 +45,22 @@ export type S3CompatibleClientOptions = {
   credentials: DocumentsCredentialPair;
 };
 
-const STORAGE_FIELD_NAMES = [
+const SHARED_STORAGE_FIELD_NAMES = [
   "STORAGE_ENDPOINT",
   "STORAGE_DOWNLOAD_ENDPOINT",
   "STORAGE_REGION",
   "STORAGE_DOCUMENTS_BUCKET",
   "STORAGE_FORCE_PATH_STYLE",
-  "STORAGE_WORKER_ACCESS_KEY_ID",
-  "STORAGE_WORKER_SECRET_ACCESS_KEY",
-  "STORAGE_API_ACCESS_KEY_ID",
-  "STORAGE_API_SECRET_ACCESS_KEY",
   "R2_ACCOUNT_ID",
   "R2_DOCUMENTS_BUCKET",
-  "R2_WORKER_ACCESS_KEY_ID",
-  "R2_WORKER_SECRET_ACCESS_KEY",
-  "R2_API_ACCESS_KEY_ID",
-  "R2_API_SECRET_ACCESS_KEY",
 ] as const;
 
 function isStorageRedactKey(key: string): boolean {
   return (
     /^(STORAGE_|R2_)/.test(key) ||
     key === "documentsStorage" ||
+    key === "api" ||
+    key === "worker" ||
     /accessKeyId|secretAccessKey/i.test(key)
   );
 }
@@ -192,10 +206,24 @@ function parseForcePathStyle(value: string | undefined, required: boolean): bool
   throw new Error("STORAGE_FORCE_PATH_STYLE must be true or false");
 }
 
-export function resolveDocumentsStorage(
+function pickStorageSource(
   source: NodeJS.Dict<string> & { APP_ENV: string },
-): DocumentsStorageConfig | undefined {
-  assertNoPublicStorageSecrets(source);
+  roleFields: readonly string[],
+): NodeJS.Dict<string> & { APP_ENV: string } {
+  const picked: NodeJS.Dict<string> & { APP_ENV: string } = { APP_ENV: source.APP_ENV };
+  for (const name of [...SHARED_STORAGE_FIELD_NAMES, ...roleFields]) {
+    const value = source[name];
+    if (value !== undefined) {
+      picked[name] = value;
+    }
+  }
+  return picked;
+}
+
+function resolveSharedDocumentsStorage(
+  source: NodeJS.Dict<string> & { APP_ENV: string },
+  roleFields: readonly string[],
+): DocumentsStorageBase | undefined {
   const appEnv = source.APP_ENV;
   const accountId = present(source.R2_ACCOUNT_ID);
   const endpoint =
@@ -205,13 +233,8 @@ export function resolveDocumentsStorage(
   const r2Endpoint = endpoint ? isR2Endpoint(endpoint) : false;
   const region = present(source.STORAGE_REGION) ?? (r2Endpoint ? "auto" : undefined);
   const bucketOverride = present(source.STORAGE_DOCUMENTS_BUCKET) ?? present(source.R2_DOCUMENTS_BUCKET);
-  const workerKey = present(source.STORAGE_WORKER_ACCESS_KEY_ID) ?? present(source.R2_WORKER_ACCESS_KEY_ID);
-  const workerSecret =
-    present(source.STORAGE_WORKER_SECRET_ACCESS_KEY) ?? present(source.R2_WORKER_SECRET_ACCESS_KEY);
-  const apiKey = present(source.STORAGE_API_ACCESS_KEY_ID) ?? present(source.R2_API_ACCESS_KEY_ID);
-  const apiSecret = present(source.STORAGE_API_SECRET_ACCESS_KEY) ?? present(source.R2_API_SECRET_ACCESS_KEY);
   const required = appEnv !== "development";
-  const anySet = STORAGE_FIELD_NAMES.some((name) => present(source[name]));
+  const anySet = [...SHARED_STORAGE_FIELD_NAMES, ...roleFields].some((name) => present(source[name]));
 
   if (!required && !anySet) {
     return undefined;
@@ -223,12 +246,6 @@ export function resolveDocumentsStorage(
   if (!region) {
     throw new Error("STORAGE_REGION is required");
   }
-  if (!workerKey || !workerSecret) {
-    throw new Error("worker storage credentials are required");
-  }
-  if (!apiKey || !apiSecret) {
-    throw new Error("API storage credentials are required");
-  }
   const forcePathStyle = parseForcePathStyle(
     present(source.STORAGE_FORCE_PATH_STYLE) ?? (r2Endpoint ? "false" : undefined),
     true,
@@ -236,18 +253,11 @@ export function resolveDocumentsStorage(
   if (forcePathStyle === undefined) {
     throw new Error("STORAGE_FORCE_PATH_STYLE is required");
   }
-  if (workerKey === apiKey || workerSecret === apiSecret) {
-    throw new Error("worker and API storage credentials must be different");
-  }
   for (const [name, value] of [
     ["STORAGE_ENDPOINT", endpoint],
     ["STORAGE_DOWNLOAD_ENDPOINT", downloadEndpoint],
     ["STORAGE_REGION", region],
     ["STORAGE_DOCUMENTS_BUCKET", bucketOverride],
-    ["STORAGE_WORKER_ACCESS_KEY_ID", workerKey],
-    ["STORAGE_WORKER_SECRET_ACCESS_KEY", workerSecret],
-    ["STORAGE_API_ACCESS_KEY_ID", apiKey],
-    ["STORAGE_API_SECRET_ACCESS_KEY", apiSecret],
     ["R2_ACCOUNT_ID", accountId],
   ] as const) {
     if (value && PLACEHOLDER_PATTERN.test(value)) {
@@ -266,12 +276,67 @@ export function resolveDocumentsStorage(
     region,
     bucket: documentsBucket(appEnv, bucketOverride),
     forcePathStyle,
-    worker: { accessKeyId: workerKey, secretAccessKey: workerSecret },
-    api: { accessKeyId: apiKey, secretAccessKey: apiSecret },
   };
 }
 
-export function workerClientOptions(config: DocumentsStorageConfig): S3CompatibleClientOptions {
+function requireCredentialPair(
+  source: NodeJS.Dict<string>,
+  accessNames: readonly [string, string],
+  secretNames: readonly [string, string],
+  label: string,
+): DocumentsCredentialPair {
+  const accessKeyId = present(source[accessNames[0]]) ?? present(source[accessNames[1]]);
+  const secretAccessKey = present(source[secretNames[0]]) ?? present(source[secretNames[1]]);
+  if (!accessKeyId || !secretAccessKey) {
+    throw new Error(`${label} storage credentials are required`);
+  }
+  if (PLACEHOLDER_PATTERN.test(accessKeyId) || PLACEHOLDER_PATTERN.test(secretAccessKey)) {
+    throw new Error(`${label} storage credentials must not use a placeholder value`);
+  }
+  return { accessKeyId, secretAccessKey };
+}
+
+export function resolveApiDocumentsStorage(
+  source: NodeJS.Dict<string> & { APP_ENV: string },
+): ApiDocumentsStorageConfig | undefined {
+  assertNoPublicStorageSecrets(source);
+  const picked = pickStorageSource(source, API_CREDENTIAL_FIELDS);
+  const shared = resolveSharedDocumentsStorage(picked, API_CREDENTIAL_FIELDS);
+  if (!shared) {
+    return undefined;
+  }
+  return {
+    ...shared,
+    api: requireCredentialPair(
+      picked,
+      ["STORAGE_API_ACCESS_KEY_ID", "R2_API_ACCESS_KEY_ID"],
+      ["STORAGE_API_SECRET_ACCESS_KEY", "R2_API_SECRET_ACCESS_KEY"],
+      "API",
+    ),
+  };
+}
+
+export function resolveWorkerDocumentsStorage(
+  source: NodeJS.Dict<string> & { APP_ENV: string },
+): WorkerDocumentsStorageConfig | undefined {
+  assertNoPublicStorageSecrets(source);
+  const picked = pickStorageSource(source, WORKER_CREDENTIAL_FIELDS);
+  const shared = resolveSharedDocumentsStorage(picked, WORKER_CREDENTIAL_FIELDS);
+  if (!shared) {
+    return undefined;
+  }
+  return {
+    ...shared,
+    worker: requireCredentialPair(
+      picked,
+      ["STORAGE_WORKER_ACCESS_KEY_ID", "R2_WORKER_ACCESS_KEY_ID"],
+      ["STORAGE_WORKER_SECRET_ACCESS_KEY", "R2_WORKER_SECRET_ACCESS_KEY"],
+      "worker",
+    ),
+  };
+}
+
+export function workerClientOptions(config: WorkerDocumentsStorageConfig): S3CompatibleClientOptions {
   return {
     region: config.region,
     endpoint: config.endpoint,
@@ -280,7 +345,7 @@ export function workerClientOptions(config: DocumentsStorageConfig): S3Compatibl
   };
 }
 
-export function apiClientOptions(config: DocumentsStorageConfig): S3CompatibleClientOptions {
+export function apiClientOptions(config: ApiDocumentsStorageConfig): S3CompatibleClientOptions {
   return {
     region: config.region,
     endpoint: config.downloadEndpoint ?? config.endpoint,

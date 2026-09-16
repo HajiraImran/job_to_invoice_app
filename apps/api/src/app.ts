@@ -1,5 +1,5 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
-import type { LoadedEnv } from "@job-to-invoice/config";
+import type { LoadedApiEnv, LoadedEnv } from "@job-to-invoice/config";
 import {
   ANALYTICS_SCHEMA_VERSION,
   analyticsPropertiesAreSafe,
@@ -24,7 +24,7 @@ import { RateLimiter } from "./rate-limit.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
 export type AppDeps = {
-  env: LoadedEnv;
+  env: LoadedEnv | LoadedApiEnv;
   verifyJwt?: JwtVerifier;
   pool?: Pool;
   logOwnerMe?: (event: OwnerMeSafeEvent) => void;

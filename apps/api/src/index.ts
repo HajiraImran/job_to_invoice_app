@@ -1,10 +1,10 @@
-import { loadEnv } from "@job-to-invoice/config";
+import { loadApiEnv } from "@job-to-invoice/config";
 import { Pool } from "pg";
 import { buildApp } from "./app.ts";
 import { jwtVerifierFromEnv } from "./jwt.ts";
 import { createDocumentsDownloadStore } from "./documents-store.ts";
 
-const env = loadEnv();
+const env = loadApiEnv();
 const databaseUrl = "DATABASE_URL_API" in env ? env.DATABASE_URL_API : undefined;
 const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 10 }) : undefined;
 const documentsStore = env.documentsStorage

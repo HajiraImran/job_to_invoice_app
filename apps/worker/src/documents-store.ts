@@ -1,5 +1,5 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { workerClientOptions, type DocumentsStorageConfig } from "@job-to-invoice/config";
+import { workerClientOptions, type WorkerDocumentsStorageConfig } from "@job-to-invoice/config";
 
 export type DocumentsObjectStore = {
   putObject: (input: { key: string; body: Buffer; contentType: string }) => Promise<void>;
@@ -24,7 +24,7 @@ export function privatePutObjectInput(input: {
   };
 }
 
-export function createDocumentsObjectStore(config: DocumentsStorageConfig): DocumentsObjectStore {
+export function createDocumentsObjectStore(config: WorkerDocumentsStorageConfig): DocumentsObjectStore {
   const client = new S3Client(workerClientOptions(config));
   return {
     async putObject({ key, body, contentType }) {

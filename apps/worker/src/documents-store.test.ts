@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { loadEnv, workerClientOptions } from "@job-to-invoice/config";
+import { loadWorkerEnv, workerClientOptions } from "@job-to-invoice/config";
 import { privatePutObjectInput } from "./documents-store.ts";
 import { workerStatus } from "./run.ts";
 
-const DEV_STORAGE = {
+const DEV_WORKER_STORAGE = {
   APP_ENV: "development",
   STORAGE_ENDPOINT: "http://127.0.0.1:9000",
   STORAGE_DOWNLOAD_ENDPOINT: "http://192.168.10.24:9000",
@@ -11,18 +11,18 @@ const DEV_STORAGE = {
   STORAGE_FORCE_PATH_STYLE: "true",
   STORAGE_WORKER_ACCESS_KEY_ID: "wk_access_dev01",
   STORAGE_WORKER_SECRET_ACCESS_KEY: "wk_secret_dev01_value",
-  STORAGE_API_ACCESS_KEY_ID: "api_access_dev01",
-  STORAGE_API_SECRET_ACCESS_KEY: "api_secret_dev01_value",
 } as const;
 
 describe("documents object store", () => {
   it("uploads privately to the internal MinIO endpoint without a public ACL", () => {
-    const env = loadEnv(DEV_STORAGE);
+    const env = loadWorkerEnv(DEV_WORKER_STORAGE);
     const storage = env.documentsStorage;
     expect(storage).toBeDefined();
     if (!storage) {
       throw new Error("documents storage config missing");
     }
+    expect(storage).not.toHaveProperty("api");
+    expect("STORAGE_API_ACCESS_KEY_ID" in env).toBe(false);
     const key =
       "workspaces/11111111-1111-4111-8111-111111111111/documents/22222222-2222-4222-8222-222222222222/revisions/1/original/33333333-3333-4333-8333-333333333333.pdf";
     const input = privatePutObjectInput({
