@@ -1,12 +1,22 @@
 import { formatUsdCents } from "@job-to-invoice/schemas";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
 import { jobDetailPath, jobQuotePath, jobRequestPath } from "../../../../src/jobs/routes.ts";
 import type { JobDetail } from "../../../../src/jobs/presentation.ts";
-import { quotePublishBody } from "../../../../src/quotes/form.ts";
 import {
   presentQuotePdf,
   presentQuotePdfRetry,
@@ -15,6 +25,7 @@ import {
   type QuotePdfDownload,
   type QuotePreviewRecord,
 } from "../../../../src/quotes/presentation.ts";
+import { beginConfirmedQuotePublish, quotePublishSuccessPath } from "../../../../src/quotes/publish.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
 import { colors, space, type } from "../../../../src/theme.ts";
@@ -24,8 +35,8 @@ export default function QuotePublishScreen() {
   const runOwnerRequest = auth.runOwnerRequest;
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ id?: string }>();
-  const jobId = typeof params.id === "string" ? params.id : "";
+  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const jobId = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? (params.id[0] ?? "") : "";
   const [preview, setPreview] = useState<QuotePreviewRecord | undefined>();
   const [published, setPublished] = useState<PublishedQuoteRecord | undefined>();
   const [loading, setLoading] = useState(true);
@@ -37,6 +48,7 @@ export default function QuotePublishScreen() {
   const [pdfStillPreparing, setPdfStillPreparing] = useState(false);
   const [recipientEmail, setRecipientEmail] = useState("");
   const pdfInFlight = useRef(false);
+  const publishInFlight = useRef(false);
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number; code?: string } | undefined>();
   const publishKey = useRef<string | undefined>(undefined);
 
@@ -48,7 +60,6 @@ export default function QuotePublishScreen() {
     }
     setLoading(true);
     setError(undefined);
-    setConfirming(false);
     const jobResult = await runOwnerRequest<JobDetail>({ path: `/v1/jobs/${jobId}` });
     if (!jobResult.ok) {
       setError({
@@ -70,6 +81,7 @@ export default function QuotePublishScreen() {
         setPdfError(undefined);
         setPdfStillPreparing(false);
         setPreview(undefined);
+        setConfirming(false);
         setLoading(false);
         return;
       }
@@ -208,15 +220,17 @@ export default function QuotePublishScreen() {
   }
 
   async function confirmPublish() {
-    if (!preview || publishDisabled) {
+    const started = beginConfirmedQuotePublish({
+      confirming,
+      preview,
+      recipientEmail,
+      inFlight: publishInFlight,
+      idempotencyKey: publishKey.current,
+    });
+    if (started.kind === "ignored") {
       return;
     }
-    setPublishing(true);
-    setConfirming(false);
-    publishKey.current = retainOrCreateSetupIdempotencyKey(publishKey.current);
-    const body = quotePublishBody(preview.preview_hash, recipientEmail);
-    if (!body.ok) {
-      setPublishing(false);
+    if (started.kind === "invalid_email") {
       setError({
         message: copy.quoteRecipientRequired,
         retryable: false,
@@ -224,44 +238,55 @@ export default function QuotePublishScreen() {
       });
       return;
     }
-    const result = await runOwnerRequest<PublishedQuoteRecord>({
-      path: `/v1/drafts/${preview.draft_id}/publish`,
-      method: "POST",
-      body: body.value,
-      idempotencyKey: publishKey.current,
-      ifMatch: preview.version,
-    });
-    if (result.ok) {
-      setPublished(result.data);
-      setPdfDownload({ state: result.data.pdf_state, url: null });
-      setPdfError(undefined);
-      setPdfStillPreparing(false);
-      setError(undefined);
+    publishKey.current = started.idempotencyKey;
+    setPublishing(true);
+    setError(undefined);
+    try {
+      const result = await runOwnerRequest<PublishedQuoteRecord>({
+        path: started.request.path,
+        method: started.request.method,
+        body: started.request.body,
+        idempotencyKey: started.request.idempotencyKey,
+        ifMatch: started.request.ifMatch,
+      });
+      if (result.ok) {
+        setPublished(result.data);
+        setPdfDownload({ state: result.data.pdf_state, url: null });
+        setPdfError(undefined);
+        setPdfStillPreparing(false);
+        setError(undefined);
+        setConfirming(false);
+        router.replace(quotePublishSuccessPath(jobId));
+        return;
+      }
+      if (result.error.code === "IDEMPOTENCY_MISMATCH") {
+        publishKey.current = retainOrCreateSetupIdempotencyKey(undefined);
+      }
+      setError({
+        message:
+          result.error.code === "ENTITLEMENT_REQUIRED"
+            ? copy.quoteEntitlement
+            : result.error.code === "DOCUMENT_IMMUTABLE"
+              ? copy.quoteAlreadyPublished
+              : result.error.code === "PREVIEW_CHANGED" || result.error.code === "VERSION_CONFLICT"
+                ? copy.quoteStalePreview
+                : result.error.message || copy.quotePublishError,
+        retryable: result.error.retryable || result.error.status === 0,
+        status: result.error.status,
+        code: result.error.code,
+      });
+    } finally {
+      publishInFlight.current = false;
       setPublishing(false);
-      return;
     }
-    if (result.error.code === "IDEMPOTENCY_MISMATCH") {
-      publishKey.current = retainOrCreateSetupIdempotencyKey(undefined);
-    }
-    setPublishing(false);
-    setError({
-      message:
-        result.error.code === "ENTITLEMENT_REQUIRED"
-          ? copy.quoteEntitlement
-          : result.error.code === "DOCUMENT_IMMUTABLE"
-            ? copy.quoteAlreadyPublished
-            : result.error.code === "PREVIEW_CHANGED" || result.error.code === "VERSION_CONFLICT"
-              ? copy.quoteStalePreview
-              : result.error.message || copy.quotePublishError,
-      retryable: result.error.retryable || result.error.status === 0,
-      status: result.error.status,
-      code: result.error.code,
-    });
   }
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <KeyboardAvoidingView
+      style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="always">
         <Text accessibilityRole="header" style={styles.title}>
           {view.kind === "published" ? copy.quotePublishedTitle : copy.quotePublishTitle}
         </Text>
@@ -394,7 +419,12 @@ export default function QuotePublishScreen() {
                 <Text style={styles.section}>{copy.quoteRecipientEmail}</Text>
                 <TextInput
                   value={recipientEmail}
-                  onChangeText={setRecipientEmail}
+                  onChangeText={(value) => {
+                    setRecipientEmail(value);
+                    if (error?.status === 422) {
+                      setError(undefined);
+                    }
+                  }}
                   autoCapitalize="none"
                   autoCorrect={false}
                   autoComplete="email"
@@ -404,19 +434,32 @@ export default function QuotePublishScreen() {
                   style={styles.input}
                 />
                 <Text style={styles.hint}>{copy.quoteRecipientHint}</Text>
+                {view.message ? (
+                  <Text accessibilityLiveRegion="polite" style={styles.error}>
+                    {view.message}
+                  </Text>
+                ) : null}
                 <Text accessibilityLiveRegion="polite" style={styles.banner}>
                   {copy.quoteConfirmPublish}
                 </Text>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityState={{ disabled: publishing || !preview || !quotePublishBody(preview.preview_hash, recipientEmail).ok }}
-                  disabled={publishing || !preview || !quotePublishBody(preview.preview_hash, recipientEmail).ok}
+                  accessibilityState={{ disabled: publishing }}
+                  disabled={publishing}
                   onPress={() => void confirmPublish()}
                   style={styles.primary}
                 >
                   <Text style={styles.primaryLabel}>{publishing ? copy.quotePublishing : copy.quoteConfirm}</Text>
                 </Pressable>
-                <Pressable accessibilityRole="button" onPress={() => setConfirming(false)} style={styles.secondary}>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={publishing}
+                  onPress={() => {
+                    setConfirming(false);
+                    setError(undefined);
+                  }}
+                  style={styles.secondary}
+                >
                   <Text style={styles.secondaryLabel}>{copy.back}</Text>
                 </Pressable>
               </>
@@ -439,7 +482,7 @@ export default function QuotePublishScreen() {
           <Text style={styles.secondaryLabel}>{copy.back}</Text>
         </Pressable>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

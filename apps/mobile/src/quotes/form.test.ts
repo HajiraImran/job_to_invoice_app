@@ -184,6 +184,16 @@ describe("quote editor states", () => {
       presentQuoteReview({
         authStatus: "authenticated",
         loading: false,
+        confirming: true,
+        publishing: false,
+        preview,
+        error: { message: "Enter a valid customer email before publishing.", retryable: false, status: 422 },
+      }),
+    ).toMatchObject({ kind: "confirming", message: "Enter a valid customer email before publishing.", publishDisabled: false });
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
         confirming: false,
         publishing: false,
         published: {

@@ -137,7 +137,7 @@ Line fields are edited on the S09 cards in this slice. Catalogue copy-on-use is 
 
 Frozen-looking preview, expiry, confirm. Show slot/paywall before submit. Stale preview → PREVIEW_CHANGED.
 
-Implemented route: `/(tabs)/jobs/[id]/publish`. Review uses `POST /drafts/{id}/preview`. Confirm publishes `POST /drafts/{id}/publish`. After success, the same route is a read-only published quote with Preparing PDF, Download/View PDF when ready, and a safe retryable generation-failed state. Physical Expo Go (2026-09-16) generated and downloaded an original published-quote PDF in development. That is IMPLEMENTED development evidence, not production VERIFIED. Recipient email and EMAIL01 are collected on S11 publish confirmation. Live production delivery is not VERIFIED.
+Implemented route: `/(tabs)/jobs/[id]/publish`. Review uses `POST /drafts/{id}/preview`. Final confirm issues one `POST /drafts/{id}/publish` with `{preview_hash, recipient_email}` and an Idempotency-Key. Invalid email and API errors remain on the confirmation step without a request or navigation. After success, mobile replaces to the job overview and refetches quote number, job state, PDF, and delivery. Physical Expo Go (2026-09-16) generated and downloaded an original published-quote PDF in development. That is IMPLEMENTED development evidence, not production VERIFIED. Live production delivery is not VERIFIED.
 
 ### S12 Request detail
 

@@ -1,6 +1,6 @@
 import { formatUsdCents } from "@job-to-invoice/schemas";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
@@ -16,8 +16,8 @@ export default function JobDetailScreen() {
   const runOwnerRequest = auth.runOwnerRequest;
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ id?: string }>();
-  const jobId = typeof params.id === "string" ? params.id : "";
+  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const jobId = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? (params.id[0] ?? "") : "";
   const [job, setJob] = useState<JobDetail | undefined>();
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
@@ -45,9 +45,11 @@ export default function JobDetailScreen() {
     setLoading(false);
   }, [jobId, runOwnerRequest]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   const view = presentJobDetail({
     authStatus: auth.snapshot.status,

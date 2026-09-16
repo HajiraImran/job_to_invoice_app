@@ -157,7 +157,20 @@ export function presentQuoteReview(input: {
     return { kind: "error", showRetry: true, publishDisabled: true };
   }
   if (input.confirming) {
-    return { kind: "confirming", showRetry: false, publishDisabled: false };
+    return {
+      kind: "confirming",
+      showRetry: false,
+      publishDisabled: input.publishing,
+      message: input.error?.message,
+    };
+  }
+  if (input.error) {
+    return {
+      kind: "error",
+      showRetry: input.error.retryable,
+      publishDisabled: true,
+      message: input.error.message,
+    };
   }
   return { kind: "ready", showRetry: false, publishDisabled: false };
 }
