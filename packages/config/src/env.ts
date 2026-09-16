@@ -35,17 +35,12 @@ const optionalStorageShape = {
   STORAGE_WORKER_SECRET_ACCESS_KEY: z.string().optional(),
   STORAGE_API_ACCESS_KEY_ID: z.string().optional(),
   STORAGE_API_SECRET_ACCESS_KEY: z.string().optional(),
-};
-
-const requiredStorageShape = {
-  STORAGE_ENDPOINT: httpsUrl("STORAGE_ENDPOINT"),
-  STORAGE_DOWNLOAD_ENDPOINT: z.string().optional(),
-  STORAGE_REGION: secret("STORAGE_REGION"),
-  STORAGE_FORCE_PATH_STYLE: z.enum(["true", "false"]),
-  STORAGE_WORKER_ACCESS_KEY_ID: secret("STORAGE_WORKER_ACCESS_KEY_ID"),
-  STORAGE_WORKER_SECRET_ACCESS_KEY: secret("STORAGE_WORKER_SECRET_ACCESS_KEY"),
-  STORAGE_API_ACCESS_KEY_ID: secret("STORAGE_API_ACCESS_KEY_ID"),
-  STORAGE_API_SECRET_ACCESS_KEY: secret("STORAGE_API_SECRET_ACCESS_KEY"),
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_DOCUMENTS_BUCKET: z.string().optional(),
+  R2_WORKER_ACCESS_KEY_ID: z.string().optional(),
+  R2_WORKER_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_API_ACCESS_KEY_ID: z.string().optional(),
+  R2_API_SECRET_ACCESS_KEY: z.string().optional(),
 };
 
 const publicShape = {
@@ -91,8 +86,7 @@ const stagingSchema = z.object({
   DATABASE_URL_WORKER: secret("DATABASE_URL_WORKER"),
   DATABASE_URL_PURGE: secret("DATABASE_URL_PURGE"),
   DATABASE_URL_MIGRATIONS: secret("DATABASE_URL_MIGRATIONS"),
-  ...requiredStorageShape,
-  STORAGE_DOCUMENTS_BUCKET: secret("STORAGE_DOCUMENTS_BUCKET"),
+  ...optionalStorageShape,
 });
 
 const productionSchema = z.object({
@@ -111,8 +105,7 @@ const productionSchema = z.object({
   DATABASE_URL_WORKER: secret("DATABASE_URL_WORKER"),
   DATABASE_URL_PURGE: secret("DATABASE_URL_PURGE"),
   DATABASE_URL_MIGRATIONS: secret("DATABASE_URL_MIGRATIONS"),
-  ...requiredStorageShape,
-  STORAGE_DOCUMENTS_BUCKET: z.string().optional(),
+  ...optionalStorageShape,
   APPROVAL_TOKEN_HASH_KEY: secret("APPROVAL_TOKEN_HASH_KEY"),
   OTP_HASH_KEY: secret("OTP_HASH_KEY"),
   APPROVAL_EVIDENCE_ENCRYPTION_KEY: secret("APPROVAL_EVIDENCE_ENCRYPTION_KEY"),

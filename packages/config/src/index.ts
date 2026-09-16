@@ -10,6 +10,8 @@ export {
   DEVELOPMENT_DOCUMENTS_BUCKET,
   documentsBucket,
   PRODUCTION_DOCUMENTS_BUCKET,
+  isR2Endpoint,
+  redactStorageConfig,
   resolveDocumentsStorage,
   workerClientOptions,
 } from "./storage.ts";

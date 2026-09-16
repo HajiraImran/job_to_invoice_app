@@ -43,7 +43,9 @@ That command is `expo start --go`. It does not replace `pnpm --filter @job-to-in
 - `STORAGE_WORKER_ACCESS_KEY_ID` / `STORAGE_WORKER_SECRET_ACCESS_KEY` — bucket-scoped Object Read & Write. Worker PutObject only. Never `EXPO_PUBLIC_*`. Must differ from the API pair.
 - `STORAGE_API_ACCESS_KEY_ID` / `STORAGE_API_SECRET_ACCESS_KEY` — bucket-scoped Object Read-only. API 5-minute presigned GET only. Never `EXPO_PUBLIC_*`.
 
-Do not use `STORAGE_SERVICE_KEY` or Supabase `service_role` for document PDFs. Production remains private Cloudflare R2. Development may use private MinIO on the same S3 API.
+Do not use `STORAGE_SERVICE_KEY` or Supabase `service_role` for document PDFs. Production remains private Cloudflare R2. Development may use private MinIO on the same S3 API. `R2_ACCOUNT_ID` may derive `https://<account>.r2.cloudflarestorage.com` when `STORAGE_ENDPOINT` is unset; R2 defaults are region `auto` and `STORAGE_FORCE_PATH_STYLE=false`.
+
+If MinIO is already running locally (`http://127.0.0.1:9000`, private bucket `job-to-invoice-documents-development`, console `http://127.0.0.1:9001`), do not recreate the bucket. Point API and worker at it with process-local variables only. The console is operator-only on loopback; the physical phone uses `STORAGE_DOWNLOAD_ENDPOINT` on port 9000, never 9001.
 
 Local MinIO is development-only. Do not create repository env files. Supply credentials from the launching process with `Read-Host -AsSecureString`. Do not print them, do not write them to disk, and do not use `minioadmin` or any default password. MinIO root password must be at least eight characters.
 

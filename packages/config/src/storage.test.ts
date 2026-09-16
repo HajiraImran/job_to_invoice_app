@@ -8,6 +8,7 @@ import {
   DEVELOPMENT_DOCUMENTS_BUCKET,
   documentsBucket,
   PRODUCTION_DOCUMENTS_BUCKET,
+  redactStorageConfig,
   resolveDocumentsStorage,
   workerClientOptions,
 } from "./storage.ts";
@@ -161,6 +162,50 @@ describe("documents storage", () => {
     );
   });
 
+  it("applies Cloudflare R2 defaults from R2_ACCOUNT_ID without path-style", () => {
+    const config = resolveDocumentsStorage({
+      APP_ENV: "production",
+      R2_ACCOUNT_ID: "acct99r2compat01",
+      R2_WORKER_ACCESS_KEY_ID: "wk_access_prod01",
+      R2_WORKER_SECRET_ACCESS_KEY: "wk_secret_prod01_value",
+      R2_API_ACCESS_KEY_ID: "api_access_prod01",
+      R2_API_SECRET_ACCESS_KEY: "api_secret_prod01_value",
+    });
+    expect(config).toBeDefined();
+    if (!config) {
+      throw new Error("documents storage config missing");
+    }
+    expect(config.endpoint).toBe("https://acct99r2compat01.r2.cloudflarestorage.com");
+    expect(config.region).toBe("auto");
+    expect(config.forcePathStyle).toBe(false);
+    expect(config.bucket).toBe(PRODUCTION_DOCUMENTS_BUCKET);
+    expect(workerClientOptions(config).endpoint).toBe(config.endpoint);
+    expect(apiClientOptions(config).endpoint).toBe(config.endpoint);
+  });
+
+  it("uses MinIO path-style addressing on the local S3 endpoint", () => {
+    const config = requireStorage(DEV_STORAGE);
+    expect(config.forcePathStyle).toBe(true);
+    expect(config.endpoint).toBe("http://127.0.0.1:9000");
+    expect(workerClientOptions(config).forcePathStyle).toBe(true);
+    expect(apiClientOptions(config).forcePathStyle).toBe(true);
+  });
+
+  it("redacts all storage configuration from logged objects", () => {
+    const config = requireStorage(DEV_STORAGE);
+    const redacted = redactStorageConfig({
+      APP_ENV: "development",
+      STORAGE_ENDPOINT: config.endpoint,
+      STORAGE_WORKER_SECRET_ACCESS_KEY: "wk_secret_dev01_value",
+      documentsStorage: config,
+    });
+    const serialized = JSON.stringify(redacted);
+    expect(serialized).not.toContain("wk_secret_dev01_value");
+    expect(serialized).not.toContain("api_secret_dev01_value");
+    expect(serialized).not.toContain("127.0.0.1:9000");
+    expect(serialized).toContain("[REDACTED]");
+  });
+
   it("defaults private bucket names", () => {
     expect(documentsBucket("development")).toBe(DEVELOPMENT_DOCUMENTS_BUCKET);
     expect(documentsBucket("production")).toBe(PRODUCTION_DOCUMENTS_BUCKET);
@@ -175,6 +220,7 @@ describe("documents storage", () => {
     expect(compose).toMatch(/healthcheck:/);
     expect(compose).toMatch(/MINIO_ROOT_USER: \$\{MINIO_ROOT_USER:/);
     expect(compose).toMatch(/MINIO_ROOT_PASSWORD: \$\{MINIO_ROOT_PASSWORD:/);
+    expect(compose).toMatch(/127\.0\.0\.1:9001:9001/);
     expect(compose).toMatch(/var\/minio:\/data/);
     expect(compose).not.toMatch(/minioadmin/i);
     expect(compose).not.toMatch(/MINIO_ROOT_PASSWORD:\s*['"]?\w/);

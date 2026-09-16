@@ -35,7 +35,44 @@ const STORAGE_FIELD_NAMES = [
   "STORAGE_WORKER_SECRET_ACCESS_KEY",
   "STORAGE_API_ACCESS_KEY_ID",
   "STORAGE_API_SECRET_ACCESS_KEY",
+  "R2_ACCOUNT_ID",
+  "R2_DOCUMENTS_BUCKET",
+  "R2_WORKER_ACCESS_KEY_ID",
+  "R2_WORKER_SECRET_ACCESS_KEY",
+  "R2_API_ACCESS_KEY_ID",
+  "R2_API_SECRET_ACCESS_KEY",
 ] as const;
+
+function isStorageRedactKey(key: string): boolean {
+  return (
+    /^(STORAGE_|R2_)/.test(key) ||
+    key === "documentsStorage" ||
+    /accessKeyId|secretAccessKey/i.test(key)
+  );
+}
+
+export function isR2Endpoint(value: string): boolean {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "r2.cloudflarestorage.com" || host.endsWith(".r2.cloudflarestorage.com");
+  } catch {
+    return false;
+  }
+}
+
+export function redactStorageConfig(input: unknown): unknown {
+  if (Array.isArray(input)) {
+    return input.map((item) => redactStorageConfig(item));
+  }
+  if (input && typeof input === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input)) {
+      out[key] = isStorageRedactKey(key) ? "[REDACTED]" : redactStorageConfig(value);
+    }
+    return out;
+  }
+  return input;
+}
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"]);
 
@@ -160,14 +197,19 @@ export function resolveDocumentsStorage(
 ): DocumentsStorageConfig | undefined {
   assertNoPublicStorageSecrets(source);
   const appEnv = source.APP_ENV;
-  const endpoint = present(source.STORAGE_ENDPOINT);
+  const accountId = present(source.R2_ACCOUNT_ID);
+  const endpoint =
+    present(source.STORAGE_ENDPOINT) ??
+    (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined);
   const downloadEndpoint = present(source.STORAGE_DOWNLOAD_ENDPOINT);
-  const region = present(source.STORAGE_REGION);
-  const bucketOverride = present(source.STORAGE_DOCUMENTS_BUCKET);
-  const workerKey = present(source.STORAGE_WORKER_ACCESS_KEY_ID);
-  const workerSecret = present(source.STORAGE_WORKER_SECRET_ACCESS_KEY);
-  const apiKey = present(source.STORAGE_API_ACCESS_KEY_ID);
-  const apiSecret = present(source.STORAGE_API_SECRET_ACCESS_KEY);
+  const r2Endpoint = endpoint ? isR2Endpoint(endpoint) : false;
+  const region = present(source.STORAGE_REGION) ?? (r2Endpoint ? "auto" : undefined);
+  const bucketOverride = present(source.STORAGE_DOCUMENTS_BUCKET) ?? present(source.R2_DOCUMENTS_BUCKET);
+  const workerKey = present(source.STORAGE_WORKER_ACCESS_KEY_ID) ?? present(source.R2_WORKER_ACCESS_KEY_ID);
+  const workerSecret =
+    present(source.STORAGE_WORKER_SECRET_ACCESS_KEY) ?? present(source.R2_WORKER_SECRET_ACCESS_KEY);
+  const apiKey = present(source.STORAGE_API_ACCESS_KEY_ID) ?? present(source.R2_API_ACCESS_KEY_ID);
+  const apiSecret = present(source.STORAGE_API_SECRET_ACCESS_KEY) ?? present(source.R2_API_SECRET_ACCESS_KEY);
   const required = appEnv !== "development";
   const anySet = STORAGE_FIELD_NAMES.some((name) => present(source[name]));
 
@@ -187,7 +229,10 @@ export function resolveDocumentsStorage(
   if (!apiKey || !apiSecret) {
     throw new Error("API storage credentials are required");
   }
-  const forcePathStyle = parseForcePathStyle(source.STORAGE_FORCE_PATH_STYLE, true);
+  const forcePathStyle = parseForcePathStyle(
+    present(source.STORAGE_FORCE_PATH_STYLE) ?? (r2Endpoint ? "false" : undefined),
+    true,
+  );
   if (forcePathStyle === undefined) {
     throw new Error("STORAGE_FORCE_PATH_STYLE is required");
   }
@@ -203,6 +248,7 @@ export function resolveDocumentsStorage(
     ["STORAGE_WORKER_SECRET_ACCESS_KEY", workerSecret],
     ["STORAGE_API_ACCESS_KEY_ID", apiKey],
     ["STORAGE_API_SECRET_ACCESS_KEY", apiSecret],
+    ["R2_ACCOUNT_ID", accountId],
   ] as const) {
     if (value && PLACEHOLDER_PATTERN.test(value)) {
       throw new Error(`${name} must not use a placeholder value`);

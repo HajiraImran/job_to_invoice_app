@@ -30,6 +30,10 @@ describe("documents download store", () => {
     expect(parsed.port).toBe("9000");
     expect(parsed.pathname).toContain("job-to-invoice-documents-development");
     expect(parsed.searchParams.get("X-Amz-Expires")).toBe("300");
+    expect(parsed.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]+$/i);
+    expect(parsed.searchParams.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256");
+    expect(url).not.toMatch(/public-read|ACL=/i);
+    expect(url.includes("?")).toBe(true);
     expect(url).not.toContain("127.0.0.1");
     expect(url).not.toContain("wk_secret_dev01_value");
     expect(url).not.toContain("api_secret_dev01_value");

@@ -92,6 +92,51 @@ describe("loadEnv", () => {
     ).toThrow(/QA68|local or private/i);
   });
 
+  it("loads production R2 aliases with default region and private production bucket", () => {
+    const env = loadEnv({
+      APP_ENV: "production",
+      PUBLIC_APP_NAME: "Job to Invoice",
+      SUPPORT_URL: "https://support.jobtoinvoice.test",
+      OWNER_APP_BUNDLE_ID: "com.jobtoinvoice.app",
+      API_BASE_URL: "https://api.jobtoinvoice.test",
+      PORTAL_ORIGIN: "https://portal.jobtoinvoice.test",
+      AUTH_PROJECT_URL: "https://auth.jobtoinvoice.test",
+      AUTH_PUBLISHABLE_KEY: "publishable-key",
+      AUTH_ISSUER: "https://auth.jobtoinvoice.test/auth/v1",
+      AUTH_AUDIENCE: "authenticated",
+      DATABASE_URL_API: "postgres://api:stored@db:5432/app",
+      DATABASE_URL_WORKER: "postgres://worker:stored@db:5432/app",
+      DATABASE_URL_PURGE: "postgres://purge:stored@db:5432/app",
+      DATABASE_URL_MIGRATIONS: "postgres://migrator:stored@db:5432/app",
+      R2_ACCOUNT_ID: "acct99r2compat01",
+      R2_WORKER_ACCESS_KEY_ID: "wk_access_prod01",
+      R2_WORKER_SECRET_ACCESS_KEY: "wk_secret_prod01_value",
+      R2_API_ACCESS_KEY_ID: "api_access_prod01",
+      R2_API_SECRET_ACCESS_KEY: "api_secret_prod01_value",
+      APPROVAL_TOKEN_HASH_KEY: "token-key",
+      OTP_HASH_KEY: "otp-key",
+      APPROVAL_EVIDENCE_ENCRYPTION_KEY: "evidence-key",
+      REVENUECAT_PUBLIC_IOS_KEY: "rc-public",
+      REVENUECAT_SECRET_KEY: "rc-secret",
+      WEBHOOK_AUTH_SECRET: "webhook",
+      MONTHLY_PRODUCT_ID: "monthly",
+      ANNUAL_PRODUCT_ID: "annual",
+      EMAIL_API_KEY: "email-key",
+      EMAIL_WEBHOOK_SECRET: "email-webhook",
+      EMAIL_FROM_DOMAIN: "mail.jobtoinvoice.test",
+      ERROR_REPORTING_DSN: "https://sentry.jobtoinvoice.test/1",
+      STAFF_AUTH_CONFIG: "staff",
+      BACKUP_RETENTION_DAYS: "35",
+      FEATURE_NEW_PUBLICATION: "true",
+      FEATURE_PURCHASES: "true",
+      LIMITS_VERSION: "1",
+    });
+    expect(env.documentsStorage?.endpoint).toBe("https://acct99r2compat01.r2.cloudflarestorage.com");
+    expect(env.documentsStorage?.region).toBe("auto");
+    expect(env.documentsStorage?.forcePathStyle).toBe(false);
+    expect(env.documentsStorage?.bucket).toBe("job-to-invoice-documents-production");
+  });
+
   it("rejects production when mandatory secrets are empty", () => {
     expect(() => loadEnv({ APP_ENV: "production" })).toThrow(/QA68/);
   });

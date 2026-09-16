@@ -5,17 +5,38 @@ export type DocumentsObjectStore = {
   putObject: (input: { key: string; body: Buffer; contentType: string }) => Promise<void>;
 };
 
+export function privatePutObjectInput(input: {
+  bucket: string;
+  key: string;
+  body: Buffer;
+  contentType: string;
+}): {
+  Bucket: string;
+  Key: string;
+  Body: Buffer;
+  ContentType: string;
+} {
+  return {
+    Bucket: input.bucket,
+    Key: input.key,
+    Body: input.body,
+    ContentType: input.contentType,
+  };
+}
+
 export function createDocumentsObjectStore(config: DocumentsStorageConfig): DocumentsObjectStore {
   const client = new S3Client(workerClientOptions(config));
   return {
     async putObject({ key, body, contentType }) {
       await client.send(
-        new PutObjectCommand({
-          Bucket: config.bucket,
-          Key: key,
-          Body: body,
-          ContentType: contentType,
-        }),
+        new PutObjectCommand(
+          privatePutObjectInput({
+            bucket: config.bucket,
+            key,
+            body,
+            contentType,
+          }),
+        ),
       );
     },
   };
