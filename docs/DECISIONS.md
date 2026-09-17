@@ -357,3 +357,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | No for hashed tokens and EMAIL01 outbox once hosted-applied |
 | Escalation category | architecture |
 
+### D-018 — Portal BFF cookies for customer quote review
+
+| Field | Value |
+| --- | --- |
+| ID | D-018 |
+| Date | 2026-09-17 |
+| Status | Resolved |
+| Decision | Customer portal browsers never set the approval session cookie on the API port. `apps/portal` Next.js BFF (`app/api/portal/*`) forwards `/v1/portal/*` server-side with `Origin: PORTAL_ORIGIN`, then sets `jti_portal` as an HttpOnly SameSite=Lax host-only cookie on `PORTAL_ORIGIN`. CSRF remains a page-memory nonce (HMAC of session hash + generation). Development HTTP may omit `Secure`; staging and production require HTTPS + `Secure`. Owner Bearer is rejected on portal routes; portal cookies are rejected on owner routes. |
+| Reason | PRD SameSite=Lax host-only cookies cannot be sent from `localhost:3000` to API `:3001`. A BFF preserves the cookie model without changing TX02 or token fragment rules. |
+| Evidence | `supabase/migrations/0011_quote_approval_portal.sql`; `apps/api/src/portal.ts`; `apps/portal/app/api/portal/[...path]/route.ts`; `apps/portal/app/review/**` |
+| Owner | Engineering lead |
+| PRD implication | JRN02 / S25–S27 / APR01A cookie+CSRF path is implemented locally. Hosted `0011` apply, live Resend/SPF, and QA21 withdraw remain later. |
+| Impacted requirement IDs | JRN02, S25, S26, S27, APR01, APR01A, APR02, APR04, APR06, EMAIL03, EMAIL04, EMAIL05, TX02, API01, AUTHZ01, SEC01, QA16, QA18–QA20, QA22–QA26, QA53, QA63 |
+| Impacted test IDs | `apps/api/src/portal.test.ts`; `apps/portal/src/review.test.ts`; `apps/worker/src/email.test.ts`; `supabase/tests/0013_quote_approval_portal.sql`; `pnpm test:db` |
+| Migration implications | Forward-only `0011_quote_approval_portal.sql`. Do not edit or replay `0001`–`0010`. Hosted apply of pending `0011` is a later authorized step. This change does not dispatch it. |
+| Reversible | No for portal sessions, OTP hashes, and TX02 decisions once hosted-applied |
+| Escalation category | architecture |
+

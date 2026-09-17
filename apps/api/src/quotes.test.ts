@@ -29,6 +29,8 @@ const JOB_T1 = "3b3b3b3b-3b3b-43b3-83b3-3b3b3b3b3b31";
 const JOB_T2 = "3b3b3b3b-3b3b-43b3-83b3-3b3b3b3b3b32";
 const JOB_T3 = "3b3b3b3b-3b3b-43b3-83b3-3b3b3b3b3b33";
 const JOB_T4 = "3b3b3b3b-3b3b-43b3-83b3-3b3b3b3b3b34";
+const AUTH_R = "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a3a";
+const JOB_R = "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a31";
 const LINE_1 = "36363636-3636-4363-8363-363636363631";
 
 function setupBody() {
@@ -221,6 +223,7 @@ describe("quote publish API", () => {
     previewHash: string,
     key: string,
     recipientEmail = "customer@example.com",
+    extra: Record<string, unknown> = {},
   ) {
     return running().app.inject({
       method: "POST",
@@ -231,7 +234,7 @@ describe("quote publish API", () => {
         "idempotency-key": key,
         "if-match": String(version),
       },
-      payload: { preview_hash: previewHash, recipient_email: recipientEmail },
+      payload: { preview_hash: previewHash, recipient_email: recipientEmail, ...extra },
     });
   }
 
@@ -296,6 +299,7 @@ describe("quote publish API", () => {
     });
     expect(status.statusCode).toBe(200);
     expect(status.json().data.delivery_state).toBe("queued");
+    expect(status.json().data.request_state).toBe("pending");
     expect(status.json().data.recipient_email_masked).toMatch(/^c\*\*\*@/);
     expect(JSON.stringify(status.json())).not.toContain("customer@example.com");
     expect(status.json().data.token).toBeUndefined();
@@ -674,5 +678,81 @@ describe("quote publish API", () => {
     expect(unsigned.statusCode).toBe(401);
     expect(JSON.stringify(accepted.json())).not.toContain(RESEND_WEBHOOK_FIXTURE.secret);
     expect(JSON.stringify(accepted.json())).not.toContain("success");
+  });
+
+  it("supersedes a pending request when a replacement revision is published", async () => {
+    const token = await sign({ sub: AUTH_R, email: "owner.r@example.com" });
+    const setup = await completeSetup(token, "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a32");
+    expect(setup.statusCode).toBe(200);
+    const draft = await readyDraft(token, JOB_R, {
+      job: "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a33",
+      open: "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a34",
+      save: "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a35",
+    });
+    const previewed = await preview(token, draft.id, draft.version);
+    const first = await publish(
+      token,
+      draft.id,
+      draft.version,
+      previewed.json().data.preview_hash,
+      "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a36",
+    );
+    expect(first.statusCode).toBe(202);
+    const oldRequestId = first.json().data.request_id as string;
+    const opened = await openQuote(token, JOB_R, "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a37");
+    expect(opened.statusCode).toBe(200);
+    const saved = await saveDraft(
+      token,
+      opened.json().data.id,
+      opened.json().data.version,
+      draftBody(),
+      "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a38",
+    );
+    expect(saved.statusCode).toBe(200);
+    const nextPreview = await preview(token, saved.json().data.id, saved.json().data.version);
+    expect(nextPreview.statusCode).toBe(200);
+    const blocked = await publish(
+      token,
+      saved.json().data.id,
+      saved.json().data.version,
+      nextPreview.json().data.preview_hash,
+      "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a39",
+    );
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().error.code).toBe("APPROVAL_PENDING");
+    const replaced = await publish(
+      token,
+      saved.json().data.id,
+      saved.json().data.version,
+      nextPreview.json().data.preview_hash,
+      "3a3a3a3a-3a3a-43a3-83a3-3a3a3a3a3a40",
+      "customer@example.com",
+      { replace_pending_request_id: oldRequestId },
+    );
+    expect(replaced.statusCode).toBe(202);
+    expect(replaced.json().data.request_id).not.toBe(oldRequestId);
+    expect(replaced.json().data.revision_no).toBe(2);
+    const prior = await running().admin.query<{ state: string; lifecycle: string }>(
+      `select ar.state, d.lifecycle
+       from commercial.approval_requests ar
+       join commercial.documents d on d.id = ar.document_id
+       where ar.id = $1`,
+      [oldRequestId],
+    );
+    expect(prior.rows[0]?.state).toBe("superseded");
+    expect(prior.rows[0]?.lifecycle).toBe("superseded");
+    const pending = await running().admin.query<{ n: string }>(
+      `select count(*)::text as n from commercial.approval_requests
+       where job_id = $1 and state = 'pending' and purpose = 'approval'`,
+      [JOB_R],
+    );
+    expect(pending.rows[0]?.n).toBe("1");
+    const request = await running().app.inject({
+      method: "GET",
+      url: `/v1/jobs/${JOB_R}/request`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(request.json().data.request_state).toBe("pending");
+    expect(request.json().data.request_id).toBe(replaced.json().data.request_id);
   });
 });

@@ -53,9 +53,12 @@ API process (`loadApiEnv`):
 - `DATABASE_URL_API`
 - `EMAIL_WEBHOOK_SECRET` — Resend/Svix signing secret with the `whsec_` prefix. Never load in the worker.
 - `APPROVAL_TOKEN_HASH_KEY` — HMAC-SHA256 key for `token_hash`. Never load in the worker.
-- `APPROVAL_DELIVERY_ENCRYPTION_KEY` — AES-256-GCM key for the temporary delivery token.
+- `APPROVAL_DELIVERY_ENCRYPTION_KEY` — AES-256-GCM key for temporary delivery tokens and OTP ciphertext.
+- `OTP_HASH_KEY` — HMAC for portal OTP codes, CSRF nonces, and session hashes. Independent of `APPROVAL_TOKEN_HASH_KEY`. Required in staging and production.
+- `APPROVAL_EVIDENCE_ENCRYPTION_KEY` — AES-256-GCM for APR05 UA/IP evidence. Not used for EMAIL01. Required in staging and production.
+- `PORTAL_ORIGIN` — CORS allowlist. Production and staging require HTTPS.
 
-Development may start the API without those two names so preview and `/v1/me` keep working. `POST /v1/drafts/{id}/publish` then returns `UNAVAILABLE` and emits `quote_publish` stage `configuration_unavailable` before opening a database connection. Do not log the names or values.
+Development may start the API without the approval/OTP names so preview and `/v1/me` keep working. `POST /v1/drafts/{id}/publish` and `/v1/portal/*` then return `UNAVAILABLE` and emit allowlisted logs before opening extra secret material. Do not log the names or values.
 
 Worker process (`loadWorkerEnv`):
 
@@ -72,8 +75,9 @@ Purge process:
 
 Not used by this slice:
 
-- `APPROVAL_EVIDENCE_ENCRYPTION_KEY`
-- `OTP_HASH_KEY`
+- RevenueCat, staff, backup, and later EMAIL02/06–11 keys
+
+Portal Next.js BFF (`apps/portal`) reads process-local `API_BASE_URL` and `PORTAL_ORIGIN`. It sets the `jti_portal` HttpOnly SameSite=Lax host-only cookie on the portal origin after exchange/verify. Development HTTP may omit `Secure`. Production and staging require HTTPS + `Secure`. Do not post the session cookie to the API port.
 
 None of these names may enter `EXPO_PUBLIC_*`. Logs must redact configuration and secret material. Webhook verification uses official Svix headers (`svix-id`, `svix-timestamp`, `svix-signature`) with a five-minute timestamp tolerance in every `APP_ENV`. Do not fall back to an arbitrary shared-secret header.
 

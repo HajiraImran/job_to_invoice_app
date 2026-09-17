@@ -248,6 +248,9 @@ function mapDraftWriteError(
   if (code === "P0007") {
     return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "This job cannot be edited as a quote draft.");
   }
+  if (code === "P0010") {
+    return sendFail(request, reply, API_ERROR_CODES.DOCUMENT_IMMUTABLE, "This accepted quote cannot be edited.");
+  }
   if (code === "23514" || code === "22023") {
     return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
   }

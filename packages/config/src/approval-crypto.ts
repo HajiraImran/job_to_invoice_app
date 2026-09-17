@@ -87,17 +87,70 @@ export function decryptDeliveryToken(payload: EncryptedDeliveryPayload, secret: 
 }
 
 export function encryptRecipientEmail(email: string, secret: VersionedSecret, nonce = randomBytes(NONCE_BYTES)): EncryptedDeliveryPayload {
+  return encryptUtf8(email, secret, nonce);
+}
+
+export function encryptUtf8(value: string, secret: VersionedSecret, nonce = randomBytes(NONCE_BYTES)): EncryptedDeliveryPayload {
   if (nonce.length !== NONCE_BYTES) {
     throw new Error("Delivery nonce must be 12 bytes");
   }
   const cipher = createCipheriv(DELIVERY_ALGORITHM, aes256Key(secret.material), nonce);
-  const encrypted = Buffer.concat([cipher.update(email, "utf8"), cipher.final(), cipher.getAuthTag()]);
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final(), cipher.getAuthTag()]);
   return {
     algorithm: DELIVERY_ALGORITHM,
     keyVersion: secret.version,
     nonce,
     ciphertext: encrypted,
   };
+}
+
+export function decryptUtf8(payload: EncryptedDeliveryPayload, secret: VersionedSecret): string {
+  if (payload.algorithm !== DELIVERY_ALGORITHM) {
+    throw new Error("Unsupported delivery algorithm");
+  }
+  if (payload.nonce.length !== NONCE_BYTES || payload.ciphertext.length < GCM_TAG_BYTES + 1) {
+    throw new Error("Invalid delivery payload");
+  }
+  const tag = payload.ciphertext.subarray(payload.ciphertext.length - GCM_TAG_BYTES);
+  const data = payload.ciphertext.subarray(0, payload.ciphertext.length - GCM_TAG_BYTES);
+  const decipher = createDecipheriv(DELIVERY_ALGORITHM, aes256Key(secret.material), payload.nonce);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+}
+
+export function hashOtp(code: string, secret: VersionedSecret): { hash: string; keyVersion: number } {
+  const digest = createHmac("sha256", secret.material).update(code, "utf8").digest("hex");
+  return { hash: digest, keyVersion: secret.version };
+}
+
+export function hashSessionSecret(raw: Buffer, secret: VersionedSecret): { hash: string; keyVersion: number } {
+  if (raw.length !== TOKEN_BYTES) {
+    throw new Error("Session secret must be 256 bits");
+  }
+  const digest = createHmac("sha256", secret.material).update(raw).digest("hex");
+  return { hash: digest, keyVersion: secret.version };
+}
+
+export function encodeSessionSecret(raw: Buffer): string {
+  if (raw.length !== TOKEN_BYTES) {
+    throw new Error("Session secret must be 256 bits");
+  }
+  return raw.toString("base64url");
+}
+
+export function decodeFragmentToken(value: string): Buffer | undefined {
+  if (typeof value !== "string" || value.length < 40 || value.length > 64) {
+    return undefined;
+  }
+  try {
+    const decoded = Buffer.from(value, "base64url");
+    if (decoded.length !== TOKEN_BYTES) {
+      return undefined;
+    }
+    return decoded;
+  } catch {
+    return undefined;
+  }
 }
 
 export function buffersEqual(left: Buffer, right: Buffer): boolean {

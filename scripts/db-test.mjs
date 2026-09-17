@@ -384,7 +384,7 @@ try {
       );
       assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
     }
-    assert(setRoleFiles === 8, "expected SET ROLE migrator in 0002–0008 and 0010");
+    assert(setRoleFiles === 9, "expected SET ROLE migrator in 0002–0008, 0010, and 0011");
   });
 
   await test("migration history inserts succeed as the restored bootstrap role", async () => {
@@ -392,8 +392,8 @@ try {
       "select version from supabase_migrations.schema_migrations order by version",
     );
     assert(
-      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010",
-      "bootstrap role must record 0001-0010 after RESET ROLE",
+      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011",
+      "bootstrap role must record 0001-0011 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {
@@ -1498,6 +1498,384 @@ try {
     );
     const ownerB = await admin.query("select request_id from commercial.owner_job_request($1, $2)", [B.ws, readyJob]);
     assert(ownerB.rows.length === 0, "cross-tenant request lookup is empty");
+  });
+
+  await test("EMAIL03 claim does not wait for the original PDF", async () => {
+    const otpJob = "aaaae040-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const otpDoc = "aaaae041-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const otpReq = "aaaae042-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const otpAttempt = "aaaae043-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const otpPayload = "aaaae044-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const otpTask = "aaaae045-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const otpEvent = "aaaae046-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await admin.query(
+      `insert into commercial.jobs (workspace_id, id, customer_id, title, no_site, lifecycle, mode)
+       values ($1, $2, $3, 'OTP job', true, 'draft', 'quote')`,
+      [A.ws, otpJob, A.customer],
+    );
+    await admin.query(
+      `insert into commercial.documents (
+        workspace_id, id, created_by, job_id, kind, number, revision_no, lifecycle,
+        issued_at, issue_date, currency, net_cents, tax_cents, total_cents,
+        snapshot_json, canonical_snapshot_bytes, schema_version, snapshot_sha256
+      ) values ($1, $2, $3, $4, 'quote', 'Q-000103', 1, 'issued', now(), current_date, 'USD', 0, 0, 0, $5::jsonb, $6::bytea, 1, $7)`,
+      [
+        A.ws,
+        otpDoc,
+        A.user,
+        otpJob,
+        JSON.stringify({ schema_version: 1, kind: "quote", lines: [] }),
+        Buffer.from("{}"),
+        "cd".repeat(32),
+      ],
+    );
+    await admin.query(
+      `insert into commercial.approval_requests (
+        workspace_id, id, job_id, document_id, purpose, recipient_email, token_hash,
+        token_key_version, state, expected_scope_version, expires_at, access_until
+      ) values ($1, $2, $3, $4, 'approval', 'customer@example.com', $5, 1, 'pending', 0, now() + interval '14 days', now() + interval '90 days')`,
+      [A.ws, otpReq, otpJob, otpDoc, "e3".repeat(32)],
+    );
+    const otpEffect = `${A.ws}:${otpReq}:EMAIL03:${otpAttempt}`;
+    await admin.query(
+      `insert into commercial.delivery_attempts (
+        workspace_id, id, document_id, request_id, template_id, recipient_email_encrypted, state, effect_key
+      ) values ($1, $2, $3, $4, 'EMAIL03', $5, 'queued', $6)`,
+      [A.ws, otpAttempt, otpDoc, otpReq, Buffer.alloc(32, 7), otpEffect],
+    );
+    await admin.query(
+      `insert into commercial.encrypted_delivery_payloads (
+        workspace_id, id, delivery_attempt_id, algorithm, key_version, nonce, ciphertext
+      ) values ($1, $2, $3, 'aes-256-gcm', 1, $4, $5)`,
+      [A.ws, otpPayload, otpAttempt, Buffer.alloc(12, 5), Buffer.alloc(48, 6)],
+    );
+    await admin.query(
+      `insert into commercial.outbox_tasks (
+        workspace_id, id, event_id, task_type, aggregate_id, payload_json, status, effect_key
+      ) values ($1, $2, $3, 'send_email', $4, $5::jsonb, 'pending', $6)`,
+      [
+        A.ws,
+        otpTask,
+        otpEvent,
+        otpReq,
+        JSON.stringify({ document_id: otpDoc, request_id: otpReq, template_id: "EMAIL03" }),
+        otpEffect,
+      ],
+    );
+    await admin.query("begin");
+    try {
+      await admin.query("set local role worker_app");
+      const claimed = await admin.query(
+        "select template_id, fail_without_send, ciphertext from commercial.claim_send_email()",
+      );
+      assert(claimed.rows[0]?.template_id === "EMAIL03", "EMAIL03 claims without a PDF");
+      assert(claimed.rows[0]?.fail_without_send === false, "EMAIL03 must not fail without send");
+      assert(claimed.rows[0]?.ciphertext != null, "EMAIL03 claim returns ciphertext");
+      await admin.query("rollback");
+    } catch (error) {
+      await admin.query("rollback");
+      throw error;
+    }
+  });
+
+  const cipher = {
+    email: Buffer.alloc(32, 9),
+    nonce: Buffer.alloc(12, 3),
+    ciphertext: Buffer.alloc(48, 4),
+    algorithm: "aes-256-gcm",
+  };
+
+  async function insertPortalQuote(ids) {
+    await admin.query(
+      `insert into commercial.jobs (workspace_id, id, customer_id, title, no_site, lifecycle, mode)
+       values ($1, $2, $3, $4, true, 'draft', 'quote')`,
+      [A.ws, ids.job, A.customer, ids.title],
+    );
+    await admin.query(
+      `insert into commercial.documents (
+        workspace_id, id, created_by, job_id, kind, number, revision_no, lifecycle,
+        issued_at, issue_date, currency, net_cents, tax_cents, total_cents,
+        snapshot_json, canonical_snapshot_bytes, schema_version, snapshot_sha256
+      ) values ($1, $2, $3, $4, 'quote', $5, 1, 'issued', now(), current_date, 'USD', 1000, 0, 1000, $6::jsonb, $7::bytea, 1, $8)`,
+      [
+        A.ws,
+        ids.doc,
+        A.user,
+        ids.job,
+        ids.number,
+        JSON.stringify({ schema_version: 1, kind: "quote", lines: [] }),
+        Buffer.from("{}"),
+        ids.snapshot,
+      ],
+    );
+    await admin.query(`update commercial.jobs set current_quote_id = $1 where id = $2`, [ids.doc, ids.job]);
+    await admin.query(
+      `insert into commercial.document_lines (
+        workspace_id, id, document_id, position, line_kind, description, quantity, unit,
+        unit_price_cents, discount_cents, net_cents, tax_bp, tax_cents, total_cents
+      ) values ($1, $2, $3, 1, 'source', 'Labour', 1, 'hour', 1000, 0, 1000, 0, 0, 1000)`,
+      [A.ws, ids.line, ids.doc],
+    );
+    if (ids.withPdf) {
+      await admin.query("set role migrator");
+      try {
+        await admin.query(
+          `insert into commercial.artifacts (
+            workspace_id, id, document_id, type, object_key, sha256, bytes, template_version, generated_at, state
+          ) values ($1, $2, $3, 'original_pdf', $4, $5, 12, 'v1', now(), 'ready')`,
+          [A.ws, ids.artifact, ids.doc, `workspaces/${A.ws}/documents/${ids.doc}/original.pdf`, "ab".repeat(32)],
+        );
+      } finally {
+        await admin.query("reset role");
+      }
+    }
+    await admin.query(
+      `insert into commercial.approval_requests (
+        workspace_id, id, job_id, document_id, purpose, recipient_email, token_hash,
+        token_key_version, state, expected_scope_version, expires_at, access_until
+      ) values ($1, $2, $3, $4, 'approval', 'customer@example.com', $5, 1, 'pending', 0, $6, now() + interval '90 days')`,
+      [A.ws, ids.req, ids.job, ids.doc, ids.tokenHash, ids.expiresAt ?? new Date(Date.now() + 14 * 86400000)],
+    );
+  }
+
+  await test("unknown portal tokens and OTP send/verify limits fail closed", async () => {
+    await expectFail(
+      () =>
+        admin.query("select * from commercial.exchange_approval_token($1, $2)", ["ab".repeat(32), "cd".repeat(32)]),
+      /REQUEST_UNAVAILABLE|P0020/i,
+      "unknown token hash",
+    );
+    const ids = {
+      job: "aaaae100-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      doc: "aaaae101-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      req: "aaaae102-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      line: "aaaae103-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      artifact: "aaaae104-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "OTP limits",
+      number: "Q-000201",
+      snapshot: "11".repeat(32),
+      tokenHash: "21".repeat(32),
+    };
+    await insertPortalQuote(ids);
+    const sessionHash = "31".repeat(32);
+    const exchanged = await admin.query(
+      "select access_state, recipient_email_masked from commercial.exchange_approval_token($1, $2)",
+      [ids.tokenHash, sessionHash],
+    );
+    assert(exchanged.rows[0]?.access_state === "pending", "valid hash exchanges a pending session");
+    assert(!String(exchanged.rows[0]?.recipient_email_masked).includes("customer@example.com"), "exchange masks email");
+    const sendSql = `select retry_after_sec from commercial.send_portal_code($1, $2, 1, $3, $4, 1, $5, $6)`;
+    const sendArgs = [sessionHash, "41".repeat(32), cipher.email, cipher.algorithm, cipher.nonce, cipher.ciphertext];
+    const sent = await admin.query(sendSql, sendArgs);
+    assert(Number(sent.rows[0]?.retry_after_sec) === 60, "first send returns 60s cooldown");
+    await expectFail(() => admin.query(sendSql, sendArgs), /OTP_COOLDOWN|P0026/i, "resend cooldown");
+    for (let i = 0; i < 4; i += 1) {
+      const wrong = await admin.query("select error_code from commercial.verify_portal_code($1, $2)", [
+        sessionHash,
+        "00".repeat(32),
+      ]);
+      assert(wrong.rows[0]?.error_code === "P0023", `wrong OTP attempt ${i + 1}`);
+    }
+    const locked = await admin.query("select error_code from commercial.verify_portal_code($1, $2)", [
+      sessionHash,
+      "00".repeat(32),
+    ]);
+    assert(locked.rows[0]?.error_code === "P0025", "fifth wrong OTP locks");
+    await admin.query(
+      `update commercial.approval_challenges
+         set last_sent_at = now() - interval '61 seconds'
+       where request_id = $1`,
+      [ids.req],
+    );
+    for (let i = 0; i < 4; i += 1) {
+      await admin.query(sendSql, [sessionHash, `5${i}`.repeat(32), cipher.email, cipher.algorithm, cipher.nonce, cipher.ciphertext]);
+      await admin.query(
+        `update commercial.approval_challenges
+           set last_sent_at = now() - interval '61 seconds'
+         where request_id = $1 and consumed_at is null`,
+        [ids.req],
+      );
+    }
+    await expectFail(() => admin.query(sendSql, sendArgs), /OTP_RATE_LIMITED|P0027/i, "five sends per hour");
+  });
+
+  await test("concurrent portal approve applies one decision and one scope version", async () => {
+    const ids = {
+      job: "aaaae110-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      doc: "aaaae111-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      req: "aaaae112-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      line: "aaaae113-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      artifact: "aaaae114-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Concurrent approve",
+      number: "Q-000202",
+      snapshot: "12".repeat(32),
+      tokenHash: "22".repeat(32),
+      withPdf: true,
+    };
+    await insertPortalQuote(ids);
+    await admin.query(
+      `insert into commercial.approval_sessions (
+        workspace_id, id, request_id, session_hash, verified_email, expires_at, token_generation
+      ) values
+        ($1, $2, $3, $4, 'customer@example.com', now() + interval '1 hour', 1),
+        ($1, $5, $3, $6, 'customer@example.com', now() + interval '1 hour', 1)`,
+      [
+        A.ws,
+        "aaaae115-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        ids.req,
+        "32".repeat(32),
+        "aaaae116-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "33".repeat(32),
+      ],
+    );
+    const decideSql = `select decision, replayed from commercial.decide_portal_quote(
+      $1, $2::uuid, 'approve', 'Riley Chen', 'apr04.v1', 'I confirm', true, $3, null, '{}'::jsonb, 1,
+      $4, $5, 1, $6, $7, $4, $5, 1, $6, $7
+    )`;
+    const left = new Client({ connectionString: url });
+    const right = new Client({ connectionString: url });
+    await left.connect();
+    await right.connect();
+    try {
+      const results = await Promise.allSettled([
+        left.query(decideSql, [
+          "32".repeat(32),
+          "aaaae117-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          ids.snapshot,
+          cipher.email,
+          cipher.algorithm,
+          cipher.nonce,
+          cipher.ciphertext,
+        ]),
+        right.query(decideSql, [
+          "33".repeat(32),
+          "aaaae118-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          ids.snapshot,
+          cipher.email,
+          cipher.algorithm,
+          cipher.nonce,
+          cipher.ciphertext,
+        ]),
+      ]);
+      const ok = results.filter((row) => row.status === "fulfilled");
+      const failed = results.filter((row) => row.status === "rejected");
+      assert(ok.length === 1, "exactly one concurrent approve succeeds");
+      assert(failed.length === 1, "the other concurrent approve fails");
+      const err = failed[0]?.status === "rejected" ? String(failed[0].reason?.message ?? failed[0].reason) : "";
+      assert(/ALREADY_DECIDED|CONCURRENT_DECISION|REQUEST_UNAVAILABLE|P0022|P0028|P0020/i.test(err), `loser error was ${err}`);
+    } finally {
+      await left.end();
+      await right.end();
+    }
+    const decisions = await admin.query(
+      "select count(*)::int as n from commercial.approval_decisions where request_id = $1",
+      [ids.req],
+    );
+    assert(decisions.rows[0]?.n === 1, "one decision row");
+    const job = await admin.query(
+      "select j.scope_version from commercial.jobs j where j.id = $1",
+      [ids.job],
+    );
+    assert(job.rows[0]?.scope_version === 1, "scope applied once");
+    const quote = await admin.query("select lifecycle from commercial.documents where id = $1", [ids.doc]);
+    assert(quote.rows[0]?.lifecycle === "accepted", "document accepted");
+    const scopes = await admin.query("select count(*)::int as n from commercial.scope_entries where job_id = $1", [
+      ids.job,
+    ]);
+    assert(scopes.rows[0]?.n === 1, "one scope entry");
+  });
+
+  await test("a job holds one pending approval until the prior request is superseded", async () => {
+    const ids = {
+      job: "aaaae120-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      doc: "aaaae121-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      req: "aaaae122-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      line: "aaaae123-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      artifact: "aaaae124-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Pending unique",
+      number: "Q-000203",
+      snapshot: "13".repeat(32),
+      tokenHash: "23".repeat(32),
+    };
+    await insertPortalQuote(ids);
+    await expectFail(
+      () =>
+        admin.query(
+          `insert into commercial.approval_requests (
+            workspace_id, id, job_id, document_id, purpose, recipient_email, token_hash,
+            token_key_version, state, expected_scope_version, expires_at, access_until
+          ) values ($1, $2, $3, $4, 'approval', 'other@example.com', $5, 1, 'pending', 0, now() + interval '14 days', now() + interval '90 days')`,
+          [A.ws, "aaaae125-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ids.job, ids.doc, "24".repeat(32)],
+        ),
+      /approval_requests_pending|unique/i,
+      "second pending request",
+    );
+    await admin.query(`update commercial.approval_requests set state = 'superseded' where id = $1`, [ids.req]);
+    const inserted = await admin.query(
+      `insert into commercial.approval_requests (
+        workspace_id, id, job_id, document_id, purpose, recipient_email, token_hash,
+        token_key_version, state, expected_scope_version, expires_at, access_until
+      ) values ($1, $2, $3, $4, 'approval', 'other@example.com', $5, 1, 'pending', 0, now() + interval '14 days', now() + interval '90 days')
+      returning id`,
+      [A.ws, "aaaae125-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ids.job, ids.doc, "24".repeat(32)],
+    );
+    assert(inserted.rows[0]?.id === "aaaae125-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "new pending after supersede");
+    const pending = await admin.query(
+      `select count(*)::int as n from commercial.approval_requests
+       where job_id = $1 and state = 'pending' and purpose = 'approval'`,
+      [ids.job],
+    );
+    assert(pending.rows[0]?.n === 1, "one pending remains");
+  });
+
+  await test("server-time expiry rejects approve even after a valid session is opened", async () => {
+    const ids = {
+      job: "aaaae130-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      doc: "aaaae131-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      req: "aaaae132-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      line: "aaaae133-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      artifact: "aaaae134-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      title: "Expiry race",
+      number: "Q-000204",
+      snapshot: "14".repeat(32),
+      tokenHash: "25".repeat(32),
+      withPdf: true,
+    };
+    await insertPortalQuote(ids);
+    await admin.query(
+      `insert into commercial.approval_sessions (
+        workspace_id, id, request_id, session_hash, verified_email, expires_at, token_generation
+      ) values ($1, $2, $3, $4, 'customer@example.com', now() + interval '1 hour', 1)`,
+      [A.ws, "aaaae135-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ids.req, "34".repeat(32)],
+    );
+    await admin.query(`update commercial.approval_requests set expires_at = now() - interval '1 millisecond' where id = $1`, [
+      ids.req,
+    ]);
+    await expectFail(
+      () =>
+        admin.query(
+          `select decision from commercial.decide_portal_quote(
+            $1, $2::uuid, 'approve', 'Riley Chen', 'apr04.v1', 'I confirm', true, $3, null, '{}'::jsonb, 1,
+            $4, $5, 1, $6, $7, $4, $5, 1, $6, $7
+          )`,
+          [
+            "34".repeat(32),
+            "aaaae136-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            ids.snapshot,
+            cipher.email,
+            cipher.algorithm,
+            cipher.nonce,
+            cipher.ciphertext,
+          ],
+        ),
+      /REQUEST_EXPIRED|P0021/i,
+      "late approve after expiry",
+    );
+    await admin.query("select commercial.expire_due_job_approvals($1, $2)", [A.ws, ids.job]);
+    const after = await admin.query("select state from commercial.approval_requests where id = $1", [ids.req]);
+    assert(after.rows[0]?.state === "expired", "request marked expired");
+    const quote = await admin.query("select lifecycle from commercial.documents where id = $1", [ids.doc]);
+    assert(quote.rows[0]?.lifecycle === "expired", "document marked expired");
   });
 
   console.log(`${passed} passed, ${failed} failed`);

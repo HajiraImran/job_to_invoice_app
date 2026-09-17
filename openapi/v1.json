@@ -434,11 +434,116 @@
           }
         ],
         "responses": {
-          "200": { "description": "Masked recipient, template_id, delivery state, and safe timestamps" },
+          "200": { "description": "Masked recipient, template_id, delivery state, request_state, and safe timestamps" },
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant job or request" },
           "422": { "description": "Invalid job id" }
+        }
+      }
+    },
+    "/v1/portal/exchange": {
+      "post": {
+        "summary": "Exchange a fragment approval token for a preverified portal session",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["token"],
+                "properties": { "token": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Masked email, CSRF nonce, and access_state. Raw token is not logged or returned." },
+          "404": { "description": "REQUEST_UNAVAILABLE" },
+          "409": { "description": "REQUEST_EXPIRED" }
+        }
+      }
+    },
+    "/v1/portal/code/send": {
+      "post": {
+        "summary": "Send a bound-email verification code (EMAIL03)",
+        "security": [],
+        "responses": {
+          "202": { "description": "Generic sent acknowledgement; the code is never returned" },
+          "401": { "description": "Missing portal session or CSRF" },
+          "429": { "description": "RATE_LIMITED" }
+        }
+      }
+    },
+    "/v1/portal/code/verify": {
+      "post": {
+        "summary": "Verify the bound-email code and rotate CSRF",
+        "security": [],
+        "responses": {
+          "200": { "description": "Verified one-hour session with rotated CSRF" },
+          "422": { "description": "Incorrect or expired code" },
+          "429": { "description": "Locked or rate limited" }
+        }
+      }
+    },
+    "/v1/portal/document": {
+      "get": {
+        "summary": "Bound quote snapshot after verification",
+        "security": [],
+        "responses": {
+          "200": { "description": "Snapshot, PDF state, consent text, and allowed_actions" },
+          "404": { "description": "REQUEST_UNAVAILABLE" }
+        }
+      }
+    },
+    "/v1/portal/decision": {
+      "post": {
+        "summary": "Approve or decline the bound quote (TX02)",
+        "security": [],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Decision receipt; does not claim payment" },
+          "403": { "description": "view_only purpose cannot decide" },
+          "409": { "description": "ALREADY_DECIDED, REQUEST_EXPIRED, or concurrent first-writer-wins" }
+        }
+      }
+    },
+    "/v1/portal/receipt": {
+      "get": {
+        "summary": "Decision receipt",
+        "security": [],
+        "responses": {
+          "200": { "description": "Decision time and revision; payment is not claimed" },
+          "404": { "description": "REQUEST_UNAVAILABLE" }
+        }
+      }
+    },
+    "/v1/portal/download": {
+      "get": {
+        "summary": "Authorized 5-minute private PDF URL for the bound document",
+        "security": [],
+        "responses": {
+          "200": { "description": "Artifact state or a 5-minute private download URL bound to this request" },
+          "404": { "description": "Unknown, expired, or cross-tenant request" }
+        }
+      }
+    },
+    "/v1/portal/report": {
+      "post": {
+        "summary": "Bounded abuse report",
+        "security": [],
+        "responses": {
+          "202": { "description": "Report accepted" },
+          "422": { "description": "Unknown reason" }
         }
       }
     },
@@ -532,7 +637,8 @@
         "required": ["preview_hash", "recipient_email"],
         "properties": {
           "preview_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "recipient_email": { "type": "string", "maxLength": 254 }
+          "recipient_email": { "type": "string", "maxLength": 254 },
+          "replace_pending_request_id": { "type": "string", "format": "uuid" }
         }
       }
     }

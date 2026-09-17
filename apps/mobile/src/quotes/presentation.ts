@@ -234,6 +234,8 @@ export type OwnerRequestRecord = {
   retry_count: number;
   retryable: boolean;
   terminal: boolean;
+  request_state?: string | null;
+  decided_at?: string | null;
 };
 
 export type DeliveryStatusKind =
@@ -305,4 +307,21 @@ export function presentDeliveryStatus(input: {
     return { kind: "failed", label: copy.requestFailed, showRetry: true, retryBusy: input.checking, acceptedNotDelivered: false };
   }
   return { kind: "loading", label: copy.requestLoading, showRetry: true, retryBusy: input.checking, acceptedNotDelivered: false };
+}
+
+export function requestStateLabel(state: string | null | undefined): string | undefined {
+  switch (state) {
+    case "pending":
+      return copy.requestStatePending;
+    case "approved":
+      return copy.requestStateApproved;
+    case "declined":
+      return copy.requestStateDeclined;
+    case "expired":
+      return copy.requestStateExpired;
+    case "superseded":
+      return copy.requestStateSuperseded;
+    default:
+      return undefined;
+  }
 }

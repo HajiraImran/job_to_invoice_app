@@ -9,6 +9,6 @@
     "allowImportingTsExtensions": false,
     "plugins": [{ "name": "next" }]
   },
-  "include": ["app", "next-env.d.ts", ".next/types/**/*.ts"],
+  "include": ["app", "src", "next-env.d.ts", ".next/types/**/*.ts"],
   "exclude": ["node_modules"]
 }

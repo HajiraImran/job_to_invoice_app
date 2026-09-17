@@ -223,6 +223,8 @@ export function presentOwnerRequest(row: {
   retry_count: string | number;
   created_at: Date | string;
   updated_at: Date | string;
+  request_state?: string;
+  decided_at?: Date | string | null;
 }) {
   return {
     request_id: row.request_id,
@@ -233,6 +235,8 @@ export function presentOwnerRequest(row: {
     revision_no: row.revision_no,
     template_id: row.template_id,
     delivery_state: row.delivery_state,
+    request_state: row.request_state ?? null,
+    decided_at: row.decided_at ? asIso(row.decided_at) : null,
     recipient_email_masked: maskEmail(row.recipient_email),
     last_event_at: asIso(row.last_event_at),
     retry_count: asCents(row.retry_count),
@@ -698,6 +702,7 @@ export function registerQuotePublishRoutes(
       preview_hash: parsed.value.preview_hash,
       expectedVersion,
       recipient_email: recipient.normalized,
+      replace_pending_request_id: parsed.value.replace_pending_request_id ?? null,
     });
     const approvalToken = generateApprovalToken();
     let tokenHash: string;
@@ -750,7 +755,7 @@ export function registerQuotePublishRoutes(
                     request_id, delivery_state, replayed
              from commercial.publish_quote_draft(
                $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7,
-               $8, $9, $10, $11::integer, $12::bytea, $13::bytea, $14::bytea, $15, $16::integer, $17::timestamptz, $18::timestamptz
+               $8, $9, $10, $11::integer, $12::bytea, $13::bytea, $14::bytea, $15, $16::integer, $17::timestamptz, $18::timestamptz, $19::uuid
              )`,
             [
               provisioned.actor_id,
@@ -771,6 +776,7 @@ export function registerQuotePublishRoutes(
               deliveryKeyVersion,
               expiresAt.toISOString(),
               expiresAt.toISOString(),
+              parsed.value.replace_pending_request_id ?? null,
             ],
           );
           return { kind: "ok" as const, row: published.rows[0] };
@@ -916,9 +922,11 @@ export function registerQuotePublishRoutes(
           retry_count: string | number;
           created_at: Date | string;
           updated_at: Date | string;
+          request_state: string;
+          decided_at: Date | string | null;
         }>(
           `select request_id, document_id, job_id, number, revision_no, template_id, delivery_state,
-                  recipient_email, last_event_at, retry_count, created_at, updated_at
+                  recipient_email, last_event_at, retry_count, created_at, updated_at, request_state, decided_at
            from commercial.owner_job_request($1::uuid, $2::uuid)`,
           [owner.workspace_id, params.jobId],
         );

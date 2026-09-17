@@ -247,3 +247,24 @@ export async function withTenant<T>(
     options,
   );
 }
+
+export async function withPortal<T>(
+  pool: Pool,
+  workspaceId: string,
+  requestId: string,
+  fn: (client: PoolClient) => Promise<T>,
+  options?: AcquireConnectOptions,
+): Promise<T> {
+  return withApiRole(
+    pool,
+    async (client) => {
+      try {
+        await client.query("select identity.set_local_portal_context($1::uuid, $2::uuid)", [workspaceId, requestId]);
+      } catch (error) {
+        throw new ApiTransactionError("tenant_context_failed", sqlstateFromUnknown(error));
+      }
+      return fn(client);
+    },
+    options,
+  );
+}

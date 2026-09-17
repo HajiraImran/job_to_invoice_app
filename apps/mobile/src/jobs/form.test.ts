@@ -120,6 +120,10 @@ describe("jobs list and detail states", () => {
     expect(nextActionCopy("quote", "draft")).toBe("quote");
     expect(nextActionCopy("direct_invoice", "draft")).toBe("direct");
     expect(nextActionCopy("quote", "active")).toBe("published");
+    expect(nextActionCopy("quote", "active", "declined")).toBe("quote");
+    expect(nextActionCopy("quote", "active", "accepted")).toBe("published");
+    expect(nextActionCopy("quote", "active", "expired")).toBe("quote");
+    expect(nextActionCopy("quote", "active", "superseded")).toBe("quote");
   });
 });
 

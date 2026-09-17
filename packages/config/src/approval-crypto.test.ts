@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   DELIVERY_ALGORITHM,
   decryptDeliveryToken,
+  decryptUtf8,
   encodeFragmentToken,
   encryptDeliveryToken,
   encryptRecipientEmail,
+  encryptUtf8,
   generateApprovalToken,
   hashApprovalToken,
+  hashOtp,
   parseVersionedSecret,
 } from "./approval-crypto.ts";
 
@@ -39,5 +42,16 @@ describe("approval delivery crypto", () => {
     const secret = parseVersionedSecret("APPROVAL_DELIVERY_ENCRYPTION_KEY", "delivery-key-material-ok");
     const encrypted = encryptRecipientEmail("owner@jobtoinvoice.test", secret);
     expect(encrypted.ciphertext.includes(Buffer.from("owner@jobtoinvoice.test"))).toBe(false);
+  });
+
+  it("hashes OTP codes and round-trips UTF-8 delivery payloads", () => {
+    const otp = parseVersionedSecret("OTP_HASH_KEY", "otp-hash-key-material-ok");
+    const hashed = hashOtp("123456", otp);
+    expect(hashed.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashed.hash).not.toContain("123456");
+    const delivery = parseVersionedSecret("APPROVAL_DELIVERY_ENCRYPTION_KEY", "delivery-key-material-ok");
+    const encrypted = encryptUtf8("123456", delivery);
+    expect(decryptUtf8(encrypted, delivery)).toBe("123456");
+    expect(encrypted.ciphertext.includes(Buffer.from("123456"))).toBe(false);
   });
 });

@@ -22,6 +22,7 @@ import { registerDraftRoutes } from "./drafts.ts";
 import { registerJobRoutes } from "./jobs.ts";
 import { registerQuotePublishRoutes } from "./quotes.ts";
 import { registerEmailWebhookRoutes } from "./webhooks-email.ts";
+import { registerPortalRoutes } from "./portal.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
@@ -37,6 +38,7 @@ export type AppDeps = {
   pool?: Pool;
   logOwnerMe?: (event: OwnerMeSafeEvent) => void;
   logQuotePublish?: (event: QuotePublishSafeEvent) => void;
+  logPortal?: (event: { event: "portal"; request_id: string; status: number; stage: string; sqlstate?: string }) => void;
   documentsStore?: { presignGet: (key: string) => Promise<string> };
   nowSec?: () => number;
 };
@@ -424,6 +426,7 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerEmailWebhookRoutes(app, deps);
+  registerPortalRoutes(app, deps);
 
   return app;
 }

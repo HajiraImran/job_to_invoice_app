@@ -1,3 +1,5 @@
+import { copy } from "../i18n/en.ts";
+
 export type JobSummary = {
   id: string;
   customer_id: string;
@@ -154,12 +156,44 @@ export function presentJobDetail(input: {
   return { kind: "loaded", showRetry: false, job: input.job };
 }
 
-export function nextActionCopy(mode: string, lifecycle: string): "quote" | "direct" | "published" | "none" {
+export function nextActionCopy(
+  mode: string,
+  lifecycle: string,
+  quoteLifecycle?: string | null,
+): "quote" | "direct" | "published" | "none" {
+  if (lifecycle === "draft") {
+    return mode === "direct_invoice" ? "direct" : "quote";
+  }
   if (lifecycle === "active") {
+    if (quoteLifecycle === "accepted") {
+      return "published";
+    }
+    if (quoteLifecycle && quoteLifecycle !== "issued") {
+      return "quote";
+    }
     return "published";
   }
   if (lifecycle !== "draft") {
     return "none";
   }
   return mode === "direct_invoice" ? "direct" : "quote";
+}
+
+export function quoteLifecycleLabel(lifecycle: string): string {
+  switch (lifecycle) {
+    case "accepted":
+      return copy.quoteLifecycleAccepted;
+    case "declined":
+      return copy.quoteLifecycleDeclined;
+    case "expired":
+      return copy.quoteLifecycleExpired;
+    case "superseded":
+      return copy.quoteLifecycleSuperseded;
+    case "withdrawn":
+      return copy.quoteLifecycleWithdrawn;
+    case "issued":
+      return copy.quoteLifecycleIssued;
+    default:
+      return lifecycle;
+  }
 }

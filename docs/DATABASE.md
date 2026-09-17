@@ -263,7 +263,7 @@ Composite FKs:
 
 Delivery attempt states: queued, submitting, accepted_by_provider, delivered, bounced, complained, failed (NTF03).
 
-`effect_key` for first-send EMAIL01 is `{workspace_id}:{document_id}:EMAIL01:{request_id}`. `generate_original_pdf` uses `{workspace_id}:{document_id}:original_pdf`. Email backoff: 1m, 5m, 30m, 2h, 8h; max 5 attempts (D-017). PDF backoff remains 30s, 2m, 10m, 30m (D-016). Encrypted delivery payloads are purged within 24 hours of terminal delivery (`delivered`/`bounced`/`complained`/`failed`). Do not purge `queued`/`submitting`/`accepted_by_provider`.
+`effect_key` for first-send EMAIL01 is `{workspace_id}:{document_id}:EMAIL01:{request_id}`. EMAIL03 is `{workspace_id}:{request_id}:EMAIL03:{challenge_id}`. EMAIL04/05 are `{workspace_id}:{document_id}:EMAIL04|EMAIL05:{decision_id}` (one effect each; retries update the same row). `generate_original_pdf` uses `{workspace_id}:{document_id}:original_pdf`. Email backoff: 1m, 5m, 30m, 2h, 8h; max 5 attempts (D-017). PDF backoff remains 30s, 2m, 10m, 30m (D-016). Encrypted delivery payloads are purged within 24 hours of terminal delivery (`delivered`/`bounced`/`complained`/`failed`). Do not purge `queued`/`submitting`/`accepted_by_provider`. EMAIL03/05 skip the original-PDF wait; EMAIL01/04 wait.
 
 Idempotency: rows for publish, approve, invoice, credit, payment, refund, reverse, deletion and entitlement are `permanence=financial` and **never expire**. Unique `operation_id` is also stored on the money/effect row (`ledger_entries.operation_id`, document issue, decision). Only non-financial cached response bodies may set `expires_at` (30 days). Deleting an expired ephemeral row must not allow a second financial write.
 

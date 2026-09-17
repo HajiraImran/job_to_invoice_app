@@ -7,6 +7,7 @@ export type FieldError = { field: string; message: string };
 export type QuotePublishInput = {
   preview_hash: string;
   recipient_email: string;
+  replace_pending_request_id?: string;
 };
 
 export type QuotePublishParseResult =
@@ -20,7 +21,7 @@ export function parseQuotePublish(input: unknown): QuotePublishParseResult {
   const record = input as Record<string, unknown>;
   const field_errors: FieldError[] = [];
   for (const key of Object.keys(record)) {
-    if (key !== "preview_hash" && key !== "recipient_email") {
+    if (key !== "preview_hash" && key !== "recipient_email" && key !== "replace_pending_request_id") {
       field_errors.push({ field: key, message: "Unknown fields are not allowed." });
     }
   }
@@ -38,8 +39,31 @@ export function parseQuotePublish(input: unknown): QuotePublishParseResult {
       recipient_email = parsedEmail.display;
     }
   }
+  let replace_pending_request_id: string | undefined;
+  if (record.replace_pending_request_id !== undefined) {
+    if (
+      typeof record.replace_pending_request_id !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        record.replace_pending_request_id,
+      )
+    ) {
+      field_errors.push({
+        field: "replace_pending_request_id",
+        message: "A request UUID is required to replace a pending quote.",
+      });
+    } else {
+      replace_pending_request_id = record.replace_pending_request_id;
+    }
+  }
   if (field_errors.length > 0 || typeof record.preview_hash !== "string" || !recipient_email) {
     return { ok: false, field_errors };
   }
-  return { ok: true, value: { preview_hash: record.preview_hash, recipient_email } };
+  return {
+    ok: true,
+    value: {
+      preview_hash: record.preview_hash,
+      recipient_email,
+      ...(replace_pending_request_id ? { replace_pending_request_id } : {}),
+    },
+  };
 }

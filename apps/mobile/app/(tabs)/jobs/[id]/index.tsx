@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
-import { nextActionCopy, presentJobDetail, type JobDetail } from "../../../../src/jobs/presentation.ts";
+import { nextActionCopy, presentJobDetail, quoteLifecycleLabel, type JobDetail } from "../../../../src/jobs/presentation.ts";
 import { jobQuotePath, jobPublishPath, jobRequestPath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
 import { quoteActionLabel } from "../../../../src/quotes/presentation.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
@@ -57,7 +57,9 @@ export default function JobDetailScreen() {
     job,
     error,
   });
-  const next = view.job ? nextActionCopy(view.job.mode, view.job.lifecycle) : "none";
+  const next = view.job
+    ? nextActionCopy(view.job.mode, view.job.lifecycle, view.job.current_quote?.lifecycle)
+    : "none";
   const quoteAction = quoteActionLabel(Boolean(view.job?.quote_draft));
   const quoteDisabled =
     opening || auth.snapshot.status === "access_expired" || auth.snapshot.status === "offline_cached";
@@ -165,7 +167,13 @@ export default function JobDetailScreen() {
                 style={styles.primary}
               >
                 <Text style={styles.primaryLabel}>
-                  {opening ? copy.quoteSaving : quoteAction === "open" ? copy.openQuote : copy.createQuote}
+                  {opening
+                    ? copy.quoteSaving
+                    : view.job?.current_quote && view.job.current_quote.lifecycle !== "issued"
+                      ? copy.createRevision
+                      : quoteAction === "open"
+                        ? copy.openQuote
+                        : copy.createQuote}
                 </Text>
               </Pressable>
             ) : null}
@@ -173,6 +181,7 @@ export default function JobDetailScreen() {
               <>
                 <Text style={styles.section}>{copy.quoteNumber}</Text>
                 <Text style={styles.body}>{view.job.current_quote.number}</Text>
+                <Text style={styles.body}>{quoteLifecycleLabel(view.job.current_quote.lifecycle)}</Text>
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => router.push(jobPublishPath(jobId))}

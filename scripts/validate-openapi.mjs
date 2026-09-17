@@ -65,9 +65,40 @@ if (spec.paths?.["/v1/drafts"] && !spec.paths["/v1/drafts/{draftId}"]) {
   errors.push("draft collection routes must not be declared until they are implemented");
 }
 
+if (!spec.paths?.["/v1/portal/exchange"]?.post) {
+  errors.push("POST /v1/portal/exchange is required");
+}
+if (!spec.paths?.["/v1/portal/code/send"]?.post) {
+  errors.push("POST /v1/portal/code/send is required");
+}
+if (!spec.paths?.["/v1/portal/code/verify"]?.post) {
+  errors.push("POST /v1/portal/code/verify is required");
+}
+if (!spec.paths?.["/v1/portal/document"]?.get) {
+  errors.push("GET /v1/portal/document is required");
+}
+if (!spec.paths?.["/v1/portal/decision"]?.post) {
+  errors.push("POST /v1/portal/decision is required");
+}
+if (spec.paths?.["/v1/portal/decision"]?.post && !spec.paths["/v1/portal/decision"].post.parameters?.some((item) => item.name === "Idempotency-Key")) {
+  errors.push("POST /v1/portal/decision requires Idempotency-Key");
+}
+if (!spec.paths?.["/v1/portal/receipt"]?.get) {
+  errors.push("GET /v1/portal/receipt is required");
+}
+if (!spec.paths?.["/v1/portal/download"]?.get) {
+  errors.push("GET /v1/portal/download is required");
+}
+if (spec.paths?.["/v1/portal/download"]?.get && !/5-minute|five-minute/i.test(spec.paths["/v1/portal/download"].get.responses?.["200"]?.description ?? "")) {
+  errors.push("GET /v1/portal/download must describe the 5-minute URL");
+}
+if (!spec.paths?.["/v1/portal/report"]?.post) {
+  errors.push("POST /v1/portal/report is required");
+}
+
 if (errors.length > 0) {
   console.error(errors.join("\n"));
   process.exit(1);
 }
 
-console.log("OpenAPI 3.1 owner jobs, quote-draft, and quote-publish contract is valid.");
+console.log("OpenAPI 3.1 owner jobs, quote-publish, and portal contract is valid.");

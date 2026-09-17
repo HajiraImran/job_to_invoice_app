@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderEmail01, reviewHref, sendResendEmail } from "./email.ts";
+import { renderEmail01, renderEmail03, renderEmail04, renderEmail05, reviewHref, sendResendEmail } from "./email.ts";
 
 describe("EMAIL01 template", () => {
   it("renders a fragment href without a token query parameter or PDF attachment", () => {
@@ -19,6 +19,34 @@ describe("EMAIL01 template", () => {
     expect(rendered.text).toContain("does not include a PDF");
     expect(rendered.html.toLowerCase()).not.toContain("attachment");
     expect(rendered.html).not.toContain("?token=");
+  });
+});
+
+describe("EMAIL03 EMAIL04 EMAIL05 templates", () => {
+  it("keeps the verification code free of quote totals and does not mint a second token", () => {
+    const code = renderEmail03({ appName: "Job to Invoice", code: "123456" });
+    expect(code.subject).toBe("Job to Invoice verification code");
+    expect(code.text).toContain("123456");
+    expect(code.text).toContain("ten minutes");
+    expect(code.text.toLowerCase()).not.toContain("quote");
+    expect(code.html).not.toMatch(/\$|25980|Q-000001|total/i);
+    const receipt = renderEmail04({
+      appName: "Job to Invoice",
+      businessName: "Quote Co",
+      number: "Q-000001",
+      revisionNo: 1,
+      decision: "approve",
+    });
+    expect(receipt.subject).toBe("Quote Q-000001 accepted");
+    expect(receipt.text).toContain("does not collect payment");
+    const owner = renderEmail05({
+      appName: "Job to Invoice",
+      number: "Q-000001",
+      revisionNo: 1,
+      decision: "decline",
+    });
+    expect(owner.subject).toBe("Quote Q-000001 was declined");
+    expect(owner.html).not.toContain("/review#");
   });
 });
 

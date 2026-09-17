@@ -182,8 +182,12 @@ export function firstQuoteFieldError(errors: Record<string, string>): string | u
   return Object.keys(errors)[0];
 }
 
-export function quotePublishBody(previewHash: string, recipientEmail: string) {
-  return parseQuotePublish({ preview_hash: previewHash, recipient_email: recipientEmail });
+export function quotePublishBody(previewHash: string, recipientEmail: string, replacePendingRequestId?: string) {
+  return parseQuotePublish({
+    preview_hash: previewHash,
+    recipient_email: recipientEmail,
+    ...(replacePendingRequestId ? { replace_pending_request_id: replacePendingRequestId } : {}),
+  });
 }
 
 export type DraftPayload = DraftPayloadInput;

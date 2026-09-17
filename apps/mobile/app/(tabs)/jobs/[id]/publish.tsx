@@ -72,6 +72,35 @@ export default function QuotePublishScreen() {
       setLoading(false);
       return;
     }
+    if (jobResult.data.quote_draft) {
+      const result = await runOwnerRequest<QuotePreviewRecord>({
+        path: `/v1/drafts/${jobResult.data.quote_draft.id}/preview`,
+        method: "POST",
+        ifMatch: jobResult.data.quote_draft.version,
+      });
+      if (result.ok) {
+        setPreview(result.data);
+        setPublished(undefined);
+        setPdfDownload(undefined);
+        const existing = result.data.snapshot.customer.email?.trim();
+        if (existing) {
+          setRecipientEmail(existing);
+        }
+        setLoading(false);
+        return;
+      }
+      setError({
+        message:
+          result.error.code === "VALIDATION_FAILED"
+            ? copy.quotePreviewError
+            : result.error.message || copy.quotePreviewError,
+        retryable: result.error.retryable || result.error.status === 0,
+        status: result.error.status,
+        code: result.error.code,
+      });
+      setLoading(false);
+      return;
+    }
     if (jobResult.data.current_quote) {
       const doc = await runOwnerRequest<PublishedQuoteRecord>({
         path: `/v1/documents/${jobResult.data.current_quote.id}`,
@@ -95,35 +124,7 @@ export default function QuotePublishScreen() {
       setLoading(false);
       return;
     }
-    if (!jobResult.data.quote_draft) {
-      setError({ message: copy.quotePreviewError, retryable: false, status: 422 });
-      setLoading(false);
-      return;
-    }
-    const result = await runOwnerRequest<QuotePreviewRecord>({
-      path: `/v1/drafts/${jobResult.data.quote_draft.id}/preview`,
-      method: "POST",
-      ifMatch: jobResult.data.quote_draft.version,
-    });
-    if (result.ok) {
-      setPreview(result.data);
-      setPublished(undefined);
-      setPdfDownload(undefined);
-      const existing = result.data.snapshot.customer.email?.trim();
-      if (existing) {
-        setRecipientEmail(existing);
-      }
-    } else {
-      setError({
-        message:
-          result.error.code === "VALIDATION_FAILED"
-            ? copy.quotePreviewError
-            : result.error.message || copy.quotePreviewError,
-        retryable: result.error.retryable || result.error.status === 0,
-        status: result.error.status,
-        code: result.error.code,
-      });
-    }
+    setError({ message: copy.quotePreviewError, retryable: false, status: 422 });
     setLoading(false);
   }, [jobId, runOwnerRequest]);
 

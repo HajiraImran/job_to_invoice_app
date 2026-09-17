@@ -1,5 +1,6 @@
 import {
   decryptDeliveryToken,
+  decryptUtf8,
   encodeFragmentToken,
   parseVersionedSecret,
   type VersionedSecret,
@@ -32,6 +33,65 @@ export function renderEmail01(input: Email01Input): { subject: string; text: str
 <p>${escapeHtml(input.businessName)} sent quote ${escapeHtml(input.number)} R${input.revisionNo} for your review.</p>
 <p>Open the review link, then request a verification code at the bound email address. This message does not include a PDF.</p>
 <p><a href="${escapeAttribute(input.href)}">Review quote</a></p>
+</body></html>`;
+  return { subject, text, html };
+}
+
+export function renderEmail03(input: { appName: string; code: string }): { subject: string; text: string; html: string } {
+  const subject = `${input.appName} verification code`;
+  const text = [
+    input.appName,
+    `Your verification code is ${input.code}.`,
+    "It expires in ten minutes.",
+    "If you did not request this code, ignore this message.",
+  ].join("\n");
+  const html = `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>Your verification code is ${escapeHtml(input.code)}. It expires in ten minutes.</p>
+<p>If you did not request this code, ignore this message.</p>
+</body></html>`;
+  return { subject, text, html };
+}
+
+export function renderEmail04(input: {
+  appName: string;
+  businessName: string;
+  number: string;
+  revisionNo: number;
+  decision: string;
+}): { subject: string; text: string; html: string } {
+  const action = input.decision === "approve" ? "accepted" : "declined";
+  const subject = `Quote ${input.number} ${action}`;
+  const text = [
+    input.appName,
+    `You ${action} quote ${input.number} R${input.revisionNo} from ${input.businessName}.`,
+    "This message does not collect payment.",
+  ].join("\n");
+  const html = `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>You ${escapeHtml(action)} quote ${escapeHtml(input.number)} R${input.revisionNo} from ${escapeHtml(input.businessName)}.</p>
+<p>This message does not collect payment.</p>
+</body></html>`;
+  return { subject, text, html };
+}
+
+export function renderEmail05(input: {
+  appName: string;
+  number: string;
+  revisionNo: number;
+  decision: string;
+}): { subject: string; text: string; html: string } {
+  const action = input.decision === "approve" ? "accepted" : "declined";
+  const subject = `Quote ${input.number} was ${action}`;
+  const text = [
+    input.appName,
+    `The customer ${action} quote ${input.number} R${input.revisionNo}.`,
+    "Open the job in the owner app to review the updated status.",
+  ].join("\n");
+  const html = `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>The customer ${escapeHtml(action)} quote ${escapeHtml(input.number)} R${input.revisionNo}.</p>
+<p>Open the job in the owner app to review the updated status.</p>
 </body></html>`;
   return { subject, text, html };
 }
@@ -152,6 +212,15 @@ export async function sendResendEmail(input: {
   }
 }
 
+function decodeReceipt(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as { decision?: unknown };
+    return parsed.decision === "approve" || parsed.decision === "decline" ? parsed.decision : "decline";
+  } catch {
+    return "decline";
+  }
+}
+
 function asBuffer(value: unknown): Buffer | undefined {
   if (Buffer.isBuffer(value)) {
     return value;
@@ -225,18 +294,48 @@ export async function processSendEmail(input: {
   }
 
   try {
-    const raw = decryptDeliveryToken(
-      { algorithm: "aes-256-gcm", keyVersion: claimed.key_version ?? 1, nonce, ciphertext },
-      secret,
-    );
-    const rendered = renderEmail01({
-      appName: input.appName,
-      businessName: claimed.business_name,
-      number: claimed.number,
-      revisionNo: Number(claimed.revision_no),
-      href: reviewHref(input.portalOrigin, encodeFragmentToken(raw)),
-    });
-    raw.fill(0);
+    const payload = { algorithm: "aes-256-gcm" as const, keyVersion: claimed.key_version ?? 1, nonce, ciphertext };
+    let rendered: { subject: string; text: string; html: string };
+    if (claimed.template_id === "EMAIL01") {
+      const raw = decryptDeliveryToken(payload, secret);
+      rendered = renderEmail01({
+        appName: input.appName,
+        businessName: claimed.business_name,
+        number: claimed.number,
+        revisionNo: Number(claimed.revision_no),
+        href: reviewHref(input.portalOrigin, encodeFragmentToken(raw)),
+      });
+      raw.fill(0);
+    } else if (claimed.template_id === "EMAIL03") {
+      const code = decryptUtf8(payload, secret);
+      rendered = renderEmail03({ appName: input.appName, code });
+    } else if (claimed.template_id === "EMAIL04") {
+      const decoded = decodeReceipt(decryptUtf8(payload, secret));
+      rendered = renderEmail04({
+        appName: input.appName,
+        businessName: claimed.business_name,
+        number: claimed.number,
+        revisionNo: Number(claimed.revision_no),
+        decision: decoded,
+      });
+    } else if (claimed.template_id === "EMAIL05") {
+      const decoded = decodeReceipt(decryptUtf8(payload, secret));
+      rendered = renderEmail05({
+        appName: input.appName,
+        number: claimed.number,
+        revisionNo: Number(claimed.revision_no),
+        decision: decoded,
+      });
+    } else {
+      await withWorkerRole(input.pool, async (client) => {
+        await client.query("select commercial.fail_send_email($1::uuid, $2, $3)", [
+          claimed.id,
+          "VALIDATION_FAILED",
+          true,
+        ]);
+      });
+      return "dead";
+    }
     const from = `${input.appName} <quotes@${input.fromDomain}>`;
     const send = input.send ?? ((payload) => sendResendEmail(payload));
     const result = await whileLeased(input.pool, claimed.id, () =>

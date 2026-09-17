@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
 import { jobDetailPath, jobPublishPath } from "../../../../src/jobs/routes.ts";
-import { presentDeliveryStatus, type OwnerRequestRecord } from "../../../../src/quotes/presentation.ts";
+import { presentDeliveryStatus, requestStateLabel, type OwnerRequestRecord } from "../../../../src/quotes/presentation.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
 import { colors, space, type } from "../../../../src/theme.ts";
 
@@ -75,6 +75,9 @@ export default function QuoteRequestScreen() {
             </Text>
             <Text style={styles.section}>{copy.quoteRecipientEmail}</Text>
             <Text style={styles.body}>{request.recipient_email_masked}</Text>
+            {requestStateLabel(request.request_state) ? (
+              <Text style={styles.body}>{requestStateLabel(request.request_state)}</Text>
+            ) : null}
             <Text style={styles.section}>{copy.quotePublished}</Text>
             <Text accessibilityLiveRegion="polite" style={view.kind === "delivered" ? styles.body : styles.banner}>
               {view.label}

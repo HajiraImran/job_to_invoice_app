@@ -15,7 +15,7 @@ select
   )
   and has_function_privilege(
     'api_app',
-    'commercial.publish_quote_draft(uuid, uuid, text, uuid, uuid, integer, text)',
+    'commercial.publish_quote_draft(uuid, uuid, text, uuid, uuid, integer, text, text, text, text, integer, bytea, bytea, bytea, text, integer, timestamptz, timestamptz, uuid)',
     'execute'
   )
   and not has_table_privilege('anon', 'commercial.documents', 'select')
@@ -25,12 +25,12 @@ select
   and not has_table_privilege('worker_app', 'commercial.outbox_tasks', 'select')
   and not has_function_privilege(
     'anon',
-    'commercial.publish_quote_draft(uuid, uuid, text, uuid, uuid, integer, text)',
+    'commercial.publish_quote_draft(uuid, uuid, text, uuid, uuid, integer, text, text, text, text, integer, bytea, bytea, bytea, text, integer, timestamptz, timestamptz, uuid)',
     'execute'
   )
   and not has_function_privilege(
     'worker_app',
-    'commercial.publish_quote_draft(uuid, uuid, text, uuid, uuid, integer, text)',
+    'commercial.publish_quote_draft(uuid, uuid, text, uuid, uuid, integer, text, text, text, text, integer, bytea, bytea, bytea, text, integer, timestamptz, timestamptz, uuid)',
     'execute'
   )
   as ok;

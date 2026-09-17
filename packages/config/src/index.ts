@@ -12,12 +12,18 @@ export {
   NONCE_BYTES,
   TOKEN_BYTES,
   aes256Key,
+  decodeFragmentToken,
   decryptDeliveryToken,
+  decryptUtf8,
   encodeFragmentToken,
+  encodeSessionSecret,
   encryptDeliveryToken,
   encryptRecipientEmail,
+  encryptUtf8,
   generateApprovalToken,
   hashApprovalToken,
+  hashOtp,
+  hashSessionSecret,
   parseVersionedSecret,
 } from "./approval-crypto.ts";
 export type { EncryptedDeliveryPayload, VersionedSecret } from "./approval-crypto.ts";

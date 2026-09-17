@@ -18,6 +18,7 @@ import {
   presentQuoteReview,
   quoteActionLabel,
   quotePublishBackControls,
+  requestStateLabel,
 } from "./presentation.ts";
 import { jobQuotePath, jobRequestPath } from "../jobs/routes.ts";
 
@@ -281,6 +282,19 @@ describe("quote editor states", () => {
       ok: true,
       value: { preview_hash: "ab".repeat(32), recipient_email: "customer@example.com" },
     });
+    const replaced = quotePublishBody(
+      "ab".repeat(32),
+      "customer@example.com",
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    );
+    expect(replaced.ok).toBe(true);
+    if (replaced.ok) {
+      expect(replaced.value.replace_pending_request_id).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    }
+    expect(requestStateLabel("approved")).toBe("Customer accepted");
+    expect(requestStateLabel("declined")).toBe("Customer declined");
+    expect(requestStateLabel("expired")).toBe("This request has expired. Ask the business for a new version.");
+    expect(requestStateLabel("superseded")).toBe("A newer version is available. This version cannot be approved.");
     expect(jobRequestPath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(
       "/(tabs)/jobs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/request",
     );

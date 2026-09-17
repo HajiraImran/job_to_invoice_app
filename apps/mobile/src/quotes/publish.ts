@@ -12,7 +12,7 @@ export type QuotePublishPreview = {
 export type QuotePublishRequest = {
   path: string;
   method: "POST";
-  body: { preview_hash: string; recipient_email: string };
+  body: { preview_hash: string; recipient_email: string; replace_pending_request_id?: string };
   idempotencyKey: string;
   ifMatch: number;
 };
@@ -27,13 +27,14 @@ export function beginConfirmedQuotePublish(input: {
   cancelled?: boolean;
   preview?: QuotePublishPreview;
   recipientEmail: string;
+  replacePendingRequestId?: string;
   inFlight: { current: boolean };
   idempotencyKey: string | undefined;
 }): ConfirmedQuotePublishStart {
   if (input.cancelled || !input.confirming || !input.preview || input.inFlight.current) {
     return { kind: "ignored" };
   }
-  const body = quotePublishBody(input.preview.preview_hash, input.recipientEmail);
+  const body = quotePublishBody(input.preview.preview_hash, input.recipientEmail, input.replacePendingRequestId);
   if (!body.ok) {
     return { kind: "invalid_email" };
   }
@@ -61,6 +62,7 @@ export async function executeConfirmedQuotePublish<T extends { number: string }>
   cancelled?: boolean;
   preview?: QuotePublishPreview;
   recipientEmail: string;
+  replacePendingRequestId?: string;
   inFlight: { current: boolean };
   idempotencyKey: { current: string | undefined };
   publish: (
@@ -78,6 +80,7 @@ export async function executeConfirmedQuotePublish<T extends { number: string }>
     cancelled: input.cancelled,
     preview: input.preview,
     recipientEmail: input.recipientEmail,
+    replacePendingRequestId: input.replacePendingRequestId,
     inFlight: input.inFlight,
     idempotencyKey: input.idempotencyKey.current,
   });

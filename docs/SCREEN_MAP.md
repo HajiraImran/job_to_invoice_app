@@ -117,7 +117,7 @@ Customer/site, scope total, current step, documents, activity. Next action varie
 
 Canceled jobs that retain a receivable must show it.
 
-Implemented route: `/(tabs)/jobs/[id]`. Quote-mode drafts show Create/Open quote. Direct-invoice jobs do not enter the quote editor. No fake ledger totals.
+Implemented route: `/(tabs)/jobs/[id]`. Quote-mode drafts show Create/Open quote. After publish, S08 shows quote lifecycle (`issued` / `accepted` / `declined` / `expired` / `superseded` / `withdrawn`) from GET `/v1/jobs/{id}` on focus refresh. Declined/expired/superseded quotes can open a revision. Direct-invoice jobs do not enter the quote editor. No fake ledger totals.
 
 ### S09 Quote editor
 
@@ -141,7 +141,7 @@ Implemented route: `/(tabs)/jobs/[id]/publish`. Review uses `POST /drafts/{id}/p
 
 ### S12 Request detail
 
-Implemented route: `/(tabs)/jobs/[id]/request`. Read-only delivery status with masked recipient, quote number/revision, and states Loading, Queued, Sending, Accepted by email provider — not yet confirmed delivered, Delivered, Bounced, Complained, Failed, Offline, Retry status check. Retry issues one GET. Resend, withdraw, and replace remain later. Queued/accepted is not Delivered (NTF03).
+Implemented route: `/(tabs)/jobs/[id]/request`. Read-only delivery status with masked recipient, quote number/revision, request_state (`pending` / `approved` / `declined` / `expired` / `superseded`), and delivery states Loading, Queued, Sending, Accepted by email provider — not yet confirmed delivered, Delivered, Bounced, Complained, Failed, Offline, Retry status check. Retry issues one GET. Resend, withdraw, and replace remain later. Queued/accepted is not Delivered (NTF03).
 
 ### S13 Extra work editor
 
@@ -195,15 +195,15 @@ Export status/download. Deletion consequences, type DELETE, progress, retained-r
 
 ### S25 Customer access
 
-Route is `/review` with the raw token only in the URL fragment (`#token`). Email and share links are exactly `{PORTAL_ORIGIN}/review#{token}`. Never a query parameter. Exchange via POST then clear the fragment. Business display name, document type, masked email, request/enter code. Invalid/expired/revoked → generic unavailable. No private scope before verification.
+Implemented route: `/review` (`#token` only; never `?token=`). Email and share links are exactly `{PORTAL_ORIGIN}/review#{token}`. Exchange via POST through the portal BFF, then `history.replaceState` drops the fragment. Business display name, document type, masked email, request/enter code. Invalid/expired/revoked → generic unavailable. No private scope before verification.
 
 ### S26 Customer review
 
-Full snapshot, prices, attachments, consent/name, approve/decline. Requires ready original PDF. Unticked acknowledgement (APR04). States: loading, read-only decided, superseded, expired, revoked. view_only: no approve controls (API05).
+Implemented route: `/review/document`. Full snapshot, prices, consent/name, approve/decline. Requires ready original PDF. Unticked acknowledgement (APR04). States: loading, read-only decided, superseded, expired, revoked. view_only: no approve controls (API05).
 
 ### S27 Customer receipt
 
-Decision/time/revision, downloads, business contact. Approval does not claim payment. view_only returns access metadata, not a consent receipt (API05).
+Implemented route: `/review/receipt`. Decision/time/revision, PDF download, no payment claim. view_only returns access metadata, not a consent receipt (API05).
 
 ### S28 Support console
 

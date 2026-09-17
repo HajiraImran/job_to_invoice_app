@@ -492,6 +492,10 @@ export function registerJobRoutes(
     }
     try {
       const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
+        await client.query("select commercial.expire_due_job_approvals($1::uuid, $2::uuid)", [
+          owner.workspace_id,
+          params.jobId,
+        ]);
         const result = await client.query<JobRow>(
           `select j.id, j.workspace_id, j.customer_id, c.name as customer_name, j.title, j.site_address_json,
                   j.no_site, j.lifecycle, j.mode, j.internal_notes, j.version, j.created_at, j.updated_at,

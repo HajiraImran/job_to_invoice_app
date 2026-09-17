@@ -1,8 +1,8 @@
 export default function Page() {
   return (
-    <main>
-      <h1>Job to Invoice portal foundation</h1>
-      <p>Customer approval screens are not implemented.</p>
+    <main className="portal">
+      <h1>Job to Invoice</h1>
+      <p>Open the review link from your email. This page does not list quotes.</p>
     </main>
   );
 }
