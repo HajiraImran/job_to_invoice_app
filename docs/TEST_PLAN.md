@@ -186,6 +186,12 @@ pnpm migrate:clean
 
 QA01 mailbox E2E, Maestro `.maestro/setup-onboarding.yaml`, VoiceOver, and physical SecureStore checks require `EXPO_PUBLIC_AUTH_PROJECT_URL` plus dashboard OTP settings from `docs/ENV.md`. They are not satisfied by unit mocks.
 
+Signed-out protected jobs navigation is covered by `apps/mobile/src/session/logic.test.ts` (cold start `/(tabs)/jobs` → `/(public)/welcome`, hold while restoring, no replace loop). Do not add magic-link OTP. Maestro is not used for this check because it needs a staging Auth project for a live session.
+
+Owner `GET /v1/me` client timeout is 15 seconds (`OWNER_ME_TIMEOUT_MS`); abort maps to `BOOTSTRAP_NETWORK`. Tests inject the timer and do not wait 15 real seconds.
+
+The production draft-sync adapter remains empty (`LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED = false`). The real “unsynchronized drafts exist” device scenario is BLOCKED on SYNC01. Do not treat empty-port unit tests as QA05/QA06 evidence.
+
 ## Setup slice commands
 
 ```sh

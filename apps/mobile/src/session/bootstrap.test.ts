@@ -11,6 +11,8 @@ import {
   formatSupportCode,
   retryOwnerMe,
   snapshotAfterBootstrapFailure,
+  OWNER_ME_TIMEOUT_MS,
+  type OwnerMeTimer,
 } from "./bootstrap.ts";
 import type { ApiError, OwnerBootstrap } from "../api/client.ts";
 
@@ -254,5 +256,104 @@ describe("owner bootstrap after OTP", () => {
     expect(combined).not.toMatch(/Bearer |eyJ|@|postgres|access_token/i);
     expect(combined.toLowerCase()).not.toContain(banned);
     expect(redactText(combined)).toBe(combined);
+  });
+
+  it("returns a successful /v1/me before timeout and clears the timer", async () => {
+    let cleared = 0;
+    let scheduledMs = 0;
+    const startTimer: OwnerMeTimer = (_onTimeout, ms) => {
+      scheduledMs = ms;
+      return () => {
+        cleared += 1;
+      };
+    };
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { data: OWNER }));
+    const result = await fetchOwnerMe({
+      apiBaseUrl: "http://api.example.invalid",
+      accessToken: "access-token-secret",
+      fetchImpl: fetchImpl as typeof fetch,
+      startTimer,
+    });
+    expect(OWNER_ME_TIMEOUT_MS).toBe(15_000);
+    expect(scheduledMs).toBe(OWNER_ME_TIMEOUT_MS);
+    expect(cleared).toBe(1);
+    expect(result).toEqual({ ok: true, data: OWNER });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps a timed-out /v1/me abort to safe UNAVAILABLE BOOTSTRAP_NETWORK", async () => {
+    const token = "access-token-secret";
+    let cleared = 0;
+    const logs = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warns = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.signal?.aborted).toBe(true);
+      const aborted = new Error("Aborted");
+      aborted.name = "AbortError";
+      throw aborted;
+    });
+    const startTimer: OwnerMeTimer = (onTimeout, ms) => {
+      expect(ms).toBe(OWNER_ME_TIMEOUT_MS);
+      onTimeout();
+      return () => {
+        cleared += 1;
+      };
+    };
+    const result = await fetchOwnerMe({
+      apiBaseUrl: "http://api.example.invalid",
+      accessToken: token,
+      fetchImpl: fetchImpl as typeof fetch,
+      startTimer,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toEqual({
+        status: 0,
+        code: "UNAVAILABLE",
+        message: copy.networkError,
+        retryable: true,
+      });
+      expect(classifyOwnerMeError(result.error)).toBe("BOOTSTRAP_NETWORK");
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain(token);
+      expect(serialized).not.toMatch(/authorization/i);
+      expect(serialized).not.toMatch(/Bearer /i);
+      expect(serialized).not.toMatch(/AbortError|stack|api\.example/i);
+    }
+    expect(cleared).toBe(1);
+    expect(logs).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+    expect(warns).not.toHaveBeenCalled();
+    const snapshot = snapshotAfterBootstrapFailure({
+      supportCode: "BOOTSTRAP_NETWORK",
+      nowMs: Date.parse("2026-09-15T12:00:00.000Z"),
+      hasCachedBootstrap: false,
+    });
+    expect(snapshot.status).toBe("bootstrap_error");
+    expect(snapshot.supportCode).toBe("BOOTSTRAP_NETWORK");
+  });
+
+  it("clears the /v1/me timer when fetch throws before abort", async () => {
+    let cleared = 0;
+    const startTimer: OwnerMeTimer = () => () => {
+      cleared += 1;
+    };
+    const result = await fetchOwnerMe({
+      apiBaseUrl: "http://api.example.invalid",
+      accessToken: "access-token-secret",
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError("Network request failed");
+      }) as unknown as typeof fetch,
+      startTimer,
+    });
+    expect(cleared).toBe(1);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(0);
+      expect(result.error.code).toBe("UNAVAILABLE");
+      expect(result.error.retryable).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("access-token-secret");
+    }
   });
 });

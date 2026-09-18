@@ -375,3 +375,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | No for portal sessions, OTP hashes, and TX02 decisions once hosted-applied |
 | Escalation category | architecture |
 
+### D-019 — Owner /v1/me 15s timeout and empty draft-sync port until SYNC01
+
+| Field | Value |
+| --- | --- |
+| ID | D-019 |
+| Date | 2026-09-18 |
+| Status | Resolved |
+| Decision | Owner bootstrap `GET /v1/me` uses a 15-second client `AbortController` timeout (NFR06 mobile reads). Timeout/abort maps to status `0`, code `UNAVAILABLE`, retryable, existing network copy, and `BOOTSTRAP_NETWORK`. One refresh on 401 is unchanged; Retry remains one GET and does not refresh. OTP send/verify are not auto-retried. Local draft persistence (SYNC01) is not in this slice: `getDraftSyncStatus` stays `EMPTY_DRAFT_SYNC`, `discardLocalDrafts` is a no-op, and Settings never offers Synchronize. A supplied `hasUnsyncedDrafts: true` still requires stay/discard confirmation; discard failure does not sign out. Seven-day offline *record* access stays BLOCKED on SYNC01. Signed-out jobs deep links resolve to welcome via `resolveOwnerGuard`; ACC01 remains typed email codes, not magic links. |
+| Reason | Audit CODE GAPS for in-scope hardening only. Do not rebuild working OTP. Do not fake SQLite or a successful Synchronize. |
+| Evidence | `apps/mobile/src/session/bootstrap.ts`; `apps/mobile/src/session/sign-out.ts`; `apps/mobile/src/drafts/sync.ts`; `apps/mobile/src/session/logic.ts`; `apps/mobile/app/_layout.tsx`; physical Expo Go OTP 2026-09-15 (development) |
+| Owner | Engineering lead |
+| PRD implication | NFR06 owner-read timeout is implemented for `/v1/me` only. ACC02 JWT/refresh/sign-out empty port remain. ACC02 7-day offline records, real unsynced sign-out, provider OTP caps, production Keychain, VoiceOver, and hosted TLS/HSTS are not VERIFIED. |
+| Impacted requirement IDs | NFR06, ACC02, S22, SYNC01, NFR05 |
+| Impacted test IDs | QA01, QA02, QA05, QA06; `apps/mobile/src/session/bootstrap.test.ts`; `apps/mobile/src/session/sign-out.test.ts`; `apps/mobile/src/session/logic.test.ts`; `apps/mobile/src/drafts/sync.test.ts` |
+| Migration implications | None. |
+| Reversible | Yes for timeout injection; empty draft adapter is replaced when SYNC01 ships |
+| Escalation category | none |
+

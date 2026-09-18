@@ -5,6 +5,7 @@ import { AppState } from "react-native";
 import { ownerRequest, type OwnerBootstrap, type OwnerRequestOptions } from "../api/client.ts";
 import { publicConfig } from "../config.ts";
 import { discardLocalDrafts, getDraftSyncStatus } from "../drafts/sync.ts";
+import { completeOwnerSignOut } from "./sign-out.ts";
 import { mapAuthError } from "../auth/errors.ts";
 import { copy } from "../i18n/en.ts";
 import {
@@ -278,18 +279,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(
     async (mode: "confirm" | "discard") => {
-      if (mode === "discard") {
-        await discardLocalDrafts();
-      }
-      if (client) {
-        await client.auth.signOut();
-      }
-      await clearAuthMaterial(secureKv);
-      setBootstrap(undefined);
-      setCode("");
-      setEmailDisplay("");
       setError(undefined);
-      setSnapshot({ status: "signed_out" });
+      const result = await completeOwnerSignOut({
+        mode,
+        discardDrafts: discardLocalDrafts,
+        providerSignOut: async () => {
+          if (client) {
+            await client.auth.signOut();
+          }
+        },
+        clearStoredAuth: () => clearAuthMaterial(secureKv),
+        clearMemory: () => {
+          setBootstrap(undefined);
+          setCode("");
+          setEmailDisplay("");
+          setError(undefined);
+          setSnapshot({ status: "signed_out" });
+        },
+      });
+      if (!result.ok) {
+        setError(result.stage === "discard" ? copy.discardFailed : copy.signOutFailed);
+      }
     },
     [client],
   );

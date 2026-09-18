@@ -8,6 +8,7 @@ import {
   SNAPSHOT_SCHEMA_VERSION,
   analyticsPropertiesAreSafe,
   BOOTSTRAP_SUPPORT_CODES,
+  EMPTY_DRAFT_SYNC,
   canResend,
   isOfflineReadPermitted,
   maskEmail,
@@ -84,8 +85,14 @@ describe("auth state", () => {
 
   it("lists session material that sign-out must clear", () => {
     expect(signOutClears()).toEqual(
-      expect.arrayContaining(["access_token", "refresh_token", "session", "in_memory_auth"]),
+      expect.arrayContaining(["access_token", "refresh_token", "session", "in_memory_auth", "bootstrap"]),
     );
+  });
+
+  it("keeps the empty draft-sync status until local persistence exists", () => {
+    expect(EMPTY_DRAFT_SYNC).toEqual({ hasUnsyncedDrafts: false, synchronizeAvailable: false });
+    expect(publicRouteAllowed("/(tabs)/jobs")).toBe(false);
+    expect(publicRouteAllowed("/(public)/welcome")).toBe(true);
   });
 });
 

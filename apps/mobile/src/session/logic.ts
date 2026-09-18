@@ -56,3 +56,50 @@ export function awaitingCodeSnapshot(emailDisplay: string, sentAtMs: number): Au
 export function routeAfterAuth(snapshot: AuthSnapshot): RouteGroup {
   return routeGroupFor(snapshot);
 }
+
+export const SIGNED_OUT_WELCOME_HREF = "/(public)/welcome";
+export const SIGNED_OUT_SIGN_IN_HREF = "/(public)/sign-in";
+export const VERIFY_HREF = "/(public)/verify";
+export const ONBOARDING_HREF = "/(onboarding)/setup";
+export const APP_JOBS_HREF = "/(tabs)/jobs";
+
+export type OwnerGuardDecision =
+  | { action: "hold" }
+  | { action: "stay" }
+  | {
+      action: "replace";
+      href:
+        | typeof SIGNED_OUT_WELCOME_HREF
+        | typeof SIGNED_OUT_SIGN_IN_HREF
+        | typeof VERIFY_HREF
+        | typeof ONBOARDING_HREF
+        | typeof APP_JOBS_HREF;
+    };
+
+export function resolveOwnerGuard(input: {
+  snapshot: AuthSnapshot;
+  segments: readonly string[];
+}): OwnerGuardDecision {
+  if (input.snapshot.status === "restoring" || input.snapshot.status === "authenticating") {
+    return { action: "hold" };
+  }
+  const group = routeGroupFor(input.snapshot);
+  const root = input.segments[0];
+  const page = input.segments[1];
+  if (group === "public" && page === "verify") {
+    return { action: "replace", href: SIGNED_OUT_SIGN_IN_HREF };
+  }
+  if (group === "public" && root !== "(public)") {
+    return { action: "replace", href: SIGNED_OUT_WELCOME_HREF };
+  }
+  if (group === "verify" && page !== "verify") {
+    return { action: "replace", href: VERIFY_HREF };
+  }
+  if (group === "onboarding" && root !== "(onboarding)") {
+    return { action: "replace", href: ONBOARDING_HREF };
+  }
+  if (group === "app" && root !== "(tabs)") {
+    return { action: "replace", href: APP_JOBS_HREF };
+  }
+  return { action: "stay" };
+}

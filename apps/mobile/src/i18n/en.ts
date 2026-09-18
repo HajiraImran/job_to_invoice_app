@@ -32,6 +32,8 @@ export const copy = {
   synchronize: "Synchronize",
   syncUnavailable: "Synchronization is not available yet. You can discard local drafts or stay signed in.",
   staySignedIn: "Stay signed in",
+  discardFailed: "Could not discard local drafts. Stay signed in and try again.",
+  signOutFailed: "Could not sign out. Stay signed in and try again.",
   jobsTitle: "Jobs",
   jobsEmpty: "No jobs yet. Create your first job to start a quote or invoice.",
   jobsEmptyHint: "Add a customer name, job title, and whether this is a quote or a direct invoice.",

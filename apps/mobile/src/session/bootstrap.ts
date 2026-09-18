@@ -16,6 +16,30 @@ export type FetchOwnerMeResult = OwnerMeResponse & { refreshCount: number };
 export { BOOTSTRAP_SUPPORT_CODES };
 export type { BootstrapSupportCode };
 
+export const OWNER_ME_TIMEOUT_MS = 15_000;
+
+const NETWORK_UNAVAILABLE: ApiError = {
+  status: 0,
+  code: "UNAVAILABLE",
+  message: copy.networkError,
+  retryable: true,
+};
+
+export type OwnerMeTimer = (onTimeout: () => void, ms: number) => () => void;
+
+export type FetchOwnerMeOptions = {
+  apiBaseUrl: string;
+  accessToken: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+  startTimer?: OwnerMeTimer;
+};
+
+function defaultStartTimer(onTimeout: () => void, ms: number): () => void {
+  const id = setTimeout(onTimeout, ms);
+  return () => clearTimeout(id);
+}
+
 export function isUsableOwnerBootstrap(data: unknown): data is OwnerBootstrap {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return false;
@@ -66,66 +90,69 @@ function readError(json: unknown, fallbackStatus: number): ApiError {
   };
 }
 
-export async function fetchOwnerMe(options: {
-  apiBaseUrl: string;
-  accessToken: string;
-}): Promise<OwnerMeResponse> {
+export async function fetchOwnerMe(options: FetchOwnerMeOptions): Promise<OwnerMeResponse> {
+  const timeoutMs = options.timeoutMs ?? OWNER_ME_TIMEOUT_MS;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const startTimer = options.startTimer ?? defaultStartTimer;
+  const controller = new AbortController();
+  const clearTimer = startTimer(() => controller.abort(), timeoutMs);
+  let response: Response;
   try {
-    const response = await fetch(`${options.apiBaseUrl}/v1/me`, {
+    response = await fetchImpl(`${options.apiBaseUrl}/v1/me`, {
       method: "GET",
       headers: {
         accept: "application/json",
         authorization: `Bearer ${options.accessToken}`,
       },
+      signal: controller.signal,
     });
-    let json: unknown;
-    try {
-      json = await response.json();
-    } catch {
-      if (!response.ok) {
-        return {
-          ok: false,
-          error: {
-            status: response.status,
-            code: "UNAVAILABLE",
-            message: "Could not read the account response.",
-            retryable: true,
-          },
-        };
-      }
-      return {
-        ok: false,
-        error: {
-          status: response.status,
-          code: "INVALID_RESPONSE",
-          message: "Could not read the account response.",
-          retryable: true,
-        },
-      };
-    }
-    if (!response.ok) {
-      return { ok: false, error: readError(json, response.status) };
-    }
-    const data =
-      json && typeof json === "object" && !Array.isArray(json) ? (json as Record<string, unknown>).data : undefined;
-    if (!isUsableOwnerBootstrap(data)) {
-      return {
-        ok: false,
-        error: {
-          status: response.status,
-          code: "INVALID_RESPONSE",
-          message: "Could not read the account response.",
-          retryable: true,
-        },
-      };
-    }
-    return { ok: true, data };
   } catch {
+    return { ok: false, error: { ...NETWORK_UNAVAILABLE } };
+  } finally {
+    clearTimer();
+  }
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch {
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: {
+          status: response.status,
+          code: "UNAVAILABLE",
+          message: "Could not read the account response.",
+          retryable: true,
+        },
+      };
+    }
     return {
       ok: false,
-      error: { status: 0, code: "UNAVAILABLE", message: "Could not reach the network. Try again.", retryable: true },
+      error: {
+        status: response.status,
+        code: "INVALID_RESPONSE",
+        message: "Could not read the account response.",
+        retryable: true,
+      },
     };
   }
+  if (!response.ok) {
+    return { ok: false, error: readError(json, response.status) };
+  }
+  const data =
+    json && typeof json === "object" && !Array.isArray(json) ? (json as Record<string, unknown>).data : undefined;
+  if (!isUsableOwnerBootstrap(data)) {
+    return {
+      ok: false,
+      error: {
+        status: response.status,
+        code: "INVALID_RESPONSE",
+        message: "Could not read the account response.",
+        retryable: true,
+      },
+    };
+  }
+  return { ok: true, data };
 }
 
 export async function fetchOwnerMeWithOneRefresh(options: {
