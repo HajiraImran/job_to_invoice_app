@@ -8,6 +8,14 @@ export {
 } from "./env.ts";
 export type { AppEnvName, LoadedApiEnv, LoadedEnv, LoadedWorkerEnv } from "./env.ts";
 export {
+  DATABASE_CONNECT_ATTEMPT_TIMEOUT_DEFAULT_MS,
+  DATABASE_CONNECT_ATTEMPT_TIMEOUT_MAX_MS,
+  DATABASE_CONNECT_DEADLINE_DEFAULT_MS,
+  DATABASE_CONNECT_DEADLINE_MAX_MS,
+  resolveDatabaseConnectTimeouts,
+} from "./database-connect.ts";
+export type { DatabaseConnectTimeouts } from "./database-connect.ts";
+export {
   DELIVERY_ALGORITHM,
   NONCE_BYTES,
   TOKEN_BYTES,

@@ -2,11 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { Pool, PoolClient } from "pg";
 import {
   ApiTransactionError,
+  CONNECT_DEADLINE_MS,
   CONNECT_MAX_ATTEMPTS,
   acquirePooledClient,
   apiPoolOptions,
+  bindConnectTimeouts,
   connectBackoffMs,
   connectErrorSqlstate,
+  connectTimeoutsFor,
+  createApiPool,
   isRetryableConnectError,
   sqlstateFromUnknown,
   withApiRole,
@@ -220,5 +224,62 @@ describe("bounded pre-BEGIN connection acquisition", () => {
     expect(connectBackoffMs(1, () => 0)).toBe(25);
     expect(connectBackoffMs(1, () => 1)).toBe(50);
     expect(JSON.stringify(apiPoolOptions())).not.toMatch(/postgres:\/\/|password|amazonaws/i);
+  });
+
+  it("applies configured attempt timeout to the pool and deadline to acquisition", async () => {
+    expect(apiPoolOptions({ attemptTimeoutMs: 10_000, deadlineMs: 25_000 })).toEqual({
+      max: 10,
+      connectionTimeoutMillis: 10_000,
+    });
+    const pool = createApiPool("postgres://api:x@127.0.0.1:1/app", {
+      attemptTimeoutMs: 10_000,
+      deadlineMs: 25_000,
+    });
+    try {
+      expect(pool.options.connectionTimeoutMillis).toBe(10_000);
+      expect(connectTimeoutsFor(pool)).toEqual({ attemptTimeoutMs: 10_000, deadlineMs: 25_000 });
+    } finally {
+      await pool.end();
+    }
+
+    let now = 0;
+    const scripted = scriptedPool({ connect: pgError("ETIMEDOUT", "connect ETIMEDOUT db.example.invalid") });
+    bindConnectTimeouts(scripted.pool, { attemptTimeoutMs: 10_000, deadlineMs: 80 });
+    const thrown = await withApiRole(scripted.pool, async () => "ok", {
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+      random: () => 0.5,
+    }).catch((value) => value);
+    expect(scripted.connects.count).toBeGreaterThanOrEqual(1);
+    expect(scripted.connects.count).toBeLessThan(CONNECT_MAX_ATTEMPTS);
+    expect(thrown).toMatchObject({
+      name: "ApiTransactionError",
+      stage: "database_connect_failed",
+      message: "unavailable",
+    });
+    expect(JSON.stringify(thrown)).not.toMatch(/postgres:\/\/|password|db\.example|connect ETIMEDOUT/i);
+  });
+
+  it("honors an explicit acquisition deadline over bound pool timeouts", async () => {
+    let now = 0;
+    const fake = {
+      connect: async () => {
+        throw pgError("ETIMEDOUT", "connect ETIMEDOUT 10.0.0.1");
+      },
+    };
+    bindConnectTimeouts(fake, { attemptTimeoutMs: 10_000, deadlineMs: CONNECT_DEADLINE_MS });
+    expect(connectTimeoutsFor(fake, { deadlineMs: 40 }).deadlineMs).toBe(40);
+    await expect(
+      acquirePooledClient(fake, {
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+        random: () => 0.5,
+        deadlineMs: 40,
+      }),
+    ).rejects.toMatchObject({ code: "ETIMEDOUT" });
   });
 });

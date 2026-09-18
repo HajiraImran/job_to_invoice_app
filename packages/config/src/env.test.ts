@@ -64,6 +64,28 @@ describe("loadEnv", () => {
     expect(env.API_BASE_URL).toContain("localhost");
   });
 
+  it("loads API connect timeout overrides without exposing them as public mobile keys", () => {
+    const env = loadApiEnv({
+      ...DEV_API_STORAGE,
+      DATABASE_CONNECT_ATTEMPT_TIMEOUT_MS: "10000",
+      DATABASE_CONNECT_DEADLINE_MS: "25000",
+    });
+    expect(env.databaseConnectAttemptTimeoutMs).toBe(10_000);
+    expect(env.databaseConnectDeadlineMs).toBe(25_000);
+    expect(JSON.stringify(Object.keys(env))).not.toMatch(/EXPO_PUBLIC_/);
+    expect(JSON.stringify(env)).not.toMatch(/postgres:\/\/|password/i);
+  });
+
+  it("rejects invalid API connect timeout configuration through QA68", () => {
+    expect(() =>
+      loadApiEnv({
+        ...DEV_API_STORAGE,
+        DATABASE_CONNECT_ATTEMPT_TIMEOUT_MS: "10000",
+        DATABASE_CONNECT_DEADLINE_MS: "1000",
+      }),
+    ).toThrow(/QA68/);
+  });
+
   it("defaults private document buckets and requires staging to set the name", () => {
     expect(documentsBucket("development")).toBe(DEVELOPMENT_DOCUMENTS_BUCKET);
     expect(documentsBucket("production")).toBe("job-to-invoice-documents-production");
@@ -120,6 +142,8 @@ describe("loadApiEnv", () => {
   it("starts with API credentials and no worker credentials", () => {
     const env = loadApiEnv(DEV_API_STORAGE);
     expect(env.documentsStorage?.bucket).toBe(DEVELOPMENT_DOCUMENTS_BUCKET);
+    expect(env.databaseConnectAttemptTimeoutMs).toBe(2_000);
+    expect(env.databaseConnectDeadlineMs).toBe(5_500);
     expect(env.documentsStorage?.downloadEndpoint).toBe("http://10.0.0.24:9000");
     expect(env.documentsStorage?.api.accessKeyId).toBe("api_access_dev01");
     expect(env.documentsStorage).not.toHaveProperty("worker");

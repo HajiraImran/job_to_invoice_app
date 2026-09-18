@@ -116,18 +116,45 @@ export type AcquireConnectOptions = {
   deadlineMs?: number;
 };
 
-export function createApiPool(connectionString: string): Pool {
-  return new Pool({
-    connectionString,
-    max: 10,
-    connectionTimeoutMillis: CONNECT_ATTEMPT_TIMEOUT_MS,
-  });
+export type ApiConnectTimeouts = {
+  attemptTimeoutMs: number;
+  deadlineMs: number;
+};
+
+const poolConnectTimeouts = new WeakMap<Pool, ApiConnectTimeouts>();
+
+export function bindConnectTimeouts(pool: Pick<Pool, "connect">, timeouts: ApiConnectTimeouts): void {
+  poolConnectTimeouts.set(pool as Pool, timeouts);
 }
 
-export function apiPoolOptions(): { max: number; connectionTimeoutMillis: number } {
+export function connectTimeoutsFor(
+  pool: Pick<Pool, "connect">,
+  options?: AcquireConnectOptions,
+): ApiConnectTimeouts {
+  const stored = poolConnectTimeouts.get(pool as Pool);
+  return {
+    attemptTimeoutMs: stored?.attemptTimeoutMs ?? CONNECT_ATTEMPT_TIMEOUT_MS,
+    deadlineMs: options?.deadlineMs ?? stored?.deadlineMs ?? CONNECT_DEADLINE_MS,
+  };
+}
+
+export function createApiPool(connectionString: string, timeouts?: Partial<ApiConnectTimeouts>): Pool {
+  const resolved: ApiConnectTimeouts = {
+    attemptTimeoutMs: timeouts?.attemptTimeoutMs ?? CONNECT_ATTEMPT_TIMEOUT_MS,
+    deadlineMs: timeouts?.deadlineMs ?? CONNECT_DEADLINE_MS,
+  };
+  const pool = new Pool({
+    connectionString,
+    ...apiPoolOptions(resolved),
+  });
+  bindConnectTimeouts(pool, resolved);
+  return pool;
+}
+
+export function apiPoolOptions(timeouts?: Partial<ApiConnectTimeouts>): { max: number; connectionTimeoutMillis: number } {
   return {
     max: 10,
-    connectionTimeoutMillis: CONNECT_ATTEMPT_TIMEOUT_MS,
+    connectionTimeoutMillis: timeouts?.attemptTimeoutMs ?? CONNECT_ATTEMPT_TIMEOUT_MS,
   };
 }
 
@@ -139,7 +166,7 @@ export async function acquirePooledClient(
   const sleep = options?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const random = options?.random ?? Math.random;
   const maxAttempts = options?.maxAttempts ?? CONNECT_MAX_ATTEMPTS;
-  const deadline = now() + (options?.deadlineMs ?? CONNECT_DEADLINE_MS);
+  const deadline = now() + connectTimeoutsFor(pool, options).deadlineMs;
   let lastError: unknown = new Error("unavailable");
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {

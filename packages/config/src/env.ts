@@ -8,6 +8,7 @@ import {
   type ApiDocumentsStorageConfig,
   type WorkerDocumentsStorageConfig,
 } from "./storage.ts";
+import { resolveDatabaseConnectTimeouts, type DatabaseConnectTimeouts } from "./database-connect.ts";
 
 export { PLACEHOLDER_PATTERN };
 
@@ -159,9 +160,10 @@ export type LoadedEnv =
   | z.infer<typeof stagingSchema>
   | z.infer<typeof productionSchema>;
 
-export type LoadedApiEnv = Omit<LoadedEnv, WorkerCredentialField> & {
-  documentsStorage?: ApiDocumentsStorageConfig;
-};
+export type LoadedApiEnv = Omit<LoadedEnv, WorkerCredentialField> &
+  DatabaseConnectTimeouts & {
+    documentsStorage?: ApiDocumentsStorageConfig;
+  };
 
 export type LoadedWorkerEnv = Omit<LoadedEnv, ApiCredentialField> & {
   documentsStorage?: WorkerDocumentsStorageConfig;
@@ -279,11 +281,14 @@ function wrapStorageConfigError(appEnv: string, error: unknown): never {
 }
 
 export function loadEnv(source: NodeJS.Dict<string> = process.env): LoadedEnv {
-  return parseEnv(source);
+  const parsed = parseEnv(source);
+  resolveDatabaseConnectTimeouts(source, parsed.APP_ENV);
+  return parsed;
 }
 
 export function loadApiEnv(source: NodeJS.Dict<string> = process.env): LoadedApiEnv {
   const parsed = parseApiEnv(source);
+  const connectTimeouts = resolveDatabaseConnectTimeouts(source, parsed.APP_ENV);
   try {
     const documentsStorage = resolveApiDocumentsStorage({
       ...parsed,
@@ -291,6 +296,7 @@ export function loadApiEnv(source: NodeJS.Dict<string> = process.env): LoadedApi
     });
     return {
       ...omitFields(parsed, WORKER_ONLY_SECRET_FIELDS),
+      ...connectTimeouts,
       documentsStorage,
     };
   } catch (error) {
@@ -300,6 +306,7 @@ export function loadApiEnv(source: NodeJS.Dict<string> = process.env): LoadedApi
 
 export function loadWorkerEnv(source: NodeJS.Dict<string> = process.env): LoadedWorkerEnv {
   const parsed = parseWorkerEnv(source);
+  resolveDatabaseConnectTimeouts(source, parsed.APP_ENV);
   try {
     const documentsStorage = resolveWorkerDocumentsStorage({
       ...parsed,

@@ -6,7 +6,12 @@ import { createDocumentsDownloadStore } from "./documents-store.ts";
 
 const env = loadApiEnv();
 const databaseUrl = "DATABASE_URL_API" in env ? env.DATABASE_URL_API : undefined;
-const pool = databaseUrl ? createApiPool(databaseUrl) : undefined;
+const pool = databaseUrl
+  ? createApiPool(databaseUrl, {
+      attemptTimeoutMs: env.databaseConnectAttemptTimeoutMs,
+      deadlineMs: env.databaseConnectDeadlineMs,
+    })
+  : undefined;
 const documentsStore = env.documentsStorage
   ? createDocumentsDownloadStore(env.documentsStorage)
   : undefined;
