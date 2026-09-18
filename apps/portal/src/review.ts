@@ -12,6 +12,7 @@ export const portalCopy = {
   tooManyAttempts: "Too many attempts. Request a new code.",
   resendCooldown: "Wait before requesting another code.",
   networkError: "Could not reach the network. Try again.",
+  identifierError: "Could not start this request. Try again.",
   invalidLink: "This review link is no longer available.",
   expiredQuote: "This request has expired. Ask the business for a new version.",
   supersededQuote: "A newer version is available. This version cannot be approved.",
@@ -30,6 +31,7 @@ export const portalCopy = {
   rejected: "You declined this quote.",
   alreadyActioned: "This quote has already been actioned.",
   downloadPdf: "Download PDF",
+  downloadError: "The PDF could not be opened. Try again.",
   report: "Report a problem",
   retry: "Try again",
 } as const;

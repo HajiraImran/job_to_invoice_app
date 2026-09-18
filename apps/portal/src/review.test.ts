@@ -48,6 +48,18 @@ describe("portal fragment and states", () => {
     const document = readFileSync(join(root, "../app/review/document/page.tsx"), "utf8");
     expect(document).toContain('type="checkbox"');
     expect(document).toContain("consent");
+    expect(document).toContain("createIdempotencyKey()");
+    expect(document).toContain("PortalIdentifierError");
+    expect(document).toContain("portalCopy.identifierError");
+    expect(document).not.toContain("crypto.randomUUID");
+    expect(document).not.toContain("Math.random");
+    expect(portalCopy.identifierError).toBe("Could not start this request. Try again.");
+    expect(portalCopy.identifierError).not.toBe(portalCopy.networkError);
+    const helper = readFileSync(join(root, "./idempotency.ts"), "utf8");
+    expect(helper).not.toContain("Math.random");
+    expect(helper).toContain("globalThis.crypto");
+    expect(helper).toContain("randomUUID");
+    expect(helper).toContain("getRandomValues");
     const receipt = readFileSync(join(root, "../app/review/receipt/page.tsx"), "utf8");
     expect(receipt).toContain("payment_claimed");
   });

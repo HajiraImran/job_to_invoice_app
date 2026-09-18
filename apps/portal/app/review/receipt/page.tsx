@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PortalPdfDownloadAction } from "../../../src/portal-download-action";
 import { portalCopy } from "../../../src/review";
 
 type ReceiptData = {
@@ -47,9 +48,7 @@ export default function ReviewReceiptPage() {
             {receipt.number} {receipt.revision_label}
           </p>
           {receipt.decided_at ? <p>{receipt.decided_at}</p> : null}
-          <p>
-            <a href="/api/portal/download">{portalCopy.downloadPdf}</a>
-          </p>
+          <PortalPdfDownloadAction />
         </>
       ) : null}
     </main>

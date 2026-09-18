@@ -1,8 +1,13 @@
 import type { NextConfig } from "next";
 
+const scriptPolicy =
+  process.env.APP_ENV === "development" || process.env.NODE_ENV === "development"
+    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+    : "script-src 'self'";
+
 const csp = [
   "default-src 'self'",
-  "script-src 'self'",
+  scriptPolicy,
   "connect-src 'self'",
   "img-src 'self' blob:",
   "style-src 'self' 'unsafe-inline'",

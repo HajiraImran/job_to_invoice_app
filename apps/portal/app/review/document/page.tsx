@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { createIdempotencyKey as createPortalIdempotencyKey, PortalIdentifierError } from "../../../src/idempotency";
+import { PortalPdfDownloadAction } from "../../../src/portal-download-action";
 import { canApprove, CONSENT_VERSION, documentKind, portalCopy, type PortalKind } from "../../../src/review";
+
+function createIdempotencyKey(): string {
+  return createPortalIdempotencyKey();
+}
 
 type DocumentData = {
   access_state: string;
@@ -72,7 +78,7 @@ export default function ReviewDocumentPage() {
         headers: {
           "content-type": "application/json",
           "x-csrf-token": csrf,
-          "idempotency-key": crypto.randomUUID(),
+          "idempotency-key": createIdempotencyKey(),
         },
         body: JSON.stringify({
           decision,
@@ -99,7 +105,12 @@ export default function ReviewDocumentPage() {
       }
       setKind("network_failure");
       setMessage(portalCopy.networkError);
-    } catch {
+    } catch (error) {
+      if (error instanceof PortalIdentifierError) {
+        setKind(decision === "approve" ? "confirm_accept" : "confirm_reject");
+        setMessage(portalCopy.identifierError);
+        return;
+      }
       setKind("network_failure");
       setMessage(portalCopy.networkError);
     } finally {
@@ -114,7 +125,11 @@ export default function ReviewDocumentPage() {
     <main className="portal">
       <h1>{portalCopy.quoteReady}</h1>
       {kind === "loading" || kind === "submitting" ? <p role="status">{kind === "submitting" ? portalCopy.submitting : portalCopy.loading}</p> : null}
-      {kind === "expired_quote" || kind === "superseded" || kind === "invalid_link" || kind === "network_failure" ? (
+      {kind === "expired_quote" ||
+      kind === "superseded" ||
+      kind === "invalid_link" ||
+      kind === "network_failure" ||
+      ((kind === "confirm_accept" || kind === "confirm_reject") && message === portalCopy.identifierError) ? (
         <p role="alert">{message}</p>
       ) : null}
       {doc && (kind === "quote_ready" || kind === "pdf_loading" || kind === "pdf_failure" || kind === "confirm_accept" || kind === "confirm_reject") ? (
@@ -126,11 +141,7 @@ export default function ReviewDocumentPage() {
           <p>{doc.snapshot.customer?.name}</p>
           {kind === "pdf_loading" ? <p role="status">{portalCopy.pdfLoading}</p> : null}
           {kind === "pdf_failure" ? <p role="alert">{portalCopy.pdfFailure}</p> : null}
-          {pdfReady ? (
-            <p>
-              <a href="/api/portal/download">{portalCopy.downloadPdf}</a>
-            </p>
-          ) : null}
+          {pdfReady ? <PortalPdfDownloadAction /> : null}
           <label>
             {portalCopy.signerName}
             <input value={name} onChange={(event) => setName(event.target.value.slice(0, 120))} />
