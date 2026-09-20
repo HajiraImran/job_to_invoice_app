@@ -28,6 +28,8 @@ export async function createExpoSqliteBridge(): Promise<EncryptedSqliteBridge> {
           db.runAsync(source, ...(params ?? []) as Array<string | number | null | Uint8Array>),
         getFirstAsync: (source, params) =>
           db.getFirstAsync(source, ...(params ?? []) as Array<string | number | null | Uint8Array>),
+        getAllAsync: (source, params) =>
+          db.getAllAsync(source, ...(params ?? []) as Array<string | number | null | Uint8Array>),
         closeAsync: () => db.closeAsync(),
       };
     },

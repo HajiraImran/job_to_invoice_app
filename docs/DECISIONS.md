@@ -404,10 +404,64 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reason | PRD SYNC01 and SREF08 require encrypted per-owner SQLite, OS-secured keys, Expo development builds, and forbid plaintext fallback. Expo 57 documents SQLCipher via `useSQLCipher`. |
 | Evidence | `apps/mobile/app.json` plugin; `apps/mobile/package.json` / `pnpm-lock.yaml`; `apps/mobile/src/storage/*`; unit orchestration tests; physical Android EAS development build 2026-09-20 Phase 0 checks A–E PASS (capability, probe write, force-close reopen, wrong-key rejection, wipe). Normal-SQLite file extraction not performed. |
 | Owner | Engineering lead |
-| PRD implication | Phase 0 SQLCipher foundation device checks A–E are VERIFIED on physical Android EAS development build. Full SYNC01 (jobs cache, drafts, outbox, conflict resolution, combined offline) remains PENDING. Temporary diagnostics harness must not ship. QA05 backup-exclusion and plaintext file-inspection evidence still open. |
+| PRD implication | Phase 0 SQLCipher foundation device checks A–E are VERIFIED on physical Android EAS development build (2026-09-20). Commercial SYNC01 slice (cache, drafts, outbox, conflict, sign-out, D-021–D-023) is IMPLEMENTED; partial commercial Android happy-path evidence is recorded in TEST_PLAN; combined QA05–08 remains NOT VERIFIED. Temporary diagnostics harness must not ship. |
 | Impacted requirement IDs | SYNC01, NFR05, ACC02, DEC10, SREF08 |
 | Impacted test IDs | QA05; `apps/mobile/src/storage/*.test.ts`; EAS SQLCipher manual procedure in `docs/TEST_PLAN.md` |
 | Migration implications | None for Postgres. Requires a new EAS development/preview binary after enabling SQLCipher. |
 | Reversible | Yes before commercial records are stored; irreversible once owners have encrypted drafts on device |
+| Escalation category | architecture |
+
+### D-021 — Manual Synchronize overrides outbox backoff and reclaim stuck in_flight
+
+| Field | Value |
+| --- | --- |
+| ID | D-021 |
+| Date | 2026-09-20 |
+| Status | Resolved |
+| Decision | Settings Synchronize and sign-out Synchronize call `drainOutbox` with `forceImmediate: true`. That pass reclaims every `in_flight` row back to `pending` and sets `next_attempt_at = now` on pending rows so SYNC05 exponential backoff cannot permanently block a user-requested drain. Automatic reconnect/foreground drain keeps `forceImmediate: false`: it respects `next_attempt_at` and only reclaims `in_flight` rows older than the 60s lease. `operation_id`, idempotency key, and If-Match/base version are never regenerated on reclaim or retry. Drain outcomes distinguish `empty`, backoff (`ineligible_retry_time`), `no_executable_operation`, request/auth/conflict/server failures, and success; Synchronize reports failure when remaining work exists after a zero-drain pass and never signs out until the outbox is empty. Safe `__DEV__` diagnostics may log only stage/outcome/kind/HTTP status. |
+| Reason | Physical Android evidence: offline save survived restart and Settings showed unsynced work, but Synchronize returned generic failure with no API request because a prior reconnect attempt left the op `in_flight` or behind `next_attempt_at`, and `listRunnableOutboxOperations` only selects eligible `pending` rows. |
+| Evidence | `apps/mobile/src/drafts/persist.ts`; `apps/mobile/src/sync/outbox.ts` `prepareOutboxForDrain`; `apps/mobile/src/sync/controller.ts`; `apps/mobile/src/session/AuthProvider.tsx`; `apps/mobile/src/sync/sync01.test.ts` manual synchronize cases |
+| Owner | Engineering lead |
+| PRD implication | SYNC05 backoff remains for automatic drain. Manual Synchronize is an explicit user override of retry timing, not a second queue. |
+| Impacted requirement IDs | SYNC01, SYNC05, SYNC02, S22, ACC02, QA05, QA06 |
+| Impacted test IDs | `apps/mobile/src/sync/sync01.test.ts`; physical Settings Synchronize retest |
+| Migration implications | None. Existing pending/in_flight outbox rows are preserved and become executable on next manual Synchronize. |
+| Reversible | Yes |
+| Escalation category | architecture |
+
+### D-023 — Outbox draft PATCH body matches online save contract
+
+| Field | Value |
+| --- | --- |
+| ID | D-023 |
+| Date | 2026-09-20 |
+| Status | Resolved |
+| Decision | Outbox replay of `PATCH /v1/drafts/{id}` must send the same body as the online quote save: only `notes`, `terms`, `expiry_days`, and `lines` (line fields without computed totals). Local SQLCipher rows may still store a richer QuoteDraftRecord for hydration. `ownerDraftPatchBodyFromStored` maps rich or clean JSON at enqueue and again at drain so already-queued bad bodies become valid. HTTP 422 / `VALIDATION_FAILED` marks the outbox op `failed` (no SYNC05 retry loop) while preserving the local draft for a later user save. Duplicate open ops for one resource are coalesced to the newest pending/failed row (`SUPERSEDED`). D-021 and D-022 remain in force. |
+| Reason | Physical Android drain logged HTTP 422 because outbox `body_json` was the full draft record (`id`, `job_id`, `version`, …), which `parseDraftPayload` rejects as unknown fields. Online save correctly sent `parsed.value` only. |
+| Evidence | `apps/mobile/src/drafts/patch-body.ts`; `persist.ts`; `sync/outbox.ts`; `patch-body.test.ts` |
+| Owner | Engineering lead |
+| PRD implication | SYNC02/SYNC05 replay must be wire-compatible with API02 draft validation; do not weaken server validation. |
+| Impacted requirement IDs | SYNC01, SYNC02, SYNC05, QUO01, API02, QA06 |
+| Impacted test IDs | `apps/mobile/src/drafts/patch-body.test.ts` |
+| Migration implications | Existing queued rich bodies are remapped on next drain; no DB schema change. |
+| Reversible | Yes |
+| Escalation category | architecture |
+
+### D-022 — Successful /v1/me replaces stale offline_cached with generation-gated recovery
+
+| Field | Value |
+| --- | --- |
+| ID | D-022 |
+| Date | 2026-09-20 |
+| Status | Resolved |
+| Decision | Owner bootstrap uses a monotonic generation gate plus a single in-flight `/v1/me` promise. A successful authenticated `/v1/me` 200 always applies `authenticated`, refreshes `jti.auth.last_success_at`, persists `jti.auth.bootstrap`, clears the offline banner, opens the sync session, and attempts an eligible outbox drain. Failures may keep `offline_cached` only inside the ACC02 seven-day window. An older in-flight failure cannot apply after a newer success (`canApplyFailure` requires `generation === latestStarted && generation > latestApplied`). AppState `active` re-runs the same recovery for `offline_cached` and `authenticated` without signing out. D-021 manual Synchronize behavior is unchanged. |
+| Reason | Physical Android: API logged `owner_me` 200 after relaunch while Jobs still showed offline_cached because a delayed/concurrent failure path could re-apply cached offline state, and foreground only drained the outbox without re-bootstrapping. |
+| Evidence | `apps/mobile/src/session/recovery.ts`; `AuthProvider.tsx` `loadMe` / `recoverBootstrapIfNeeded`; `recovery.test.ts` |
+| Owner | Engineering lead |
+| PRD implication | ACC02 offline cache remains for failed recovery inside seven days; online authority returns on the next successful `/v1/me`. |
+| Impacted requirement IDs | ACC02, S02, S05, S09, SYNC01, SYNC02, QA05, QA06 |
+| Impacted test IDs | `apps/mobile/src/session/recovery.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
 | Escalation category | architecture |
 

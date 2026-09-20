@@ -27,5 +27,5 @@ export function canOpenCreateJob(status: string): boolean {
 }
 
 export function createJobDisabled(status: string, submitting: boolean): boolean {
-  return submitting || status === "access_expired" || status === "offline_cached";
+  return submitting || status === "access_expired";
 }

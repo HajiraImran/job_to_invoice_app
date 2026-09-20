@@ -25,7 +25,7 @@ function memoryKv(initial?: Record<string, string>): SecureKv & { store: Map<str
 
 describe("sign-out draft-sync boundary", () => {
   it("allows confirm sign-out when draft status is empty", () => {
-    expect(LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED).toBe(false);
+    expect(LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED).toBe(true);
     expect(signOutAlertSpec(EMPTY_DRAFT_SYNC, LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED)).toEqual({
       kind: "confirm",
       offerSynchronize: false,
@@ -34,13 +34,12 @@ describe("sign-out draft-sync boundary", () => {
     expect(signOutChoiceProceeds("stay")).toBe(false);
   });
 
-  it("requires warning when unsynced drafts are supplied and never offers Synchronize", () => {
+  it("offers Synchronize when unsynced drafts exist and sync is available", () => {
     const unsynced = { hasUnsyncedDrafts: true, synchronizeAvailable: true };
     const spec = signOutAlertSpec(unsynced, LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED);
-    expect(spec).toEqual({ kind: "unsynced", offerSynchronize: false });
+    expect(spec).toEqual({ kind: "unsynced", offerSynchronize: true });
     expect(copy.synchronize.length).toBeGreaterThan(0);
-    expect(spec.offerSynchronize).toBe(false);
-    expect(signOutAlertSpec({ hasUnsyncedDrafts: true, synchronizeAvailable: false }, false).offerSynchronize).toBe(
+    expect(signOutAlertSpec({ hasUnsyncedDrafts: true, synchronizeAvailable: false }, true).offerSynchronize).toBe(
       false,
     );
   });

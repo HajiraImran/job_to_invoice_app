@@ -13,7 +13,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../src/i18n/en.ts";
 import { listStateFromFilter } from "../../../src/jobs/form.ts";
 import { presentJobsList, type JobSummary } from "../../../src/jobs/presentation.ts";
+import { upsertCachedJob, listCachedJobs } from "../../../src/jobs/cache.ts";
 import { createJobDisabled, createJobPath, jobDetailPath } from "../../../src/jobs/routes.ts";
+import { canUseCachedCommercialData } from "../../../src/sync/offline-gate.ts";
 import { useAuth } from "../../../src/session/AuthProvider.tsx";
 import { colors, space, type } from "../../../src/theme.ts";
 
@@ -48,8 +50,51 @@ export default function JobsScreen() {
         setLoading(true);
       }
       setError(undefined);
+      const listState = listStateFromFilter(filter);
+      const session = auth.getSyncSessionDb();
+      const offlineOk = canUseCachedCommercialData(
+        auth.snapshot.status,
+        auth.snapshot.lastAuthenticatedAt,
+        Date.now(),
+      );
+
+      if (auth.snapshot.status === "offline_cached") {
+        if (!offlineOk) {
+          setError({ message: copy.accessExpired, retryable: false });
+          setLoading(false);
+          setLoadingMore(false);
+          setLoadedOnce(true);
+          return;
+        }
+        if (!session) {
+          setItems([]);
+          setError({ message: copy.cacheMissOffline, retryable: true });
+          setLoadedOnce(true);
+          setLoading(false);
+          setLoadingMore(false);
+          return;
+        }
+        try {
+          const cached = await listCachedJobs(session.db, { listState, search });
+          const itemsMapped = cached.map((row) => JSON.parse(row.payloadJson) as JobSummary);
+          setItems(itemsMapped);
+          setNextCursor(null);
+          setLoadedOnce(true);
+          if (itemsMapped.length === 0) {
+            setError({ message: copy.cacheMissOffline, retryable: true });
+          }
+        } catch {
+          setItems([]);
+          setError({ message: copy.cacheMissOffline, retryable: true });
+          setLoadedOnce(true);
+        }
+        setLoading(false);
+        setLoadingMore(false);
+        return;
+      }
+
       const query = new URLSearchParams();
-      query.set("state", listStateFromFilter(filter));
+      query.set("state", listState);
       if (search) {
         query.set("search", search);
       }
@@ -63,6 +108,21 @@ export default function JobsScreen() {
         setItems((current) => (appending ? [...current, ...result.data.items] : result.data.items));
         setNextCursor(result.data.next_cursor);
         setLoadedOnce(true);
+        if (session && !appending) {
+          for (const job of result.data.items) {
+            try {
+              await upsertCachedJob(session.db, {
+                jobId: job.id,
+                payloadJson: JSON.stringify(job),
+                listState,
+                syncBadge: "synced",
+                serverConfirmed: true,
+              });
+            } catch {
+              /* cache best-effort */
+            }
+          }
+        }
       } else {
         setError({
           message: result.error.message || copy.jobLoadError,
@@ -72,7 +132,7 @@ export default function JobsScreen() {
       setLoading(false);
       setLoadingMore(false);
     },
-    [filter, runOwnerRequest, search],
+    [auth, filter, runOwnerRequest, search],
   );
 
   useEffect(() => {

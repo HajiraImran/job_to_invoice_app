@@ -101,10 +101,11 @@ describe("jobs list and detail states", () => {
       searching: true,
     });
     expect(offline.showOfflineBanner).toBe(true);
-    expect(offline.showCreate).toBe(false);
+    expect(offline.showCreate).toBe(true);
     expect(offline.showSearchDownloaded).toBe(true);
-    expect(createJobDisabled("offline_cached", false)).toBe(true);
+    expect(createJobDisabled("offline_cached", false)).toBe(false);
     expect(createJobDisabled("authenticated", false)).toBe(false);
+    expect(createJobDisabled("access_expired", false)).toBe(true);
     expect(canOpenCreateJob("authenticated")).toBe(true);
   });
 

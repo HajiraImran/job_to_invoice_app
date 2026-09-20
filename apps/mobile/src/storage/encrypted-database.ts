@@ -15,6 +15,7 @@ export type EncryptedSqliteHandle = {
   execAsync: (source: string) => Promise<void>;
   runAsync: (source: string, params?: unknown[]) => Promise<SqliteStatementResult>;
   getFirstAsync: <T>(source: string, params?: unknown[]) => Promise<T | null>;
+  getAllAsync: <T>(source: string, params?: unknown[]) => Promise<T[]>;
   closeAsync: () => Promise<void>;
 };
 
@@ -79,13 +80,14 @@ async function ensureProbeSchema(db: EncryptedSqliteHandle): Promise<void> {
   }
 }
 
-export async function openOwnerEncryptedDatabase(options: {
+/** Opens and unlocks the per-owner SQLCipher database. Caller owns migration/binding. */
+export async function openEncryptedSqliteHandle(options: {
   ownerId: string;
   storage: SecureKv;
   bridge: EncryptedSqliteBridge;
   capability: EncryptedStorageCapability;
   randomBytes?: RandomBytesFn;
-}): Promise<OwnerEncryptedDatabase> {
+}): Promise<{ db: EncryptedSqliteHandle; fileName: string }> {
   requireSupportedCapability(options.capability);
 
   const fileName = ownerDatabaseFileName(options.ownerId);
@@ -103,6 +105,17 @@ export async function openOwnerEncryptedDatabase(options: {
   }
 
   await applyKeyAndVerify(db, keyMaterial);
+  return { db, fileName };
+}
+
+export async function openOwnerEncryptedDatabase(options: {
+  ownerId: string;
+  storage: SecureKv;
+  bridge: EncryptedSqliteBridge;
+  capability: EncryptedStorageCapability;
+  randomBytes?: RandomBytesFn;
+}): Promise<OwnerEncryptedDatabase> {
+  const { db } = await openEncryptedSqliteHandle(options);
   await ensureProbeSchema(db);
 
   let closed = false;

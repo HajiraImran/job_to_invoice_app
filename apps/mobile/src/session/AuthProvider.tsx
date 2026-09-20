@@ -1,10 +1,15 @@
 import { OTP_MAX_FAILURES, remainingResendSeconds, type AuthSnapshot } from "@job-to-invoice/schemas";
 import type { Session } from "@supabase/supabase-js";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppState } from "react-native";
 import { ownerRequest, type OwnerBootstrap, type OwnerRequestOptions } from "../api/client.ts";
 import { publicConfig } from "../config.ts";
-import { discardLocalDrafts, getDraftSyncStatus } from "../drafts/sync.ts";
+import {
+  bindDraftSyncController,
+  discardLocalDrafts,
+  getDraftSyncStatus,
+  synchronizeLocalDrafts,
+} from "../drafts/sync.ts";
 import { completeOwnerSignOut } from "./sign-out.ts";
 import { mapAuthError } from "../auth/errors.ts";
 import { copy } from "../i18n/en.ts";
@@ -13,13 +18,19 @@ import {
   classifyOwnerMeError,
   fetchOwnerMe,
   fetchOwnerMeWithOneRefresh,
-  retryOwnerMe,
-  snapshotAfterBootstrapFailure,
   type OwnerMeResponse,
 } from "./bootstrap.ts";
-import { awaitingCodeSnapshot, snapshotFromBootstrap } from "./logic.ts";
+import { awaitingCodeSnapshot } from "./logic.ts";
+import {
+  createBootstrapGenerationGate,
+  decideBootstrapApply,
+  outboxDrainEligibleAfterRecovery,
+} from "./recovery.ts";
 import { createOwnerAuthClient, secureKv } from "./supabase.ts";
 import { BOOTSTRAP_KEY, LAST_AUTH_KEY, clearAuthMaterial } from "./storage.ts";
+import { createOwnerSyncController, type OwnerSyncController } from "../sync/controller.ts";
+import { createExpoSqliteBridge, defaultEncryptedStorageCapability } from "../storage/index.ts";
+import { isStorageError } from "../storage/storage-error.ts";
 
 type AuthContextValue = {
   snapshot: AuthSnapshot;
@@ -35,10 +46,12 @@ type AuthContextValue = {
   sendCode: () => Promise<void>;
   verifyCode: () => Promise<void>;
   changeEmail: () => void;
-  signOut: (mode: "confirm" | "discard") => Promise<void>;
+  signOut: (mode: "confirm" | "discard" | "synchronize") => Promise<void>;
   draftStatus: () => ReturnType<typeof getDraftSyncStatus>;
+  synchronizeNow: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   refreshBootstrap: () => Promise<void>;
   runOwnerRequest: <T>(options: OwnerRequestOptions) => ReturnType<typeof ownerRequest<T>>;
+  getSyncSessionDb: () => ReturnType<OwnerSyncController["getSession"]>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -57,56 +70,164 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const syncControllerRef = useRef<OwnerSyncController | null>(null);
+  const bridgePromiseRef = useRef<ReturnType<typeof createExpoSqliteBridge> | null>(null);
+  const bootstrapGateRef = useRef(createBootstrapGenerationGate());
+  const bootstrapInFlightRef = useRef<Promise<void> | null>(null);
+  const snapshotRef = useRef<AuthSnapshot>(snapshot);
+  snapshotRef.current = snapshot;
 
-  const persistBootstrap = useCallback(async (next: OwnerBootstrap, authenticatedAt: string) => {
-    setBootstrap(next);
-    await secureKv.setItem(BOOTSTRAP_KEY, JSON.stringify(next));
-    await secureKv.setItem(LAST_AUTH_KEY, authenticatedAt);
-    setSnapshot(snapshotFromBootstrap(next, authenticatedAt));
-    setError(undefined);
+  const ensureSyncController = useCallback(async () => {
+    const capability = defaultEncryptedStorageCapability();
+    if (!capability.supported) {
+      bindDraftSyncController(null);
+      syncControllerRef.current = null;
+      return null;
+    }
+    if (!syncControllerRef.current) {
+      bridgePromiseRef.current ??= createExpoSqliteBridge();
+      const bridge = await bridgePromiseRef.current;
+      syncControllerRef.current = createOwnerSyncController({
+        storage: secureKv,
+        bridge,
+        capability,
+      });
+      bindDraftSyncController(syncControllerRef.current);
+    }
+    return syncControllerRef.current;
   }, []);
 
-  const applyMeResult = useCallback(
-    async (result: OwnerMeResponse, emailHint?: string) => {
-      if (result.ok) {
-        await persistBootstrap(result.data, new Date().toISOString());
-        return;
-      }
-      const last = (await secureKv.getItem(LAST_AUTH_KEY)) ?? undefined;
-      const cached = await secureKv.getItem(BOOTSTRAP_KEY);
-      const supportCode = classifyOwnerMeError(result.error);
-      const nextSnap = snapshotAfterBootstrapFailure({
-        supportCode,
-        emailDisplay: emailHint?.trim() || undefined,
-        lastAuthenticatedAt: last,
-        nowMs: Date.now(),
-        hasCachedBootstrap: Boolean(cached),
-      });
-      if (nextSnap.status === "offline_cached" && cached) {
-        try {
-          const parsed = JSON.parse(cached) as OwnerBootstrap;
-          setBootstrap(parsed);
-          setSnapshot({
-            ...nextSnap,
-            setupCompleted: parsed.workspace.setup_completed,
-            emailDisplay: parsed.user.display_email,
-          });
+  const openSyncForBootstrap = useCallback(
+    async (next: OwnerBootstrap) => {
+      try {
+        const controller = await ensureSyncController();
+        if (!controller) {
           return;
+        }
+        if (controller.ownerId && controller.ownerId !== next.user.id) {
+          // Account switch with an open session from another owner is refused until wipe.
+          await controller.close();
+        }
+        await controller.ensureOpen(next.user.id, next.workspace.id);
+      } catch (error) {
+        if (isStorageError(error) && error.code === "OWNER_MISMATCH") {
+          setError(copy.discardFailed);
+        }
+        /* Unsupported runtime or open failure leaves online mode without local sync. */
+      }
+    },
+    [ensureSyncController],
+  );
+
+  const drainEligibleOutbox = useCallback(async () => {
+    if (!client) {
+      return;
+    }
+    const controller = syncControllerRef.current;
+    if (!controller?.getSession()) {
+      return;
+    }
+    const existing = await client.auth.getSession();
+    const accessToken = existing.data.session?.access_token;
+    if (!accessToken) {
+      return;
+    }
+    await synchronizeLocalDrafts(
+      async (options) =>
+        ownerRequest({
+          ...options,
+          apiBaseUrl: config.apiBaseUrl,
+          accessToken,
+        }),
+      { forceImmediate: false },
+    );
+  }, [client, config.apiBaseUrl]);
+
+  const applyMeResult = useCallback(
+    async (result: OwnerMeResponse, emailHint?: string, generation?: number) => {
+      const gate = bootstrapGateRef.current;
+      const gen = generation ?? gate.begin();
+      const authenticatedAt = new Date().toISOString();
+      const last = (await secureKv.getItem(LAST_AUTH_KEY)) ?? undefined;
+      const cachedRaw = await secureKv.getItem(BOOTSTRAP_KEY);
+      let cachedBootstrap: OwnerBootstrap | null = null;
+      if (cachedRaw) {
+        try {
+          cachedBootstrap = JSON.parse(cachedRaw) as OwnerBootstrap;
         } catch {
-          /* fall through to bootstrap_error */
+          cachedBootstrap = null;
         }
       }
-      setSnapshot({
-        ...nextSnap,
-        status: nextSnap.status === "access_expired" ? "access_expired" : "bootstrap_error",
-        emailDisplay: nextSnap.emailDisplay ?? (emailHint?.trim() || undefined),
+
+      if (result.ok) {
+        const decision = decideBootstrapApply({
+          generation: gen,
+          gate,
+          result,
+          authenticatedAt,
+          emailHint,
+          lastAuthenticatedAt: last,
+          cachedBootstrap,
+          nowMs: Date.now(),
+          supportCode: "BOOTSTRAP_UNKNOWN",
+        });
+        if (decision.action !== "apply_success") {
+          return;
+        }
+        // Persist first, then re-check generation so an older failure cannot win after awaits.
+        await secureKv.setItem(BOOTSTRAP_KEY, JSON.stringify(decision.bootstrap));
+        await secureKv.setItem(LAST_AUTH_KEY, decision.authenticatedAt);
+        if (!gate.canApplySuccess(gen)) {
+          return;
+        }
+        gate.markApplied(gen);
+        setBootstrap(decision.bootstrap);
+        setSnapshot(decision.snapshot);
+        snapshotRef.current = decision.snapshot;
+        setError(undefined);
+        await openSyncForBootstrap(decision.bootstrap);
+        if (decision.enableOutboxDrain && outboxDrainEligibleAfterRecovery(decision.snapshot.status)) {
+          await drainEligibleOutbox();
+        }
+        return;
+      }
+
+      const supportCode = classifyOwnerMeError(result.error);
+      const decision = decideBootstrapApply({
+        generation: gen,
+        gate,
+        result,
+        authenticatedAt,
+        emailHint,
+        lastAuthenticatedAt: last,
+        cachedBootstrap,
+        nowMs: Date.now(),
         supportCode,
       });
-      if (nextSnap.status !== "access_expired") {
+      if (decision.action === "ignore_stale") {
+        return;
+      }
+      if (decision.action !== "apply_failure") {
+        return;
+      }
+      if (!gate.canApplyFailure(gen)) {
+        return;
+      }
+      gate.markApplied(gen);
+      if (decision.bootstrap) {
+        setBootstrap(decision.bootstrap);
+        setSnapshot(decision.snapshot);
+        snapshotRef.current = decision.snapshot;
+        await openSyncForBootstrap(decision.bootstrap);
+        return;
+      }
+      setSnapshot(decision.snapshot);
+      snapshotRef.current = decision.snapshot;
+      if (decision.snapshot.status !== "access_expired") {
         setError(copy[bootstrapErrorCopy(supportCode)]);
       }
     },
-    [persistBootstrap],
+    [drainEligibleOutbox, openSyncForBootstrap],
   );
 
   const requestMe = useCallback(
@@ -120,21 +241,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadMe = useCallback(
     async (session: Session, emailHint?: string) => {
-      const result = await fetchOwnerMeWithOneRefresh({
-        accessToken: session.access_token,
-        fetchMe: requestMe,
-        refresh: async () => {
-          if (!client) {
-            return undefined;
-          }
-          const refreshed = await client.auth.refreshSession();
-          return refreshed.data.session?.access_token;
-        },
+      if (bootstrapInFlightRef.current) {
+        await bootstrapInFlightRef.current;
+        if (snapshotRef.current.status === "authenticated") {
+          return;
+        }
+      }
+      const run = (async () => {
+        const generation = bootstrapGateRef.current.begin();
+        const result = await fetchOwnerMeWithOneRefresh({
+          accessToken: session.access_token,
+          fetchMe: requestMe,
+          refresh: async () => {
+            if (!client) {
+              return undefined;
+            }
+            const refreshed = await client.auth.refreshSession();
+            return refreshed.data.session?.access_token;
+          },
+        });
+        await applyMeResult(result, emailHint, generation);
+      })();
+      const tracked = run.finally(() => {
+        bootstrapInFlightRef.current = null;
       });
-      await applyMeResult(result, emailHint);
+      bootstrapInFlightRef.current = tracked;
+      await tracked;
     },
     [applyMeResult, client, requestMe],
   );
+
+  const recoverBootstrapIfNeeded = useCallback(async () => {
+    if (!client) {
+      return;
+    }
+    const status = snapshotRef.current.status;
+    // Re-authorize when stale offline, or refresh online session on foreground.
+    if (status !== "offline_cached" && status !== "authenticated") {
+      return;
+    }
+    const existing = await client.auth.getSession();
+    if (!existing.data.session) {
+      return;
+    }
+    await loadMe(existing.data.session, existing.data.session.user.email);
+  }, [client, loadMe]);
 
   useEffect(() => {
     let cancelled = false;
@@ -179,10 +330,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         setNow(Date.now());
+        void recoverBootstrapIfNeeded();
       }
     });
     return () => sub.remove();
-  }, []);
+  }, [recoverBootstrapIfNeeded]);
 
   useEffect(() => {
     if (snapshot.status !== "awaiting_code") {
@@ -277,68 +429,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSnapshot({ status: "signed_out" });
   }, []);
 
-  const signOut = useCallback(
-    async (mode: "confirm" | "discard") => {
-      setError(undefined);
-      const result = await completeOwnerSignOut({
-        mode,
-        discardDrafts: discardLocalDrafts,
-        providerSignOut: async () => {
-          if (client) {
-            await client.auth.signOut();
-          }
-        },
-        clearStoredAuth: () => clearAuthMaterial(secureKv),
-        clearMemory: () => {
-          setBootstrap(undefined);
-          setCode("");
-          setEmailDisplay("");
-          setError(undefined);
-          setSnapshot({ status: "signed_out" });
-        },
-      });
-      if (!result.ok) {
-        setError(result.stage === "discard" ? copy.discardFailed : copy.signOutFailed);
-      }
-    },
-    [client],
-  );
-
-  const refreshBootstrap = useCallback(async () => {
-    if (!client) {
-      return;
-    }
-    setSubmitting(true);
-    setError(undefined);
-    setSnapshot((current) => ({ ...current, status: "authenticating", emailDisplay: current.emailDisplay }));
-    try {
-      const existing = await client.auth.getSession();
-      if (!existing.data.session) {
-        setSnapshot((current) => ({
-          status: "bootstrap_error",
-          emailDisplay: current.emailDisplay,
-          supportCode: "BOOTSTRAP_SESSION",
-        }));
-        setError(copy.bootstrapSession);
-        return;
-      }
-      const result = await retryOwnerMe({
-        accessToken: existing.data.session.access_token,
-        fetchMe: requestMe,
-      });
-      await applyMeResult(result, existing.data.session.user.email);
-    } catch {
-      setSnapshot((current) => ({
-        status: "bootstrap_error",
-        emailDisplay: current.emailDisplay,
-        supportCode: "BOOTSTRAP_UNKNOWN",
-      }));
-      setError(copy.bootstrapUnavailable);
-    } finally {
-      setSubmitting(false);
-    }
-  }, [applyMeResult, client, requestMe]);
-
   const runOwnerRequest = useCallback(
     async <T,>(options: OwnerRequestOptions) => {
       const unavailable = {
@@ -383,6 +473,106 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [client, config.apiBaseUrl],
   );
 
+  const signOut = useCallback(
+    async (mode: "confirm" | "discard" | "synchronize") => {
+      setError(undefined);
+      const result = await completeOwnerSignOut({
+        mode,
+        discardDrafts: discardLocalDrafts,
+        synchronizeDrafts: async () => {
+          const synced = await synchronizeLocalDrafts(
+            async (options) => {
+              if (!client) {
+                return {
+                  ok: false as const,
+                  error: {
+                    status: 0,
+                    code: "UNAVAILABLE",
+                    message: "Could not reach the network. Try again.",
+                    retryable: true,
+                  },
+                };
+              }
+              return runOwnerRequest(options);
+            },
+            { forceImmediate: true },
+          );
+          return synced.ok ? { ok: true as const } : { ok: false as const };
+        },
+        providerSignOut: async () => {
+          if (client) {
+            await client.auth.signOut();
+          }
+        },
+        clearStoredAuth: () => clearAuthMaterial(secureKv),
+        clearMemory: () => {
+          bindDraftSyncController(null);
+          syncControllerRef.current = null;
+          setBootstrap(undefined);
+          setCode("");
+          setEmailDisplay("");
+          setError(undefined);
+          setSnapshot({ status: "signed_out" });
+        },
+      });
+      if (!result.ok) {
+        if (result.stage === "discard") {
+          setError(copy.discardFailed);
+        } else if (result.stage === "synchronize") {
+          setError(copy.synchronizeFailed);
+        } else {
+          setError(copy.signOutFailed);
+        }
+      }
+    },
+    [client, runOwnerRequest],
+  );
+
+  const synchronizeNow = useCallback(async () => {
+    const synced = await synchronizeLocalDrafts(async (options) => runOwnerRequest(options), {
+      forceImmediate: true,
+    });
+    if (!synced.ok) {
+      setError(synced.reason === "conflict" ? copy.synchronizeConflict : copy.synchronizeFailed);
+    }
+    return synced;
+  }, [runOwnerRequest]);
+
+  const refreshBootstrap = useCallback(async () => {
+    if (!client) {
+      return;
+    }
+    setSubmitting(true);
+    setError(undefined);
+    setSnapshot((current) => {
+      const next = { ...current, status: "authenticating" as const, emailDisplay: current.emailDisplay };
+      snapshotRef.current = next;
+      return next;
+    });
+    try {
+      const existing = await client.auth.getSession();
+      if (!existing.data.session) {
+        setSnapshot((current) => ({
+          status: "bootstrap_error",
+          emailDisplay: current.emailDisplay,
+          supportCode: "BOOTSTRAP_SESSION",
+        }));
+        setError(copy.bootstrapSession);
+        return;
+      }
+      await loadMe(existing.data.session, existing.data.session.user.email);
+    } catch {
+      setSnapshot((current) => ({
+        status: "bootstrap_error",
+        emailDisplay: current.emailDisplay,
+        supportCode: "BOOTSTRAP_UNKNOWN",
+      }));
+      setError(copy.bootstrapUnavailable);
+    } finally {
+      setSubmitting(false);
+    }
+  }, [client, loadMe]);
+
   const value: AuthContextValue = {
     snapshot,
     bootstrap,
@@ -399,8 +589,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     changeEmail,
     signOut,
     draftStatus: getDraftSyncStatus,
+    synchronizeNow,
     refreshBootstrap,
     runOwnerRequest,
+    getSyncSessionDb: () => syncControllerRef.current?.getSession() ?? null,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -8,6 +8,9 @@ export const STORAGE_ERROR_CODES = [
   "INVALID_OWNER",
   "KEY_UNAVAILABLE",
   "DATABASE_UNAVAILABLE",
+  "OWNER_MISMATCH",
+  "OFFLINE_WINDOW_EXPIRED",
+  "SYNC_PAUSED",
   "WIPE_FAILED",
 ] as const;
 
@@ -18,6 +21,9 @@ const MESSAGES: Record<StorageErrorCode, string> = {
   INVALID_OWNER: "Encrypted local storage is not available for this account.",
   KEY_UNAVAILABLE: "Encrypted local storage key is unavailable.",
   DATABASE_UNAVAILABLE: "Encrypted local storage is unavailable.",
+  OWNER_MISMATCH: "Encrypted local storage belongs to a different account.",
+  OFFLINE_WINDOW_EXPIRED: "Sign in again to use saved work on this device.",
+  SYNC_PAUSED: "Synchronization is paused until you resolve a conflict.",
   WIPE_FAILED: "Could not securely erase encrypted local storage.",
 };
 

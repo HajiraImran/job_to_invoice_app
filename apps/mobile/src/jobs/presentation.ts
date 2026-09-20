@@ -72,12 +72,13 @@ export function presentJobsList(input: {
   }
   if (input.authStatus === "offline_cached") {
     return {
-      kind: input.items.length === 0 ? "offline" : "loaded",
+      kind: input.items.length === 0 ? (input.loadedOnce ? "offline" : "offline") : "loaded",
       items: input.items,
       showRetry: true,
-      showCreate: false,
+      showCreate: true,
       showOfflineBanner: true,
       showSearchDownloaded: input.searching,
+      message: input.items.length === 0 && input.loadedOnce ? copy.cacheMissOffline : undefined,
     };
   }
   if (input.loading && !input.loadedOnce) {

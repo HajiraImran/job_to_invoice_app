@@ -12,12 +12,19 @@ export {
   type RandomBytesFn,
 } from "./database-key.ts";
 export {
+  openEncryptedSqliteHandle,
   openOwnerEncryptedDatabase,
   wipeOwnerEncryptedDatabase,
   type EncryptedSqliteBridge,
   type EncryptedSqliteHandle,
   type OwnerEncryptedDatabase,
 } from "./encrypted-database.ts";
+export { migrateOwnerDatabase, readSchemaMeta, LOCAL_SCHEMA_VERSION, type OwnerWorkspaceBinding } from "./schema.ts";
+export {
+  openOwnerSqliteSession,
+  wipeOwnerSqliteSession,
+  type OwnerSqliteSession,
+} from "./session.ts";
 export { createExpoSqliteBridge, defaultEncryptedStorageCapability } from "./runtime.ts";
 export {
   STORAGE_ERROR_CODES,

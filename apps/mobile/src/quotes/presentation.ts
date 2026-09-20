@@ -9,7 +9,45 @@ export type QuoteEditorKind =
   | "ready"
   | "conflict";
 
-export type QuoteSaveStatus = "idle" | "saving" | "saved" | "validation" | "offline" | "conflict" | "error";
+export type QuoteSaveStatus =
+  | "idle"
+  | "saving_locally"
+  | "saved_on_device"
+  | "synchronizing"
+  | "synced"
+  | "validation"
+  | "offline"
+  | "conflict"
+  | "storage_failure"
+  | "error";
+
+/** @deprecated legacy alias kept for gradual migration */
+export type LegacyQuoteSaveStatus = "saving" | "saved";
+
+export function presentQuoteSaveLabel(status: QuoteSaveStatus): string {
+  switch (status) {
+    case "saving_locally":
+      return copy.quoteSaving;
+    case "saved_on_device":
+      return copy.quoteSaved;
+    case "synchronizing":
+      return copy.quoteSynchronizing;
+    case "synced":
+      return copy.quoteSynced;
+    case "storage_failure":
+      return copy.quoteStorageFailure;
+    case "conflict":
+      return copy.quoteConflict;
+    case "offline":
+      return copy.quoteOfflineEditing;
+    case "validation":
+      return copy.quoteSaveError;
+    case "error":
+      return copy.quoteSaveError;
+    default:
+      return "";
+  }
+}
 
 export function presentQuoteEditor(input: {
   authStatus: string;

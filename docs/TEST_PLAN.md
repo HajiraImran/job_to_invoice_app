@@ -190,7 +190,7 @@ Signed-out protected jobs navigation is covered by `apps/mobile/src/session/logi
 
 Owner `GET /v1/me` client timeout is 15 seconds (`OWNER_ME_TIMEOUT_MS`); abort maps to `BOOTSTRAP_NETWORK`. Tests inject the timer and do not wait 15 real seconds.
 
-The production draft-sync adapter remains empty (`LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED = false`). The real “unsynchronized drafts exist” device scenario is BLOCKED on SYNC01. Do not treat empty-port unit tests as QA05/QA06 evidence.
+The production draft-sync adapter is implemented (`LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED = true`) behind SQLCipher. Phase 0 device checks A–E are VERIFIED. Commercial SYNC01 remains **IMPLEMENTED** until the combined physical procedure below is fully recorded; do not mark combined QA05–QA08 **VERIFIED** from partial happy-path evidence alone.
 
 ## SYNC01 Phase 0 — SQLCipher foundation (EAS development build)
 
@@ -230,7 +230,7 @@ pnpm --filter @job-to-invoice/mobile dev
    - Confirm Metro / device logs show no key material, owner IDs, database paths, SQLCipher pragmas with secrets, tokens, or emails.
    - Optional (still required before claiming full ciphertext proof): copy the `.sqlite` file off-device and open it with a normal SQLite viewer; it must **not** be readable as plaintext SQLite.
 
-3. Record pass/fail only as device evidence notes. Phase 0 foundation checks may be marked VERIFIED when A–E pass on a physical EAS development build. Do **not** mark full SYNC01 (jobs cache, drafts, outbox, conflict resolution, combined offline behavior) IMPLEMENTED or VERIFIED until those slices exist and are proven.
+3. Record pass/fail only as device evidence notes. Phase 0 foundation checks may be marked VERIFIED when A–E pass on a physical EAS development build. Commercial SYNC01 code may be **IMPLEMENTED** after the vertical slice lands; do **not** mark **VERIFIED** until the combined physical procedure below passes.
 
 ### Physical evidence — Android EAS development build (2026-09-20)
 
@@ -244,7 +244,56 @@ Device: physical Android EAS development client with `useSQLCipher: true` (alrea
 | D. Wrong-key rejection | PASS (`wrong_key_rejected`) |
 | E. Secure wipe | PASS (`wipe_ok`) |
 
-Temporary diagnostics harness used for this pass was removed after evidence. Remaining unverified for Phase 0 ciphertext proof: normal-SQLite file extraction / plaintext viewer inspection (not performed). Remaining for full SYNC01: jobs cache, local drafts, outbox, conflict resolution, account-switch wipe policy, backup exclusion device proof, and combined offline behavior.
+Temporary diagnostics harness used for this pass was removed after evidence. Remaining unverified for Phase 0 ciphertext proof: normal-SQLite file extraction / plaintext viewer inspection (not performed).
+
+## SYNC01 commercial offline persistence (post Phase 0)
+
+Automated orchestration:
+
+```sh
+pnpm --filter @job-to-invoice/mobile test -- src/sync src/storage src/drafts src/session/sign-out.test.ts
+pnpm --filter @job-to-invoice/mobile typecheck
+pnpm --filter @job-to-invoice/mobile lint
+```
+
+### Combined physical-device procedure (required before VERIFIED)
+
+On the installed Android EAS development client (SQLCipher already enabled):
+
+1. Sign in → open Jobs → confirm online list caches.
+2. Edit a quote draft → confirm **Saving locally** then **Saved on this device**; force-close → relaunch → draft intact (QA05).
+3. Enable airplane mode within 7-day window → edit draft offline → reconnect → Settings → **Synchronize** must issue authenticated PATCH (even if SYNC05 backoff would otherwise delay) → **Synced** only after ack; publish remains blocked offline (QA06).
+4. Create a job offline → pending badge → sync after reconnect.
+5. Provoke 409 (second device or simulated) → Keep server / Save local copy; no silent merge (QA07).
+6. Settings → unsynced alert → Stay leaves data; Synchronize drains then signs out only when outbox empty; Discard wipes DB+key and fails closed on wipe error.
+7. Confirm Metro logs omit keys, owner IDs, paths, tokens, emails, commercial payloads. `__DEV__` may show `[sync.drain]` with stage/outcome/HTTP status only.
+8. Optional: ADB pull `.sqlite` and open in plaintext SQLite viewer (must fail).
+
+Do not mark SYNC01–SYNC06 / S23 / NFR05 / JRN07 **VERIFIED** until this combined pass is recorded.
+
+### Partial commercial physical evidence — Android EAS development client (2026-09-20)
+
+Recorded on the same SQLCipher development client after D-021/D-022/D-023 JS fixes (Metro reload). Status for the commercial slice remains **IMPLEMENTED**, not combined **VERIFIED**.
+
+| Check | Result |
+| --- | --- |
+| Quote draft **Saved on this device** | PASS |
+| Draft survived force-close / relaunch | PASS |
+| Hydration kept pending local draft (no silent server overwrite) | PASS |
+| Manual Settings → Synchronize after reconnect | PASS (authenticated PATCH, HTTP 200 ack) |
+| Settings sync status showed synchronized after ack | PASS |
+
+Deferred / not yet recorded on device (do not invent evidence):
+
+- Offline job creation and restart
+- Publish blocked while offline
+- Automatic reconnect drain without pressing Synchronize
+- Dual-device 409 Keep server / Save local copy
+- Sign-out Stay / Synchronize / Discard (including wipe confirmation)
+- Combined QA05–QA08 pass
+- Optional ADB normal-SQLite plaintext inspection
+
+External note: intermittent Supabase Session Pooler `ETIMEDOUT` on port 5432 (`sslmode=require`) is a network-routing issue and is not SYNC01 verification evidence. Do not change pooler port or timeout architecture for this slice.
 
 ## Setup slice commands
 

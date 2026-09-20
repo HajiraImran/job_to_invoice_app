@@ -26,7 +26,13 @@ import {
   type QuoteFormValues,
   type QuoteLineForm,
 } from "../../../../src/quotes/form.ts";
-import { presentQuoteEditor, type QuoteSaveStatus } from "../../../../src/quotes/presentation.ts";
+import { presentQuoteEditor, presentQuoteSaveLabel, type QuoteSaveStatus } from "../../../../src/quotes/presentation.ts";
+import { persistDraftLocally, drainOutbox } from "../../../../src/drafts/persist.ts";
+import { getLocalDraftByJob } from "../../../../src/drafts/repository.ts";
+import { reconcileServerDraftWithLocal } from "../../../../src/drafts/reconcile.ts";
+import { getOpenOutboxForResource } from "../../../../src/sync/outbox.ts";
+import { canUseCachedCommercialData } from "../../../../src/sync/offline-gate.ts";
+import { isOfflineReadPermitted } from "@job-to-invoice/schemas";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
 import { colors, space, type } from "../../../../src/theme.ts";
@@ -77,6 +83,76 @@ export default function QuoteEditorScreen() {
     setLoading(true);
     setError(undefined);
     setSaveStatus("idle");
+
+    const session = auth.getSyncSessionDb();
+    const offlineAllowed = canUseCachedCommercialData(
+      auth.snapshot.status,
+      auth.snapshot.lastAuthenticatedAt,
+      Date.now(),
+    );
+
+    const applyLocalRecord = async (
+      local: Awaited<ReturnType<typeof getLocalDraftByJob>>,
+      status: QuoteSaveStatus,
+    ) => {
+      if (!local) {
+        return;
+      }
+      const parsed = JSON.parse(local.payloadJson) as QuoteDraftRecord;
+      const record: QuoteDraftRecord = {
+        ...parsed,
+        id: local.draftId,
+        job_id: local.jobId,
+        version: local.baseVersion,
+        schema_version: local.schemaVersion,
+      };
+      setDraft(record);
+      setValues(formFromDraft(record));
+      versionRef.current = local.baseVersion;
+      dirtyRef.current = local.syncState !== "synced";
+      setSaveStatus(status);
+      const openOp = session ? await getOpenOutboxForResource(session.db, local.draftId) : null;
+      if (openOp) {
+        saveKey.current = openOp.idempotencyKey;
+      }
+    };
+
+    // 1) Always hydrate encrypted local draft first (survives force-close).
+    let hadLocal = false;
+    if (session && (auth.snapshot.status === "offline_cached" || auth.snapshot.status === "authenticated")) {
+      try {
+        const local = await getLocalDraftByJob(session.db, jobId);
+        if (local) {
+          hadLocal = true;
+          const openOp = await getOpenOutboxForResource(session.db, local.draftId);
+          await applyLocalRecord(
+            local,
+            local.syncState === "synced" && !openOp
+              ? "synced"
+              : local.syncState === "conflict"
+                ? "conflict"
+                : "saved_on_device",
+          );
+          setLoading(false);
+          if (auth.snapshot.status === "offline_cached") {
+            return;
+          }
+        }
+      } catch {
+        /* fall through to network */
+      }
+    }
+
+    if (auth.snapshot.status === "offline_cached") {
+      setLoading(false);
+      if (!offlineAllowed) {
+        setError({ message: copy.accessExpired, retryable: false, status: 401 });
+      } else if (!hadLocal) {
+        setError({ message: copy.quoteLoadError, retryable: true, status: 0 });
+      }
+      return;
+    }
+
     openKey.current = retainOrCreateSetupIdempotencyKey(openKey.current);
     const result = await runOwnerRequest<QuoteDraftRecord>({
       path: `/v1/jobs/${jobId}/quote`,
@@ -84,12 +160,59 @@ export default function QuoteEditorScreen() {
       idempotencyKey: openKey.current,
     });
     if (result.ok) {
-      setDraft(result.data);
-      setValues(formFromDraft(result.data));
-      versionRef.current = result.data.version;
-      dirtyRef.current = false;
       setFieldErrors({});
-    } else {
+      if (!session) {
+        setDraft(result.data);
+        setValues(formFromDraft(result.data));
+        versionRef.current = result.data.version;
+        dirtyRef.current = false;
+        setSaveStatus("synced");
+        setLoading(false);
+        return;
+      }
+      try {
+        const reconciled = await reconcileServerDraftWithLocal(session.db, {
+          jobId,
+          server: {
+            id: result.data.id,
+            job_id: result.data.job_id,
+            kind: result.data.kind,
+            schema_version: result.data.schema_version,
+            version: result.data.version,
+            payloadJson: JSON.stringify(result.data),
+          },
+        });
+        if (!reconciled) {
+          setDraft(result.data);
+          setValues(formFromDraft(result.data));
+          versionRef.current = result.data.version;
+          dirtyRef.current = false;
+          setSaveStatus("synced");
+        } else if (reconciled.adoptedServer) {
+          await applyLocalRecord(reconciled.visible, "synced");
+          dirtyRef.current = false;
+        } else if (reconciled.enteredConflict) {
+          await applyLocalRecord(reconciled.visible, "conflict");
+          setError({
+            message: copy.quoteConflict,
+            retryable: true,
+            status: 409,
+            code: "VERSION_CONFLICT",
+          });
+        } else {
+          // Keep local pending/synced payload; never replace with older/same server body.
+          await applyLocalRecord(reconciled.visible, reconciled.saveStatus);
+        }
+      } catch {
+        if (!hadLocal) {
+          setDraft(result.data);
+          setValues(formFromDraft(result.data));
+          versionRef.current = result.data.version;
+          dirtyRef.current = false;
+          setSaveStatus("synced");
+        }
+      }
+    } else if (!hadLocal) {
       setError({
         message:
           result.error.code === "VALIDATION_FAILED" && result.error.field_errors?.some((item) => item.field === "mode")
@@ -101,7 +224,7 @@ export default function QuoteEditorScreen() {
       });
     }
     setLoading(false);
-  }, [jobId, runOwnerRequest]);
+  }, [auth, jobId, runOwnerRequest]);
 
   useEffect(() => {
     void load();
@@ -114,7 +237,14 @@ export default function QuoteEditorScreen() {
       if (!draft) {
         return false;
       }
-      if (auth.snapshot.status === "offline_cached" || auth.snapshot.status === "access_expired") {
+      if (auth.snapshot.status === "access_expired") {
+        setSaveStatus("offline");
+        return false;
+      }
+      if (
+        auth.snapshot.status === "offline_cached" &&
+        !isOfflineReadPermitted(auth.snapshot.lastAuthenticatedAt, Date.now())
+      ) {
         setSaveStatus("offline");
         return false;
       }
@@ -138,9 +268,72 @@ export default function QuoteEditorScreen() {
         setSaveStatus("validation");
         return false;
       }
-      setSaveStatus("saving");
+      setSaveStatus("saving_locally");
       setFieldErrors({});
+      const session = auth.getSyncSessionDb();
+      const localPayload = {
+        ...draft,
+        ...parsed.value,
+        version: versionRef.current,
+      };
+
+      if (session) {
+        const existingOp = await getOpenOutboxForResource(session.db, draft.id);
+        const stableKey =
+          existingOp?.idempotencyKey ??
+          retainOrCreateSetupIdempotencyKey(reason === "button" ? undefined : saveKey.current);
+        saveKey.current = stableKey;
+        const operationId = existingOp?.operationId ?? stableKey;
+        const local = await persistDraftLocally(session.db, {
+          draftId: draft.id,
+          jobId: draft.job_id,
+          kind: draft.kind,
+          schemaVersion: draft.schema_version,
+          baseVersion: versionRef.current,
+          serverVersion: draft.version,
+          payload: localPayload,
+          patchBody: parsed.value,
+          operationId,
+          idempotencyKey: stableKey,
+        });
+        if (local.status === "storage_failure") {
+          setSaveStatus("storage_failure");
+          return false;
+        }
+        dirtyRef.current = false;
+        setSaveStatus("saved_on_device");
+        if (auth.snapshot.status === "offline_cached") {
+          return true;
+        }
+        setSaveStatus("synchronizing");
+        const drained = await drainOutbox(session.db, {
+          request: (options) => runOwnerRequest(options),
+          forceImmediate: true,
+        });
+        if (drained.conflicts > 0) {
+          setSaveStatus("conflict");
+          setError({
+            message: copy.quoteConflict,
+            retryable: true,
+            status: 409,
+            code: "VERSION_CONFLICT",
+          });
+          return false;
+        }
+        if (drained.remaining === 0) {
+          setSaveStatus("synced");
+          return true;
+        }
+        setSaveStatus("saved_on_device");
+        return true;
+      }
+
+      // Fallback when encrypted storage is unavailable: preserve prior online-only PATCH path.
       saveKey.current = retainOrCreateSetupIdempotencyKey(reason === "button" ? undefined : saveKey.current);
+      if (auth.snapshot.status === "offline_cached") {
+        setSaveStatus("storage_failure");
+        return false;
+      }
       const result = await runOwnerRequest<QuoteDraftRecord>({
         path: `/v1/drafts/${draft.id}`,
         method: "PATCH",
@@ -152,7 +345,7 @@ export default function QuoteEditorScreen() {
         setDraft(result.data);
         versionRef.current = result.data.version;
         dirtyRef.current = false;
-        setSaveStatus("saved");
+        setSaveStatus("synced");
         return true;
       }
       if (result.error.code === "VERSION_CONFLICT") {
@@ -186,7 +379,7 @@ export default function QuoteEditorScreen() {
       });
       return false;
     },
-    [auth.snapshot.status, draft, runOwnerRequest, values],
+    [auth, draft, runOwnerRequest, values],
   );
 
   useEffect(() => {
@@ -227,9 +420,9 @@ export default function QuoteEditorScreen() {
     saveStatus,
   });
   const saveDisabled =
-    saveStatus === "saving" ||
+    saveStatus === "saving_locally" ||
+    saveStatus === "synchronizing" ||
     saveStatus === "conflict" ||
-    auth.snapshot.status === "offline_cached" ||
     auth.snapshot.status === "access_expired";
 
   return (
@@ -244,7 +437,7 @@ export default function QuoteEditorScreen() {
         <Text style={styles.hint}>{copy.quoteCurrency}</Text>
         {auth.snapshot.status === "offline_cached" ? (
           <Text accessibilityLiveRegion="polite" style={styles.banner}>
-            {copy.quoteOffline}
+            {copy.quoteOfflineEditing}
           </Text>
         ) : null}
         {view.kind === "loading" ? <ActivityIndicator color={colors.navy} /> : null}
@@ -262,11 +455,52 @@ export default function QuoteEditorScreen() {
         ) : null}
         {view.kind === "conflict" ? (
           <>
-            <Text accessibilityLiveRegion="polite" style={styles.error}>
-              {copy.quoteConflict}
+            <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+              {copy.conflictBody}
             </Text>
-            <Pressable accessibilityRole="button" onPress={() => void load()} style={styles.primary}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={copy.quoteKeepServer}
+              onPress={() => void load()}
+              style={styles.primary}
+            >
               <Text style={styles.primaryLabel}>{copy.quoteKeepServer}</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={copy.quoteSaveLocalCopy}
+              onPress={() => {
+                void (async () => {
+                  const session = auth.getSyncSessionDb();
+                  if (!session || !draft) {
+                    return;
+                  }
+                  try {
+                    const { resolveDraftConflict } = await import("../../../../src/sync/conflict.ts");
+                    const local = await getLocalDraftByJob(session.db, jobId);
+                    await resolveDraftConflict(session.db, {
+                      draftId: draft.id,
+                      choice: "save_local_copy",
+                      serverPayloadJson: local?.conflictServerJson ?? JSON.stringify(draft),
+                      serverVersion: draft.version,
+                      localCopy: {
+                        draftId: secureRandomUUID(),
+                        jobId: draft.job_id,
+                        kind: draft.kind,
+                        schemaVersion: draft.schema_version,
+                        payloadJson: local?.conflictLocalJson ?? JSON.stringify(draft),
+                        baseVersion: 1,
+                      },
+                    });
+                    await load();
+                  } catch {
+                    setSaveStatus("storage_failure");
+                  }
+                })();
+              }}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryLabel}>{copy.quoteSaveLocalCopy}</Text>
             </Pressable>
           </>
         ) : null}
@@ -423,17 +657,7 @@ export default function QuoteEditorScreen() {
             <Text style={styles.section}>{copy.quoteTotal}</Text>
             <Text style={styles.body}>{formatUsdCents(computed.ok ? computed.totals.total_cents : 0)}</Text>
             <Text accessibilityLiveRegion="polite" style={styles.banner}>
-              {saveStatus === "saving"
-                ? copy.quoteSaving
-                : saveStatus === "saved"
-                  ? copy.quoteSaved
-                  : saveStatus === "validation"
-                    ? copy.jobRequired
-                    : saveStatus === "error"
-                      ? copy.quoteSaveError
-                      : saveStatus === "offline"
-                        ? copy.quoteOffline
-                        : ""}
+              {presentQuoteSaveLabel(saveStatus)}
             </Text>
             <Pressable
               accessibilityRole="button"
@@ -442,7 +666,11 @@ export default function QuoteEditorScreen() {
               onPress={() => void persist("button")}
               style={styles.primary}
             >
-              <Text style={styles.primaryLabel}>{saveStatus === "saving" ? copy.quoteSaving : copy.quoteSave}</Text>
+              <Text style={styles.primaryLabel}>
+                {saveStatus === "saving_locally" || saveStatus === "synchronizing"
+                  ? presentQuoteSaveLabel(saveStatus)
+                  : copy.quoteSave}
+              </Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"

@@ -1,4 +1,5 @@
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useState } from "react";
 import { LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED } from "../../src/drafts/sync.ts";
 import { copy } from "../../src/i18n/en.ts";
 import { useAuth } from "../../src/session/AuthProvider.tsx";
@@ -7,23 +8,50 @@ import { colors, space, type } from "../../src/theme.ts";
 
 export default function SettingsScreen() {
   const auth = useAuth();
+  const [syncSummary, setSyncSummary] = useState<string | undefined>();
+
+  const refreshSyncSummary = useCallback(async () => {
+    const status = await auth.draftStatus();
+    if (!LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED || !status.synchronizeAvailable) {
+      setSyncSummary(undefined);
+      return;
+    }
+    setSyncSummary(status.hasUnsyncedDrafts ? copy.syncPendingCount : copy.jobSyncedBadge);
+  }, [auth]);
+
+  useEffect(() => {
+    void refreshSyncSummary();
+  }, [refreshSyncSummary, auth.snapshot.status]);
 
   async function onSignOut() {
     const drafts = await auth.draftStatus();
     const spec = signOutAlertSpec(drafts, LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED);
     if (spec.kind === "unsynced") {
-      Alert.alert(copy.unsyncedTitle, spec.offerSynchronize ? copy.unsyncedBody : copy.syncUnavailable, [
-        { text: copy.staySignedIn, style: "cancel" },
+      const buttons = [
+        { text: copy.staySignedIn, style: "cancel" as const },
+        ...(spec.offerSynchronize
+          ? [
+              {
+                text: copy.synchronize,
+                onPress: () => {
+                  if (signOutChoiceProceeds("synchronize")) {
+                    void auth.signOut("synchronize");
+                  }
+                },
+              },
+            ]
+          : []),
         {
           text: copy.discardAndSignOut,
-          style: "destructive",
+          style: "destructive" as const,
           onPress: () => {
             if (signOutChoiceProceeds("discard")) {
               void auth.signOut("discard");
             }
           },
         },
-      ]);
+      ];
+      Alert.alert(copy.unsyncedTitle, spec.offerSynchronize ? copy.unsyncedBody : copy.syncUnavailable, buttons);
       return;
     }
     Alert.alert(copy.signOut, copy.signOutConfirm, [
@@ -56,6 +84,21 @@ export default function SettingsScreen() {
         </Text>
       ) : null}
       <Text style={styles.body}>{auth.bootstrap?.user.display_email ?? auth.snapshot.emailDisplay}</Text>
+      {syncSummary ? (
+        <Text accessibilityLiveRegion="polite" style={styles.body}>
+          {copy.syncStatusLabel}: {syncSummary}
+        </Text>
+      ) : null}
+      {LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={copy.synchronizeNow}
+          onPress={() => void auth.synchronizeNow().then(() => refreshSyncSummary())}
+          style={styles.syncButton}
+        >
+          <Text style={styles.syncLabel}>{copy.synchronizeNow}</Text>
+        </Pressable>
+      ) : null}
       {auth.error ? (
         <Text accessibilityLiveRegion="assertive" style={styles.banner}>
           {auth.error}
@@ -73,6 +116,16 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: type.screen, fontWeight: "700" },
   banner: { color: colors.navy, fontSize: type.secondary },
   body: { color: colors.secondary, fontSize: type.body },
+  syncButton: {
+    minHeight: 44,
+    borderColor: colors.navy,
+    borderWidth: 1,
+    borderRadius: space.radius,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: space.scale,
+  },
+  syncLabel: { color: colors.navy, fontSize: type.body, fontWeight: "600" },
   button: {
     minHeight: 44,
     borderColor: colors.danger,

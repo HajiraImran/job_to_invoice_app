@@ -76,6 +76,7 @@ function mockDb(options?: {
       }
       return null;
     },
+    getAllAsync: async <T,>() => [] as T[],
     closeAsync: async () => {
       state.closed = true;
     },

@@ -12,10 +12,14 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { secureRandomUUID } from "../../../src/crypto/uuid.ts";
 import { copy } from "../../../src/i18n/en.ts";
 import { emptyJobForm, firstJobFieldError, jobFormFocusName, jobRequestFromForm, type JobFormValues } from "../../../src/jobs/form.ts";
 import { type JobDetail } from "../../../src/jobs/presentation.ts";
+import { upsertCachedJob } from "../../../src/jobs/cache.ts";
 import { jobDetailPath, jobsIndexPath } from "../../../src/jobs/routes.ts";
+import { enqueueOutboxOperation } from "../../../src/sync/outbox.ts";
+import { isOfflineReadPermitted } from "@job-to-invoice/schemas";
 import { retainOrCreateSetupIdempotencyKey } from "../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../src/session/AuthProvider.tsx";
 import { colors, space, type } from "../../../src/theme.ts";
@@ -48,8 +52,15 @@ export default function CreateJobScreen() {
   }
 
   async function submit() {
-    if (auth.snapshot.status === "offline_cached" || auth.snapshot.status === "access_expired") {
-      setFormError(auth.snapshot.status === "access_expired" ? copy.accessExpired : copy.offlineCached);
+    if (auth.snapshot.status === "access_expired") {
+      setFormError(copy.accessExpired);
+      return;
+    }
+    if (
+      auth.snapshot.status === "offline_cached" &&
+      !isOfflineReadPermitted(auth.snapshot.lastAuthenticatedAt, Date.now())
+    ) {
+      setFormError(copy.accessExpired);
       return;
     }
     if (!parsed.ok) {
@@ -65,6 +76,59 @@ export default function CreateJobScreen() {
     setSubmitting(true);
     setFormError(undefined);
     setErrors({});
+    const session = auth.getSyncSessionDb();
+
+    if (auth.snapshot.status === "offline_cached") {
+      if (!session) {
+        setSubmitting(false);
+        setFormError(copy.quoteStorageFailure);
+        return;
+      }
+      try {
+        const pendingJob: JobDetail = {
+          id: parsed.value.id,
+          customer_id: parsed.value.id,
+          customer_name: parsed.value.customer_name,
+          title: parsed.value.title,
+          lifecycle: "draft",
+          mode: parsed.value.mode,
+          no_site: parsed.value.no_site,
+          version: 1,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          site_address: parsed.value.site_address ?? null,
+          internal_notes: parsed.value.internal_notes ?? "",
+          permitted_actions: [],
+          quote_draft: null,
+          current_quote: null,
+        };
+        await upsertCachedJob(session.db, {
+          jobId: pendingJob.id,
+          payloadJson: JSON.stringify(pendingJob),
+          listState: "active",
+          syncBadge: "pending",
+          serverConfirmed: false,
+        });
+        await enqueueOutboxOperation(session.db, {
+          operationId: idempotencyKey.current ?? secureRandomUUID(),
+          resourceKind: "job",
+          resourceId: pendingJob.id,
+          method: "POST",
+          path: "/v1/jobs",
+          bodyJson: JSON.stringify(parsed.value),
+          idempotencyKey: idempotencyKey.current ?? secureRandomUUID(),
+        });
+        setSubmitting(false);
+        setFormError(copy.jobOfflineCreate);
+        router.replace(jobDetailPath(pendingJob.id));
+        return;
+      } catch {
+        setSubmitting(false);
+        setFormError(copy.quoteStorageFailure);
+        return;
+      }
+    }
+
     const result = await auth.runOwnerRequest<JobDetail>({
       path: "/v1/jobs",
       method: "POST",
@@ -73,6 +137,19 @@ export default function CreateJobScreen() {
     });
     setSubmitting(false);
     if (result.ok) {
+      if (session) {
+        try {
+          await upsertCachedJob(session.db, {
+            jobId: result.data.id,
+            payloadJson: JSON.stringify(result.data),
+            listState: "active",
+            syncBadge: "synced",
+            serverConfirmed: true,
+          });
+        } catch {
+          /* ignore */
+        }
+      }
       router.replace(jobDetailPath(result.data.id));
       return;
     }

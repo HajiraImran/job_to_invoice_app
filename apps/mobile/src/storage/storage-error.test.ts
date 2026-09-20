@@ -8,6 +8,9 @@ describe("storage errors", () => {
       "INVALID_OWNER",
       "KEY_UNAVAILABLE",
       "DATABASE_UNAVAILABLE",
+      "OWNER_MISMATCH",
+      "OFFLINE_WINDOW_EXPIRED",
+      "SYNC_PAUSED",
       "WIPE_FAILED",
     ]);
     for (const code of STORAGE_ERROR_CODES) {
