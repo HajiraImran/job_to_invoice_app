@@ -274,7 +274,52 @@ export type OwnerRequestRecord = {
   terminal: boolean;
   request_state?: string | null;
   decided_at?: string | null;
+  resends_used_today?: number;
+  resend_available_at?: string | null;
+  can_resend?: boolean;
+  can_withdraw?: boolean;
+  can_replace_link?: boolean;
 };
+
+export type RequestActionKind = "hidden" | "disabled" | "ready" | "busy" | "offline";
+
+export function presentRequestActions(input: {
+  authStatus: string;
+  request?: OwnerRequestRecord;
+  submitting?: boolean;
+  nowMs?: number;
+}): {
+  resend: RequestActionKind;
+  withdraw: RequestActionKind;
+  replaceLink: RequestActionKind;
+  resendHint?: string;
+} {
+  if (input.authStatus === "offline_cached") {
+    return { resend: "offline", withdraw: "offline", replaceLink: "offline", resendHint: copy.requestOffline };
+  }
+  if (!input.request || input.request.request_state !== "pending") {
+    return { resend: "hidden", withdraw: "hidden", replaceLink: "hidden" };
+  }
+  if (input.submitting) {
+    return { resend: "busy", withdraw: "busy", replaceLink: "busy" };
+  }
+  const availableAt = input.request.resend_available_at
+    ? Date.parse(input.request.resend_available_at)
+    : NaN;
+  const now = input.nowMs ?? Date.now();
+  const cooling = Number.isFinite(availableAt) && availableAt > now;
+  const canResend = Boolean(input.request.can_resend) && !cooling;
+  return {
+    resend: canResend ? "ready" : "disabled",
+    withdraw: input.request.can_withdraw === false ? "disabled" : "ready",
+    replaceLink: input.request.can_replace_link === false ? "disabled" : "ready",
+    resendHint: canResend
+      ? undefined
+      : cooling
+        ? copy.requestResendWait
+        : copy.requestResendCap,
+  };
+}
 
 export type DeliveryStatusKind =
   | "loading"
@@ -359,6 +404,10 @@ export function requestStateLabel(state: string | null | undefined): string | un
       return copy.requestStateExpired;
     case "superseded":
       return copy.requestStateSuperseded;
+    case "withdrawn":
+      return copy.requestStateWithdrawn;
+    case "revoked":
+      return copy.requestStateRevoked;
     default:
       return undefined;
   }

@@ -1,5 +1,6 @@
 > Source: `docs/PRD.md` §§21–23, ACC02A, API04, API05
 > D-002 Resolved: both ACC02A `POST /account/action-grants` and every §22 route are required.
+> Implemented owner routes use the `/v1` prefix documented in `openapi/v1.json`. S12 request controls and ACC02A `replace_link` grants are specified there; inventory rows without OpenAPI paths remain unimplemented.
 
 # API contract
 
@@ -115,7 +116,7 @@ Both texts are required. Keep every §22 route. `POST /account/action-grants` is
 
 | Method and route | Access | Input and result |
 | --- | --- | --- |
-| POST /account/action-grants | Owner after fresh OTP (not refresh) | `{action}` for export, deletion, email_change, replace_link; returns one-time grant for `X-Action-Grant`; 5-minute expiry; single use |
+| POST /account/action-grants | Owner after fresh OTP (not refresh) | `{action}` for export, deletion, email_change, replace_link; returns one-time grant for `X-Action-Grant`; 5-minute expiry; single use. **Implemented:** `POST /v1/account/action-grants` issues `replace_link` only when JWT `auth_time` is fresh (D-024); other actions return 422. |
 
 Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. Grant issued for `export` used on `replace_link` → 403.
 
@@ -153,9 +154,9 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /drafts/{id}/publish | Owner | preview_hash, recipient, expiry, replace_pending_request_id?; 202 delivery |
 | GET /documents/{id} | Owner | Immutable snapshot + live status |
 | GET /documents/{id}/download | Owner | Artifact state or five-minute signed URL |
-| POST /requests/{id}/resend | Owner | Bounded retry; no expiry extension |
-| POST /requests/{id}/withdraw | Owner | Reason; terminal withdrawal |
-| POST /requests/{id}/replace-link | Owner + X-Action-Grant replace_link | Rotate token_hash and sessions; preserve decisions |
+| POST /requests/{id}/resend | Owner | Bounded retry; no expiry extension. **Implemented:** `POST /v1/requests/{requestId}/resend`; Idempotency-Key; APR03 rotate; NTF04 caps + Retry-After. |
+| POST /requests/{id}/withdraw | Owner | Reason; terminal withdrawal. **Implemented:** `POST /v1/requests/{requestId}/withdraw`; Idempotency-Key; EMAIL08. |
+| POST /requests/{id}/replace-link | Owner + X-Action-Grant replace_link | Rotate token_hash and sessions; preserve decisions. **Implemented:** `POST /v1/requests/{requestId}/replace-link`; Idempotency-Key + X-Action-Grant. |
 | POST /jobs/{id}/invoice-preview | Owner | Due date/instructions; preview_hash |
 | POST /jobs/{id}/issue-invoice | Owner | preview_hash; immutable invoice |
 | POST /invoices/{id}/void | Owner | Reason; strict ledger conditions |

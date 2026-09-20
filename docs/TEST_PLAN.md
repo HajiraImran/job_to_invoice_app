@@ -79,11 +79,11 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA14 | Reset customer/site of published job | Blocked; new job required | API |
 | QA15 | Edit catalogue price and business address | Issued docs unchanged | Integration |
 | QA16 | Publish replacement while old pending | Old superseded; one pending index | Concurrency |
-| QA17 | Old recipient follows replaced link | Cannot decide; correct message. Revoke-after-approve leaves `approval_decisions` intact (TX06). | Portal |
+| QA17 | Old recipient follows replaced link | Cannot decide; correct message. Revoke-after-approve leaves `approval_decisions` intact (TX06). | Portal | Local: apps/api/src/requests.test.ts + openapi/v1.json replace-link. Live portal device unverified. |
 | QA18 | Link forwarded to unrelated person | No scope without bound-email code | Portal |
 | QA19 | OTP brute force and resends | Limits; no raw codes logged | Isolation |
 | QA20 | Approve twice concurrently | One decision and one scope apply | Concurrency |
-| QA21 | Approve and withdraw race | One terminal outcome; loser conflict | Concurrency |
+| QA21 | Approve and withdraw race | One terminal outcome; loser conflict | Concurrency | Local: withdraw FOR UPDATE + terminal state in apps/api/src/requests.test.ts; openapi withdraw 409. Parallel harness later. |
 | QA22 | Approve 1 ms after expiry | Rejected despite worker lag | Concurrency |
 | QA23 | Opened before expiry, approved after | Rejected; no cached authority | Portal |
 | QA24 | Consent unticked or hash altered | Rejected | Portal |

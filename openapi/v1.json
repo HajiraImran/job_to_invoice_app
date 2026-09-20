@@ -423,7 +423,8 @@
     },
     "/v1/jobs/{jobId}/request": {
       "get": {
-        "summary": "Read-only owner delivery status for the job approval request (S12)",
+        "summary": "Owner approval-request status for a job (S12)",
+        "description": "Returns masked recipient, delivery state, request_state, and resend/withdraw/replace eligibility. Does not return approval tokens, OTPs, or plaintext recipient email.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -434,11 +435,226 @@
           }
         ],
         "responses": {
-          "200": { "description": "Masked recipient, template_id, delivery state, request_state, and safe timestamps" },
+          "200": {
+            "description": "Masked recipient, delivery state, request_state, resends_used_today, resend_available_at, can_resend, can_withdraw, can_replace_link"
+          },
           "401": { "description": "Missing or invalid access token" },
-          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "403": { "description": "Suspended, deleting, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant job or request" },
-          "422": { "description": "Invalid job id" }
+          "422": { "description": "Invalid job id" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/account/action-grants": {
+      "post": {
+        "summary": "Issue a single-use ACC02A action grant after fresh owner authentication",
+        "description": "Requires JWT auth_time within 300 seconds. This deployment issues replace_link only; export, deletion, and email_change return 422. The plaintext grant is returned once and must be sent as X-Action-Grant. Grant hashes are stored server-side; grants are not logged.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ActionGrantCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "One-time grant plaintext, action, and expires_at. Approval tokens and OTPs are never returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["data", "meta"],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["grant", "action", "expires_at"],
+                      "properties": {
+                        "grant": { "type": "string", "description": "base64url 32-byte secret; send as X-Action-Grant once" },
+                        "action": { "type": "string", "enum": ["replace_link"] },
+                        "expires_at": { "type": "string", "format": "date-time" }
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["request_id", "server_time"],
+                      "properties": {
+                        "request_id": { "type": "string" },
+                        "server_time": { "type": "string", "format": "date-time" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid access token" },
+          "403": {
+            "description": "ACTION_GRANT_REQUIRED when auth_time is missing or older than 300s; ACCOUNT_SUSPENDED / ACCOUNT_DELETING / SETUP_INCOMPLETE"
+          },
+          "422": { "description": "Unknown fields, unsupported action, or deferred action (export/deletion/email_change)" },
+          "429": { "description": "RATE_LIMITED; Retry-After seconds" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/requests/{requestId}/resend": {
+      "post": {
+        "summary": "Resend a pending approval request email (NTF04, APR03 rotate)",
+        "description": "Rotates the approval token and invalidates old sessions/links. Does not extend commercial expiry. Queues EMAIL01. Empty body only. Does not return raw approval tokens.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Resend accepted. Raw approval tokens are never returned.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestResendSuccess" }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, deleting, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant request (NOT_FOUND / REQUEST_UNAVAILABLE concealment)" },
+          "409": { "description": "IDEMPOTENCY_MISMATCH or VERSION_CONFLICT" },
+          "422": { "description": "Invalid request id, unknown body fields, or missing Idempotency-Key UUID" },
+          "429": { "description": "NTF04 resend cap/cooldown or actor RATE_LIMITED; Retry-After seconds" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/requests/{requestId}/withdraw": {
+      "post": {
+        "summary": "Withdraw a pending approval request",
+        "description": "Atomic terminal withdrawal under row lock (QA21). Revokes portal sessions. Queues EMAIL08 without a new review link. Does not return raw approval tokens.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RequestWithdraw" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Withdrawn request summary. Raw approval tokens are never returned.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestWithdrawSuccess" }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, deleting, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant request; REQUEST_UNAVAILABLE for non-pending non-approved states" },
+          "409": { "description": "ALREADY_DECIDED, REQUEST_EXPIRED, IDEMPOTENCY_MISMATCH, or VERSION_CONFLICT" },
+          "422": { "description": "Invalid reason, unknown fields, or missing Idempotency-Key UUID" },
+          "429": { "description": "Actor RATE_LIMITED; Retry-After seconds" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/requests/{requestId}/replace-link": {
+      "post": {
+        "summary": "Rotate the pending approval link (APR03) using an ACC02A replace_link grant",
+        "description": "Requires X-Action-Grant for unused replace_link grant. Rotates token_hash, revokes sessions, queues EMAIL08 with the new link. Idempotent replay does not rotate again. Does not return the new raw approval token.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "X-Action-Grant",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Single-use replace_link grant from POST /v1/account/action-grants"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Link replaced; delivery_state queued. New raw approval token is never returned.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestReplaceLinkSuccess" }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid access token" },
+          "403": {
+            "description": "ACTION_GRANT_REQUIRED / ACTION_GRANT_INVALID; suspended, deleting, or setup incomplete"
+          },
+          "404": { "description": "Unknown or cross-tenant request (NOT_FOUND / REQUEST_UNAVAILABLE concealment)" },
+          "409": { "description": "IDEMPOTENCY_MISMATCH or VERSION_CONFLICT" },
+          "422": { "description": "Invalid request id, unknown body fields, or missing Idempotency-Key UUID" },
+          "429": { "description": "Actor RATE_LIMITED; Retry-After seconds" },
+          "503": { "description": "Service unavailable" }
         }
       }
     },
@@ -639,6 +855,147 @@
           "preview_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "recipient_email": { "type": "string", "maxLength": 254 },
           "replace_pending_request_id": { "type": "string", "format": "uuid" }
+        }
+      },
+      "ActionGrantCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["export", "deletion", "email_change", "replace_link"],
+            "description": "Inventory actions per ACC02A. Only replace_link is issued in the current deployment; others return 422."
+          }
+        }
+      },
+      "RequestWithdraw": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason"],
+        "properties": {
+          "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+        }
+      },
+      "ApiMeta": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["request_id", "server_time"],
+        "properties": {
+          "request_id": { "type": "string" },
+          "server_time": { "type": "string", "format": "date-time" }
+        }
+      },
+      "RequestResendSuccess": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "request_id",
+              "document_id",
+              "job_id",
+              "request_state",
+              "token_rotated_at",
+              "delivery_state",
+              "number",
+              "revision_label",
+              "revision_no",
+              "resends_used_today",
+              "resend_available_at",
+              "can_resend",
+              "replayed"
+            ],
+            "properties": {
+              "request_id": { "type": "string", "format": "uuid" },
+              "document_id": { "type": "string", "format": "uuid" },
+              "job_id": { "type": "string", "format": "uuid" },
+              "request_state": { "type": "string" },
+              "token_rotated_at": { "type": "string", "format": "date-time", "nullable": true },
+              "delivery_state": { "type": "string", "enum": ["queued"] },
+              "number": { "type": "string" },
+              "revision_label": { "type": "string" },
+              "revision_no": { "type": "integer" },
+              "resends_used_today": { "type": "integer" },
+              "resend_available_at": { "type": "string", "format": "date-time", "nullable": true },
+              "can_resend": { "type": "boolean" },
+              "replayed": { "type": "boolean" }
+            }
+          },
+          "meta": { "$ref": "#/components/schemas/ApiMeta" }
+        }
+      },
+      "RequestWithdrawSuccess": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "request_id",
+              "document_id",
+              "job_id",
+              "request_state",
+              "decided_at",
+              "number",
+              "revision_label",
+              "revision_no",
+              "replayed"
+            ],
+            "properties": {
+              "request_id": { "type": "string", "format": "uuid" },
+              "document_id": { "type": "string", "format": "uuid" },
+              "job_id": { "type": "string", "format": "uuid" },
+              "request_state": { "type": "string", "enum": ["withdrawn"] },
+              "decided_at": { "type": "string", "format": "date-time", "nullable": true },
+              "number": { "type": "string" },
+              "revision_label": { "type": "string" },
+              "revision_no": { "type": "integer" },
+              "replayed": { "type": "boolean" }
+            }
+          },
+          "meta": { "$ref": "#/components/schemas/ApiMeta" }
+        }
+      },
+      "RequestReplaceLinkSuccess": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "request_id",
+              "document_id",
+              "job_id",
+              "request_state",
+              "token_rotated_at",
+              "delivery_state",
+              "number",
+              "revision_label",
+              "revision_no",
+              "replayed"
+            ],
+            "properties": {
+              "request_id": { "type": "string", "format": "uuid" },
+              "document_id": { "type": "string", "format": "uuid" },
+              "job_id": { "type": "string", "format": "uuid" },
+              "request_state": { "type": "string" },
+              "token_rotated_at": { "type": "string", "format": "date-time", "nullable": true },
+              "delivery_state": { "type": "string", "enum": ["queued"] },
+              "number": { "type": "string" },
+              "revision_label": { "type": "string" },
+              "revision_no": { "type": "integer" },
+              "replayed": { "type": "boolean" }
+            }
+          },
+          "meta": { "$ref": "#/components/schemas/ApiMeta" }
         }
       }
     }

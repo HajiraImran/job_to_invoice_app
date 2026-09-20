@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderEmail01, renderEmail03, renderEmail04, renderEmail05, reviewHref, sendResendEmail } from "./email.ts";
+import { renderEmail01, renderEmail03, renderEmail04, renderEmail05, renderEmail08, reviewHref, sendResendEmail } from "./email.ts";
 
 describe("EMAIL01 template", () => {
   it("renders a fragment href without a token query parameter or PDF attachment", () => {
@@ -22,7 +22,7 @@ describe("EMAIL01 template", () => {
   });
 });
 
-describe("EMAIL03 EMAIL04 EMAIL05 templates", () => {
+describe("EMAIL03 EMAIL04 EMAIL05 EMAIL08 templates", () => {
   it("keeps the verification code free of quote totals and does not mint a second token", () => {
     const code = renderEmail03({ appName: "Job to Invoice", code: "123456" });
     expect(code.subject).toBe("Job to Invoice verification code");
@@ -47,6 +47,21 @@ describe("EMAIL03 EMAIL04 EMAIL05 templates", () => {
     });
     expect(owner.subject).toBe("Quote Q-000001 was declined");
     expect(owner.html).not.toContain("/review#");
+  });
+
+  it("renders EMAIL08 withdraw without a link and replace with a fragment href", () => {
+    const withdrawn = renderEmail08({ appName: "Job to Invoice", number: "Q-000001", revisionNo: 1 });
+    expect(withdrawn.subject).toBe("Update to document Q-000001");
+    expect(withdrawn.text).toContain("no longer available");
+    expect(withdrawn.html).not.toContain("/review#");
+    const replaced = renderEmail08({
+      appName: "Job to Invoice",
+      number: "Q-000001",
+      revisionNo: 1,
+      href: "https://portal.example.test/review#newtoken",
+    });
+    expect(replaced.html).toContain("/review#newtoken");
+    expect(replaced.html).not.toContain("?token=");
   });
 });
 

@@ -225,7 +225,13 @@ export function presentOwnerRequest(row: {
   updated_at: Date | string;
   request_state?: string;
   decided_at?: Date | string | null;
+  resends_used_today?: string | number | null;
+  resend_available_at?: Date | string | null;
+  can_resend?: boolean | null;
+  can_withdraw?: boolean | null;
+  can_replace_link?: boolean | null;
 }) {
+  const pending = (row.request_state ?? null) === "pending";
   return {
     request_id: row.request_id,
     document_id: row.document_id,
@@ -244,6 +250,11 @@ export function presentOwnerRequest(row: {
     updated_at: asIso(row.updated_at),
     retryable: !TERMINAL_DELIVERY.has(row.delivery_state),
     terminal: TERMINAL_DELIVERY.has(row.delivery_state),
+    resends_used_today: asCents(row.resends_used_today ?? 0),
+    resend_available_at: row.resend_available_at ? asIso(row.resend_available_at) : null,
+    can_resend: Boolean(row.can_resend) && pending,
+    can_withdraw: row.can_withdraw == null ? pending : Boolean(row.can_withdraw),
+    can_replace_link: row.can_replace_link == null ? pending : Boolean(row.can_replace_link),
   };
 }
 
@@ -924,9 +935,15 @@ export function registerQuotePublishRoutes(
           updated_at: Date | string;
           request_state: string;
           decided_at: Date | string | null;
+          resends_used_today: string | number;
+          resend_available_at: Date | string | null;
+          can_resend: boolean;
+          can_withdraw: boolean;
+          can_replace_link: boolean;
         }>(
           `select request_id, document_id, job_id, number, revision_no, template_id, delivery_state,
-                  recipient_email, last_event_at, retry_count, created_at, updated_at, request_state, decided_at
+                  recipient_email, last_event_at, retry_count, created_at, updated_at, request_state, decided_at,
+                  resends_used_today, resend_available_at, can_resend, can_withdraw, can_replace_link
            from commercial.owner_job_request($1::uuid, $2::uuid)`,
           [owner.workspace_id, params.jobId],
         );

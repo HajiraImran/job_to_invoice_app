@@ -96,6 +96,36 @@ export function renderEmail05(input: {
   return { subject, text, html };
 }
 
+export function renderEmail08(input: {
+  appName: string;
+  number: string;
+  revisionNo: number;
+  href?: string;
+}): { subject: string; text: string; html: string } {
+  const subject = `Update to document ${input.number}`;
+  const lines = [
+    input.appName,
+    `The previous approval link for ${input.number} R${input.revisionNo} is no longer available for approval.`,
+  ];
+  if (input.href) {
+    lines.push("Use the new review link below.");
+    lines.push(`Review quote: ${input.href}`);
+  }
+  const text = lines.join("\n");
+  const html = input.href
+    ? `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>The previous approval link for ${escapeHtml(input.number)} R${input.revisionNo} is no longer available for approval.</p>
+<p>Use the new review link below.</p>
+<p><a href="${escapeAttribute(input.href)}">Review quote</a></p>
+</body></html>`
+    : `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>The previous approval link for ${escapeHtml(input.number)} R${input.revisionNo} is no longer available for approval.</p>
+</body></html>`;
+  return { subject, text, html };
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -326,6 +356,24 @@ export async function processSendEmail(input: {
         revisionNo: Number(claimed.revision_no),
         decision: decoded,
       });
+    } else if (claimed.template_id === "EMAIL08") {
+      try {
+        const raw = decryptDeliveryToken(payload, secret);
+        rendered = renderEmail08({
+          appName: input.appName,
+          number: claimed.number,
+          revisionNo: Number(claimed.revision_no),
+          href: reviewHref(input.portalOrigin, encodeFragmentToken(raw)),
+        });
+        raw.fill(0);
+      } catch {
+        decryptUtf8(payload, secret);
+        rendered = renderEmail08({
+          appName: input.appName,
+          number: claimed.number,
+          revisionNo: Number(claimed.revision_no),
+        });
+      }
     } else {
       await withWorkerRole(input.pool, async (client) => {
         await client.query("select commercial.fail_send_email($1::uuid, $2, $3)", [

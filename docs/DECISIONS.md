@@ -465,3 +465,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | Yes |
 | Escalation category | architecture |
 
+### D-024 — ACC02A action grants use JWT auth_time for fresh authentication
+
+| Field | Value |
+| --- | --- |
+| ID | D-024 |
+| Date | 2026-09-20 |
+| Status | Resolved |
+| Decision | `POST /v1/account/action-grants` requires a verified access JWT whose `auth_time` claim is within 300 seconds of server now. Ordinary refresh tokens without a recent `auth_time` are rejected with ACTION_GRANT_REQUIRED. Issued grants are 32-byte secrets, stored only as SHA-256 hashes in `identity.action_grants`, expire in five minutes, and are single-use. This slice issues and consumes `replace_link` only; export, deletion, and email_change remain deferred. APR03 requires token rotation on both owner resend and replace-link; worker retries of the same delivery attempt do not rotate. |
+| Reason | ACC02A forbids treating refresh alone as fresh authentication; Supabase Auth exposes `auth_time` after OTP verification. |
+| Evidence | `apps/api/src/action-grants.ts`; `apps/api/src/jwt.ts`; `apps/api/src/requests.ts`; `supabase/migrations/0012_owner_request_controls.sql`; `apps/api/src/requests.test.ts` |
+| Owner | Engineering lead |
+| PRD implication | Replace-link requires a fresh owner OTP before grant issuance. |
+| Impacted requirement IDs | ACC02A, S12, APR03, QUO03, NTF04, EMAIL08, QA17, QA21 |
+| Impacted test IDs | `apps/api/src/requests.test.ts` |
+| Migration implications | `0012_owner_request_controls.sql` |
+| Reversible | Yes for unused actions; replace_link path is production behavior |
+| Escalation category | security |
+

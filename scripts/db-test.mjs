@@ -392,8 +392,9 @@ try {
       "select version from supabase_migrations.schema_migrations order by version",
     );
     assert(
-      recorded.rows.map((row) => row.version).join(",") === "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011",
-      "bootstrap role must record 0001-0011 after RESET ROLE",
+      recorded.rows.map((row) => row.version).join(",") ===
+        "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012",
+      "bootstrap role must record 0001-0012 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {

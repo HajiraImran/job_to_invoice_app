@@ -23,6 +23,8 @@ import { registerJobRoutes } from "./jobs.ts";
 import { registerQuotePublishRoutes } from "./quotes.ts";
 import { registerEmailWebhookRoutes } from "./webhooks-email.ts";
 import { registerPortalRoutes } from "./portal.ts";
+import { registerActionGrantRoutes } from "./action-grants.ts";
+import { registerRequestMutationRoutes } from "./requests.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
@@ -423,6 +425,12 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerQuotePublishRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerActionGrantRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerRequestMutationRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerEmailWebhookRoutes(app, deps);

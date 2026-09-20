@@ -8,6 +8,7 @@ export type VerifiedAccess = {
   sub: string;
   email: string;
   role: string;
+  authTime?: number;
 };
 
 export class JwtVerificationError extends Error {
@@ -31,6 +32,14 @@ function readEmail(payload: JWTPayload): string | undefined {
   return undefined;
 }
 
+function readAuthTime(payload: JWTPayload): number | undefined {
+  const claims = payload as Record<string, unknown>;
+  if (typeof claims.auth_time === "number" && Number.isFinite(claims.auth_time)) {
+    return Math.floor(claims.auth_time);
+  }
+  return undefined;
+}
+
 function asAccess(payload: JWTPayload): VerifiedAccess {
   if (typeof payload.sub !== "string" || !UUID.test(payload.sub)) {
     throw new JwtVerificationError();
@@ -43,7 +52,8 @@ function asAccess(payload: JWTPayload): VerifiedAccess {
   if (!email) {
     throw new JwtVerificationError();
   }
-  return { sub: payload.sub, email, role };
+  const authTime = readAuthTime(payload);
+  return { sub: payload.sub, email, role, authTime };
 }
 
 export function createJwtVerifier(options: {

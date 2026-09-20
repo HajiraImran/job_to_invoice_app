@@ -39,7 +39,7 @@ Every data screen implements UI04: loading, empty, loaded, refresh failure, offl
 | S09 | Quote editor | mobile | `/(tabs)/jobs/[id]/quote` | Edit lines | JRN01, JRN06, JRN07 | — | S06 Quote, revision |
 | S10 | Line editor | mobile | `/(tabs)/jobs/[id]/line` | Save line | JRN01, JRN03, JRN06 | — | S09, S13 |
 | S11 | Preview and publish | mobile | `/(tabs)/jobs/[id]/publish` | Confirm publish | JRN01 | `document_published` | S09 |
-| S12 | Request detail | mobile | `/(tabs)/jobs/[id]/request` | Read-only delivery status (resend/withdraw/replace later) | JRN01–JRN04 | `request_delivery_result` | S08 |
+| S12 | Request detail | mobile | `/(tabs)/jobs/[id]/request` | Status, resend, withdraw, replace-link | JRN01–JRN04 | `request_delivery_result` | S08 |
 | S13 | Extra work editor | mobile | `/(tabs)/jobs/[id]/change` | Publish extra | JRN03 | `change_started` | S08 after accepted quote |
 | S14 | Reduction editor | mobile | `/(tabs)/jobs/[id]/reduce` | Publish reduction | JRN04 | `change_started` | S08 |
 | S15 | Invoice preview | mobile | `/(tabs)/jobs/[id]/invoice` | Issue invoice | JRN05, JRN06 | `invoice_issued` | S08 |
@@ -141,7 +141,7 @@ Implemented route: `/(tabs)/jobs/[id]/publish`. Review uses `POST /drafts/{id}/p
 
 ### S12 Request detail
 
-Implemented route: `/(tabs)/jobs/[id]/request`. Read-only delivery status with masked recipient, quote number/revision, request_state (`pending` / `approved` / `declined` / `expired` / `superseded`), and delivery states Loading, Queued, Sending, Accepted by email provider — not yet confirmed delivered, Delivered, Bounced, Complained, Failed, Offline, Retry status check. Retry issues one GET. Resend, withdraw, and replace remain later. Queued/accepted is not Delivered (NTF03).
+Implemented route: `/(tabs)/jobs/[id]/request`. Delivery status plus owner Resend (NTF04), Withdraw (reason confirm), and Replace-link (fresh OTP → ACC02A grant → rotate). Online-only mutations; never queued in SYNC01 outbox. Queued/accepted is not Delivered (NTF03). Live device/email unverified.
 
 ### S13 Extra work editor
 

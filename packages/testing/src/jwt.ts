@@ -12,6 +12,7 @@ export type JwtFixture = {
     audience?: string | string[];
     expiresIn?: string;
     expired?: boolean;
+    authTime?: number;
   }) => Promise<string>;
 };
 
@@ -30,10 +31,14 @@ export async function createJwtFixture(): Promise<JwtFixture> {
     jwks: { keys: [jwk] },
     sign: async (input) => {
       const now = Math.floor(Date.now() / 1000);
-      const jwt = new SignJWT({
+      const claims: Record<string, unknown> = {
         email: input.email,
         role: input.role ?? "authenticated",
-      });
+      };
+      if (input.authTime !== undefined) {
+        claims.auth_time = input.authTime;
+      }
+      const jwt = new SignJWT(claims);
       jwt.setProtectedHeader({ alg: "ES256", kid: "test-owner-key", typ: "JWT" });
       jwt.setSubject(input.sub);
       jwt.setIssuer(input.issuer ?? issuer);

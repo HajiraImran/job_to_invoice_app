@@ -96,9 +96,67 @@ if (!spec.paths?.["/v1/portal/report"]?.post) {
   errors.push("POST /v1/portal/report is required");
 }
 
+if (!spec.paths?.["/v1/account/action-grants"]?.post) {
+  errors.push("POST /v1/account/action-grants is required");
+}
+if (
+  spec.paths?.["/v1/account/action-grants"]?.post &&
+  !/auth_time|fresh/i.test(
+    `${spec.paths["/v1/account/action-grants"].post.description ?? ""} ${spec.paths["/v1/account/action-grants"].post.responses?.["403"]?.description ?? ""}`,
+  )
+) {
+  errors.push("POST /v1/account/action-grants must document fresh auth_time / ACTION_GRANT_REQUIRED");
+}
+if (!spec.paths?.["/v1/requests/{requestId}/resend"]?.post) {
+  errors.push("POST /v1/requests/{requestId}/resend is required");
+}
+if (
+  spec.paths?.["/v1/requests/{requestId}/resend"]?.post &&
+  !spec.paths["/v1/requests/{requestId}/resend"].post.parameters?.some((item) => item.name === "Idempotency-Key")
+) {
+  errors.push("POST /v1/requests/{requestId}/resend requires Idempotency-Key");
+}
+if (
+  spec.paths?.["/v1/requests/{requestId}/resend"]?.post &&
+  !spec.paths["/v1/requests/{requestId}/resend"].post.responses?.["429"]
+) {
+  errors.push("POST /v1/requests/{requestId}/resend must document 429 Retry-After for NTF04");
+}
+if (!spec.paths?.["/v1/requests/{requestId}/withdraw"]?.post) {
+  errors.push("POST /v1/requests/{requestId}/withdraw is required");
+}
+if (
+  spec.paths?.["/v1/requests/{requestId}/withdraw"]?.post &&
+  !spec.paths["/v1/requests/{requestId}/withdraw"].post.parameters?.some((item) => item.name === "Idempotency-Key")
+) {
+  errors.push("POST /v1/requests/{requestId}/withdraw requires Idempotency-Key");
+}
+if (!spec.paths?.["/v1/requests/{requestId}/replace-link"]?.post) {
+  errors.push("POST /v1/requests/{requestId}/replace-link is required");
+}
+if (
+  spec.paths?.["/v1/requests/{requestId}/replace-link"]?.post &&
+  !spec.paths["/v1/requests/{requestId}/replace-link"].post.parameters?.some((item) => item.name === "Idempotency-Key")
+) {
+  errors.push("POST /v1/requests/{requestId}/replace-link requires Idempotency-Key");
+}
+if (
+  spec.paths?.["/v1/requests/{requestId}/replace-link"]?.post &&
+  !spec.paths["/v1/requests/{requestId}/replace-link"].post.parameters?.some((item) => item.name === "X-Action-Grant")
+) {
+  errors.push("POST /v1/requests/{requestId}/replace-link requires X-Action-Grant");
+}
+if (
+  spec.paths?.["/v1/requests/{requestId}/resend"]?.post?.parameters?.some((item) => item.name === "If-Match") ||
+  spec.paths?.["/v1/requests/{requestId}/withdraw"]?.post?.parameters?.some((item) => item.name === "If-Match") ||
+  spec.paths?.["/v1/requests/{requestId}/replace-link"]?.post?.parameters?.some((item) => item.name === "If-Match")
+) {
+  errors.push("S12 request mutations must not require If-Match (not implemented)");
+}
+
 if (errors.length > 0) {
   console.error(errors.join("\n"));
   process.exit(1);
 }
 
-console.log("OpenAPI 3.1 owner jobs, quote-publish, and portal contract is valid.");
+console.log("OpenAPI 3.1 owner jobs, quote-publish, portal, and S12 request-controls contract is valid.");

@@ -22,10 +22,12 @@ export async function ownerRequest<T>(options: {
   body?: unknown;
   idempotencyKey?: string;
   ifMatch?: string | number;
+  headers?: Record<string, string>;
 }): Promise<{ ok: true; data: T } | { ok: false; error: ApiError }> {
   const headers: Record<string, string> = {
     accept: "application/json",
     authorization: `Bearer ${options.accessToken}`,
+    ...(options.headers ?? {}),
   };
   if (options.body !== undefined) {
     headers["content-type"] = "application/json";
