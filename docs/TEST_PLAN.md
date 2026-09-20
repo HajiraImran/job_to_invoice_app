@@ -192,6 +192,60 @@ Owner `GET /v1/me` client timeout is 15 seconds (`OWNER_ME_TIMEOUT_MS`); abort m
 
 The production draft-sync adapter remains empty (`LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED = false`). The real “unsynchronized drafts exist” device scenario is BLOCKED on SYNC01. Do not treat empty-port unit tests as QA05/QA06 evidence.
 
+## SYNC01 Phase 0 — SQLCipher foundation (EAS development build)
+
+Automated orchestration only (does **not** prove encryption):
+
+```sh
+pnpm --filter @job-to-invoice/mobile test -- src/storage
+pnpm --filter @job-to-invoice/mobile typecheck
+pnpm --filter @job-to-invoice/mobile lint
+```
+
+Expo Go is **not** valid evidence. `Constants.appOwnership === "expo"` is `UNSUPPORTED_RUNTIME`.
+
+### Manual verification (Windows PowerShell + physical device)
+
+Do not record secrets, owner IDs, keys, paths, or probe values in tickets or chat.
+
+1. From the repo root, create and install a **new** development client after `useSQLCipher: true` (native rebuild required):
+
+```powershell
+cd C:\Projects\Job_to_Invoice
+pnpm --filter @job-to-invoice/mobile exec eas build --profile development --platform android
+```
+
+Install the resulting build on a physical device. Then start Metro against the **dev client**, not Expo Go:
+
+```powershell
+pnpm --filter @job-to-invoice/mobile dev
+```
+
+2. Exercise `apps/mobile/src/storage` on the installed development client (temporary diagnostics UI must not remain in the tree):
+   - Confirm capability is `sqlcipher_native` (not Expo Go).
+   - Open an encrypted diagnostics database, write a fixed non-sensitive probe, read it back, and close.
+   - Force-quit the app, relaunch the same build, reopen with the **same** SecureStore key, and read the probe again.
+   - Confirm a deliberately wrong key cannot read the database (`DATABASE_UNAVAILABLE` / wrong-key rejection).
+   - Call `wipeOwnerEncryptedDatabase`, then confirm the SecureStore key entry is gone and remnant access fails safely.
+   - Confirm Metro / device logs show no key material, owner IDs, database paths, SQLCipher pragmas with secrets, tokens, or emails.
+   - Optional (still required before claiming full ciphertext proof): copy the `.sqlite` file off-device and open it with a normal SQLite viewer; it must **not** be readable as plaintext SQLite.
+
+3. Record pass/fail only as device evidence notes. Phase 0 foundation checks may be marked VERIFIED when A–E pass on a physical EAS development build. Do **not** mark full SYNC01 (jobs cache, drafts, outbox, conflict resolution, combined offline behavior) IMPLEMENTED or VERIFIED until those slices exist and are proven.
+
+### Physical evidence — Android EAS development build (2026-09-20)
+
+Device: physical Android EAS development client with `useSQLCipher: true` (already installed; Metro JS reload only).
+
+| Check | Result |
+| --- | --- |
+| A. Native capability | PASS (`native_capability_ok`) |
+| B. Create and write probe | PASS (`probe_match`) |
+| C. Reopen after force-close/relaunch | PASS (`probe_match`) |
+| D. Wrong-key rejection | PASS (`wrong_key_rejected`) |
+| E. Secure wipe | PASS (`wipe_ok`) |
+
+Temporary diagnostics harness used for this pass was removed after evidence. Remaining unverified for Phase 0 ciphertext proof: normal-SQLite file extraction / plaintext viewer inspection (not performed). Remaining for full SYNC01: jobs cache, local drafts, outbox, conflict resolution, account-switch wipe policy, backup exclusion device proof, and combined offline behavior.
+
 ## Setup slice commands
 
 ```sh

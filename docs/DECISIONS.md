@@ -393,3 +393,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | Yes for timeout injection; empty draft adapter is replaced when SYNC01 ships |
 | Escalation category | none |
 
+### D-020 — SYNC01 Phase 0 uses expo-sqlite SQLCipher in EAS native builds
+
+| Field | Value |
+| --- | --- |
+| ID | D-020 |
+| Date | 2026-09-19 |
+| Status | Resolved |
+| Decision | Phase 0 encrypted local persistence uses `expo-sqlite@57.0.3` with the Expo config plugin `["expo-sqlite", { "useSQLCipher": true }]`. Each authenticated owner gets one SQLCipher database file and a 256-bit key stored only in `expo-secure-store` under `jti.sqlite.key.{owner_id}`. Keys are generated with `expo-crypto` `getRandomBytes(32)` and applied as `PRAGMA key = "x'<hex>'"` immediately after open. Expo Go is an unsupported runtime. Phase 0 creates only a harmless `sync01_probe` table; jobs, quotes, drafts, tokens, emails, and OTPs are not stored. Wipe deletes the database file and SecureStore key and reports failure if either step fails. Wrong-key open maps to `DATABASE_UNAVAILABLE` and does not regenerate a key over an existing ciphertext. |
+| Reason | PRD SYNC01 and SREF08 require encrypted per-owner SQLite, OS-secured keys, Expo development builds, and forbid plaintext fallback. Expo 57 documents SQLCipher via `useSQLCipher`. |
+| Evidence | `apps/mobile/app.json` plugin; `apps/mobile/package.json` / `pnpm-lock.yaml`; `apps/mobile/src/storage/*`; unit orchestration tests; physical Android EAS development build 2026-09-20 Phase 0 checks A–E PASS (capability, probe write, force-close reopen, wrong-key rejection, wipe). Normal-SQLite file extraction not performed. |
+| Owner | Engineering lead |
+| PRD implication | Phase 0 SQLCipher foundation device checks A–E are VERIFIED on physical Android EAS development build. Full SYNC01 (jobs cache, drafts, outbox, conflict resolution, combined offline) remains PENDING. Temporary diagnostics harness must not ship. QA05 backup-exclusion and plaintext file-inspection evidence still open. |
+| Impacted requirement IDs | SYNC01, NFR05, ACC02, DEC10, SREF08 |
+| Impacted test IDs | QA05; `apps/mobile/src/storage/*.test.ts`; EAS SQLCipher manual procedure in `docs/TEST_PLAN.md` |
+| Migration implications | None for Postgres. Requires a new EAS development/preview binary after enabling SQLCipher. |
+| Reversible | Yes before commercial records are stored; irreversible once owners have encrypted drafts on device |
+| Escalation category | architecture |
+

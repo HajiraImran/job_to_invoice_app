@@ -1,5 +1,5 @@
 > Source: `docs/PRD.md` ARC01, ARC05, §33, SREF01–SREF08
-> Foundation pins recorded 2026-09-14 (D-005). Encrypted SQLite remains a TBD spike. Original-quote PDF is D-016.
+> Foundation pins recorded 2026-09-14 (D-005). Encrypted SQLite Phase 0 chooses expo-sqlite SQLCipher (D-020). Original-quote PDF is D-016.
 
 # Dependency matrix
 
@@ -23,7 +23,7 @@ Substitution requires an architecture decision that preserves behaviour and acce
 | Supabase Auth | Owner email OTP | ACC01 | Supabase Auth | hosted project + JWKS | separate per env | AUTH_* ; dashboard OTP 6 / 600s / 60s / 5 fails (docs/ENV.md) | Verify SDK limits staging |
 | Cloudflare R2 | Private original PDFs; 5-minute presigned GET | DOC05 D-016 | Cloudflare R2 | S3 API via `@aws-sdk/client-s3` 3.1132.0 | staging/production | STORAGE_ENDPOINT (R2 HTTPS); STORAGE_REGION=auto; STORAGE_DOCUMENTS_BUCKET; STORAGE_FORCE_PATH_STYLE=false; worker Object Read&Write keys; API Object Read-only keys | No public bucket; no local/private endpoints; no `STORAGE_SERVICE_KEY`; no `service_role`; no EXPO_PUBLIC storage secrets |
 | MinIO | Private original PDFs for local/LAN development | DOC05 D-016 | MinIO | `minio/minio:RELEASE.2025-09-07T16-13-09Z` + `minio/mc:RELEASE.2025-08-13T08-35-41Z` | development only | STORAGE_ENDPOINT; STORAGE_DOWNLOAD_ENDPOINT; STORAGE_REGION; STORAGE_FORCE_PATH_STYLE=true; launching-process MinIO root + worker/API keys; no repo defaults | No anonymous/public policy; no minioadmin; HTTP only on localhost/RFC1918 |
-| Encrypted SQLite | Per-owner local drafts | SYNC01 | SQLCipher or supported module | TBD spike | mobile | OS-secured key | Plaintext forbidden |
+| Encrypted SQLite | Per-owner encrypted local DB (SYNC01 Phase 0 foundation) | SYNC01 SREF08 | expo-sqlite with SQLCipher | 57.0.3 (`~57.0.3`, Expo SDK 57) | mobile EAS development/preview/production native builds only | 256-bit key in expo-secure-store per owner (`jti.sqlite.key.{owner_id}`); never in source, env, logs, or beside the DB file | Plaintext SQLite and Expo Go are forbidden. Plugin: `["expo-sqlite", { "useSQLCipher": true }]`. Requires a new native binary after enabling SQLCipher. Phase 0 device checks A–E VERIFIED on physical Android EAS development build 2026-09-20. Normal-SQLite file extraction and full SYNC01 offline slices remain open. |
 | HTML-to-PDF | DOC01 layout | DOC01 D-016 | Playwright + Chromium | Playwright 1.63.0 | worker Docker | Inter Regular/Medium/Bold SIL OFL; `template_version=quote-original-v1` | A4; network blocked; must pass QA54 |
 | RevenueCat | Apple entitlement server | SUB* | RevenueCat | TBD | sandbox/prod separate | REVENUECAT_* | SREF03 SREF04 |
 | StoreKit | Localized prices; IAP | SUB01 REL01 | Apple | current SDK | mobile | MONTHLY/ANNUAL_PRODUCT_ID | No external purchase exception |
@@ -66,4 +66,10 @@ Empty mandatory production values must prevent startup or deploy (QA68).
 | SREF07 | Supabase RLS |
 | SREF08 | Expo SQLite / encryption support |
 
-Pinned 14 September 2026 for repository foundation. Recheck SQLCipher, RevenueCat SDK, and store submission separately. Original-quote PDF pins are D-016. The lockfile is `pnpm-lock.yaml`.
+Pinned 14 September 2026 for repository foundation. SQLCipher engine pin is D-020 (`expo-sqlite@57.0.3`). Recheck RevenueCat SDK and store submission separately. Original-quote PDF pins are D-016. The lockfile is `pnpm-lock.yaml`.
+
+### SYNC01 native-build impact (Phase 0)
+
+- Enabling `useSQLCipher: true` changes the native SQLite build. Install a new EAS development client before claiming encryption works.
+- Expo Go cannot verify SYNC01. `Constants.appOwnership === "expo"` is classified `UNSUPPORTED_RUNTIME`.
+- Unit mocks exercise key/open/wipe orchestration only. They do not prove ciphertext or Keychain behavior.

@@ -14,7 +14,17 @@
     "android": {
       "package": "com.jobtoinvoice.app"
     },
-    "plugins": ["expo-router", "expo-dev-client", "expo-secure-store"],
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      "expo-secure-store",
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ]
+    ],
     "experiments": {
       "typedRoutes": false
     },
