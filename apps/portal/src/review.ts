@@ -17,6 +17,7 @@ export const portalCopy = {
   expiredQuote: "This request has expired. Ask the business for a new version.",
   supersededQuote: "A newer version is available. This version cannot be approved.",
   quoteReady: "Review this quote",
+  invoiceReady: "View this invoice",
   pdfLoading: "Preparing the official PDF.",
   pdfFailure: "The official PDF is not ready. Approve is unavailable until it is.",
   consentLabel: "I confirm I have reviewed this quote, including the PDF, and I am authorized to approve or decline it. This is not a payment.",
@@ -59,6 +60,7 @@ export type PortalKind =
   | "expired_quote"
   | "superseded"
   | "quote_ready"
+  | "invoice_ready"
   | "pdf_loading"
   | "pdf_failure"
   | "confirm_accept"
@@ -126,7 +128,10 @@ export function documentKind(input: {
   if (input.pdfState !== "ready") {
     return "pdf_loading";
   }
-  return "quote_ready";
+  if ((input.allowedActions ?? ["approve"]).includes("approve")) {
+    return "quote_ready";
+  }
+  return "invoice_ready";
 }
 
 export function canApprove(kind: PortalKind, consentAccepted: boolean, pdfReady: boolean): boolean {

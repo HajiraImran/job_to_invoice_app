@@ -384,7 +384,7 @@ try {
       );
       assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
     }
-    assert(setRoleFiles === 9, "expected SET ROLE migrator in 0002–0008, 0010, and 0011");
+    assert(setRoleFiles === 10, "expected SET ROLE migrator in 0002–0008, 0010, 0011, and 0013");
   });
 
   await test("migration history inserts succeed as the restored bootstrap role", async () => {
@@ -393,8 +393,8 @@ try {
     );
     assert(
       recorded.rows.map((row) => row.version).join(",") ===
-        "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012",
-      "bootstrap role must record 0001-0012 after RESET ROLE",
+        "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012,0013",
+      "bootstrap role must record 0001-0013 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {

@@ -32,6 +32,7 @@ import type { Pool } from "pg";
 import { payloadFromJson } from "./drafts.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { fail, success } from "./envelope.ts";
+import { presentIssuedInvoice } from "./invoices.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
 import {
   quotePublishDatabaseStage,
@@ -92,6 +93,7 @@ type PublishRow = {
   lifecycle: string;
   issued_at: Date | string;
   issue_date: Date | string;
+  due_date?: Date | string | null;
   currency: string;
   net_cents: string | number;
   tax_cents: string | number;
@@ -839,20 +841,32 @@ export function registerQuotePublishRoutes(
       const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
         const result = await client.query<PublishRow>(
           `select d.id, d.workspace_id, d.job_id, dr.id as draft_id, d.kind, d.number, d.revision_no, d.lifecycle,
-                  d.issued_at, d.issue_date, d.currency, d.net_cents, d.tax_cents, d.total_cents, d.snapshot_json,
+                  d.issued_at, d.issue_date, d.due_date, d.currency, d.net_cents, d.tax_cents, d.total_cents, d.snapshot_json,
                   d.schema_version, d.snapshot_sha256,
-                  coalesce(p.download_state, 'preparing') as pdf_state
+                  coalesce(p.download_state, 'preparing') as pdf_state,
+                  da.delivery_state, da.request_id
            from commercial.documents d
            left join commercial.document_drafts dr
-             on dr.workspace_id = d.workspace_id and dr.parent_document_id = d.id and dr.kind = 'quote'
+             on dr.workspace_id = d.workspace_id and dr.parent_document_id = d.id and dr.kind = d.kind
            left join lateral commercial.original_pdf_download($2::uuid, d.id) p on true
-           where d.id = $1 and d.kind = 'quote'`,
+           left join lateral commercial.document_delivery_status($2::uuid, d.id) da on true
+           where d.id = $1 and d.kind in ('quote', 'invoice')`,
           [params.documentId, owner.workspace_id],
         );
         return result.rows[0];
       });
       if (!row) {
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, DOCUMENT_NOT_FOUND);
+      }
+      if (row.kind === "invoice") {
+        return success(
+          request.id,
+          presentIssuedInvoice({
+            ...row,
+            snapshot_json: row.snapshot_json as never,
+            due_date: row.due_date ?? null,
+          }),
+        );
       }
       return success(request.id, presentPublishedQuote(row));
     } catch {

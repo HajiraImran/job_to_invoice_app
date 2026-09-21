@@ -52,6 +52,12 @@ type JobRow = {
   current_quote_revision?: number | null;
   current_quote_lifecycle?: string | null;
   current_quote_total?: string | number | null;
+  active_invoice_id?: string | null;
+  active_invoice_number?: string | null;
+  active_invoice_revision?: number | null;
+  active_invoice_lifecycle?: string | null;
+  active_invoice_total?: string | number | null;
+  active_invoice_due?: Date | string | null;
   replayed?: boolean;
 };
 
@@ -155,6 +161,9 @@ function jobSummary(row: JobListRow) {
 }
 
 function jobDetail(row: JobRow) {
+  const canCreateInvoice =
+    row.lifecycle === "active" && row.current_quote_lifecycle === "accepted" && !row.active_invoice_id;
+  const canViewInvoice = Boolean(row.active_invoice_id);
   return {
     id: row.id,
     customer_id: row.customer_id,
@@ -168,7 +177,10 @@ function jobDetail(row: JobRow) {
     version: row.version,
     created_at: asIso(row.created_at),
     updated_at: asIso(row.updated_at),
-    permitted_actions: [] as string[],
+    permitted_actions: [
+      ...(canCreateInvoice ? ["create_invoice"] : []),
+      ...(canViewInvoice ? ["view_invoice"] : []),
+    ],
     quote_draft:
       row.quote_draft_id && row.quote_draft_version
         ? quoteDraftSummary(row.quote_draft_payload, row.quote_draft_id, row.quote_draft_version)
@@ -182,6 +194,24 @@ function jobDetail(row: JobRow) {
             lifecycle: row.current_quote_lifecycle,
             total_cents: row.current_quote_total ?? 0,
           })
+        : null,
+    active_invoice:
+      row.active_invoice_id && row.active_invoice_number && row.active_invoice_revision && row.active_invoice_lifecycle
+        ? {
+            id: row.active_invoice_id,
+            number: row.active_invoice_number,
+            revision_no: row.active_invoice_revision,
+            lifecycle: row.active_invoice_lifecycle,
+            total_cents:
+              typeof row.active_invoice_total === "number"
+                ? row.active_invoice_total
+                : Number(row.active_invoice_total ?? 0),
+            due_date: row.active_invoice_due
+              ? row.active_invoice_due instanceof Date
+                ? row.active_invoice_due.toISOString().slice(0, 10)
+                : String(row.active_invoice_due).slice(0, 10)
+              : null,
+          }
         : null,
   };
 }
@@ -501,7 +531,9 @@ export function registerJobRoutes(
                   j.no_site, j.lifecycle, j.mode, j.internal_notes, j.version, j.created_at, j.updated_at,
                   d.id as quote_draft_id, d.version as quote_draft_version, d.payload_json as quote_draft_payload,
                   q.id as current_quote_id, q.number as current_quote_number, q.revision_no as current_quote_revision,
-                  q.lifecycle as current_quote_lifecycle, q.total_cents as current_quote_total
+                  q.lifecycle as current_quote_lifecycle, q.total_cents as current_quote_total,
+                  inv.id as active_invoice_id, inv.number as active_invoice_number, inv.revision_no as active_invoice_revision,
+                  inv.lifecycle as active_invoice_lifecycle, inv.total_cents as active_invoice_total, inv.due_date as active_invoice_due
            from commercial.jobs j
            join commercial.customers c
              on c.workspace_id = j.workspace_id and c.id = j.customer_id
@@ -513,6 +545,9 @@ export function registerJobRoutes(
            left join commercial.documents q
              on q.workspace_id = j.workspace_id
             and q.id = j.current_quote_id
+           left join commercial.documents inv
+             on inv.workspace_id = j.workspace_id
+            and inv.id = j.active_invoice_id
            where j.id = $1`,
           [params.jobId],
         );

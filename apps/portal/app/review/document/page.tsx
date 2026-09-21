@@ -119,11 +119,12 @@ export default function ReviewDocumentPage() {
   }
 
   const pdfReady = doc?.pdf_state === "ready";
+  const viewOnly = Boolean(doc && !doc.allowed_actions.includes("approve"));
   const approveEnabled = canApprove(kind === "confirm_accept" ? "quote_ready" : kind, consent, Boolean(pdfReady)) && name.trim().length > 0;
 
   return (
     <main className="portal">
-      <h1>{portalCopy.quoteReady}</h1>
+      <h1>{viewOnly ? portalCopy.invoiceReady : portalCopy.quoteReady}</h1>
       {kind === "loading" || kind === "submitting" ? <p role="status">{kind === "submitting" ? portalCopy.submitting : portalCopy.loading}</p> : null}
       {kind === "expired_quote" ||
       kind === "superseded" ||
@@ -132,7 +133,7 @@ export default function ReviewDocumentPage() {
       ((kind === "confirm_accept" || kind === "confirm_reject") && message === portalCopy.identifierError) ? (
         <p role="alert">{message}</p>
       ) : null}
-      {doc && (kind === "quote_ready" || kind === "pdf_loading" || kind === "pdf_failure" || kind === "confirm_accept" || kind === "confirm_reject") ? (
+      {doc && (kind === "quote_ready" || kind === "invoice_ready" || kind === "pdf_loading" || kind === "pdf_failure" || kind === "confirm_accept" || kind === "confirm_reject") ? (
         <>
           <p>{doc.business_name}</p>
           <p>
@@ -142,6 +143,8 @@ export default function ReviewDocumentPage() {
           {kind === "pdf_loading" ? <p role="status">{portalCopy.pdfLoading}</p> : null}
           {kind === "pdf_failure" ? <p role="alert">{portalCopy.pdfFailure}</p> : null}
           {pdfReady ? <PortalPdfDownloadAction /> : null}
+          {!viewOnly ? (
+            <>
           <label>
             {portalCopy.signerName}
             <input value={name} onChange={(event) => setName(event.target.value.slice(0, 120))} />
@@ -150,6 +153,8 @@ export default function ReviewDocumentPage() {
             <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
             {doc.consent_text || portalCopy.consentLabel}
           </label>
+            </>
+          ) : null}
           {kind === "confirm_reject" ? (
             <label>
               {portalCopy.commentLabel}
@@ -172,7 +177,7 @@ export default function ReviewDocumentPage() {
               </button>
             </>
           ) : null}
-          {kind === "quote_ready" || kind === "pdf_loading" || kind === "pdf_failure" ? (
+          {kind === "quote_ready" || (!viewOnly && (kind === "pdf_loading" || kind === "pdf_failure")) ? (
             <>
               <button type="button" disabled={!approveEnabled || busy} onClick={() => setKind("confirm_accept")}>
                 {portalCopy.approve}

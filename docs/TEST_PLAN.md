@@ -88,15 +88,15 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA23 | Opened before expiry, approved after | Rejected; no cached authority | Portal |
 | QA24 | Consent unticked or hash altered | Rejected | Portal |
 | QA25 | Declined quote revised and resent | New revision; old decision kept | E2E |
-| QA26 | Accepted quote edited directly | Immutable write rejected API and DB, including `document_lines` and original PDF artifact | Integration |
+| QA26 | Accepted quote edited directly | Immutable write rejected API and DB, including `document_lines` and original PDF artifact | Integration; apps/api/src/invoices.test.ts quote snapshot bytes unchanged after invoice issue |
 | QA27 | Addition then approved reduction | Ledger accurate; sources visible | Integration |
 | QA28 | Two reductions exceed remaining | Later invalid rejected atomically | Concurrency |
 | QA29 | F05 and F06 | Exact tax and cap | Domain |
 | QA30 | F01–F12 mobile/server/PDF | Exact matching cents | Domain + PDF |
-| QA31 | Invoice with pending or draft change | Block with resolution | API |
+| QA31 | Invoice with pending or draft change | Block with resolution | API; apps/api/src/invoices.test.ts UNRESOLVED_CHANGES. Not VERIFIED on device |
 | QA32 | Invoice raced with change publish | No inconsistent scope/invoice | Concurrency |
-| QA33 | PDF worker crashes after invoice commit | Invoice issued; one artifact; no dup number | Worker |
-| QA34 | Email timeout after acceptance | Reconcile before retry | Worker |
+| QA33 | PDF worker crashes after invoice commit | Invoice issued; one artifact; no dup number | Worker; generate_original_pdf queued after commit. Crash/retry same artifact still local-only, not VERIFIED |
+| QA34 | Email timeout after acceptance | Reconcile before retry | Worker; EMAIL06 claim waits for ready original PDF and does not blind-resend. Hosted Resend timeout unverified |
 | QA35 | Permanent bounce | Not delivered; suppression path | Integration |
 | QA36 | Full scope reduced to zero | Zero invoice; no fake payment | Domain |
 | QA37 | Manual partial/overpayment | Derived balance; overpay confirm | API |
@@ -126,7 +126,7 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA61 | VoiceOver / Dynamic Type / keyboard / zoom | Core flows usable | Device |
 | QA62 | Low disk during draft save | Failure; do not show Saved | Device |
 | QA63 | Token in URL/error/analytics/referrer | Mailbox HTML uses `#` not `?token=`; after exchange logs contain only `token_hash`; no click-tracking rewrite | Isolation |
-| QA64 | DST and timezone changes | Expiry invariant; due dates correct | Integration |
+| QA64 | DST and timezone changes | Expiry invariant; due dates correct | Integration; invoice issue_date/due_date use workspace calendar dates in freeze/issue. DST/device unverified |
 | QA65 | Worker double claim / lease expiry | One external effect; crash after provider 200 before DB write produces zero extra emails or tokens | Worker |
 | QA66 | Backup and object restore drill | RPO/RTO measured; hashes verified | Drill |
 | QA67 | Maximum supported load | NFR03 measured; backlog drains | Load |

@@ -368,6 +368,9 @@ importers:
       '@job-to-invoice/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@job-to-invoice/schemas':
+        specifier: workspace:*
+        version: link:../../packages/schemas
       pg:
         specifier: 8.16.3
         version: 8.16.3

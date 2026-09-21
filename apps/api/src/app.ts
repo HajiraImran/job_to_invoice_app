@@ -21,6 +21,7 @@ import type { QuotePublishSafeEvent } from "./publish-log.ts";
 import { registerDraftRoutes } from "./drafts.ts";
 import { registerJobRoutes } from "./jobs.ts";
 import { registerQuotePublishRoutes } from "./quotes.ts";
+import { registerInvoiceRoutes } from "./invoices.ts";
 import { registerEmailWebhookRoutes } from "./webhooks-email.ts";
 import { registerPortalRoutes } from "./portal.ts";
 import { registerActionGrantRoutes } from "./action-grants.ts";
@@ -425,6 +426,9 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerQuotePublishRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerInvoiceRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerActionGrantRoutes(app, deps, {

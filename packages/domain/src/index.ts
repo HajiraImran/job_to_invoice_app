@@ -51,11 +51,15 @@ export {
 export { canonicalize, canonicalizeToBytes } from "./canonicalize.ts";
 export {
   FREE_JOB_LIMIT,
+  INVOICE_SNAPSHOT_SCHEMA_VERSION,
   PREVIEW_TTL_MS,
   QUOTE_SNAPSHOT_SCHEMA_VERSION,
+  buildInvoiceSnapshot,
   buildQuoteSnapshot,
   formatDocumentNumber,
   lineCountBucket,
+  type InvoiceSnapshotLine,
+  type InvoiceSnapshotV1,
   type QuoteDraftLineSnapshotInput,
   type QuoteSnapshotAddress,
   type QuoteSnapshotLine,
@@ -73,3 +77,8 @@ export {
   type QuotePdfDocument,
   type QuotePdfLine,
 } from "./quote-html.ts";
+export {
+  INVOICE_PDF_TEMPLATE_VERSION,
+  renderInvoiceOriginalHtml,
+  type InvoicePdfDocument,
+} from "./invoice-html.ts";

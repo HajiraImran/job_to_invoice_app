@@ -34,6 +34,18 @@ if (!spec.paths?.["/v1/jobs/{jobId}"]?.get) {
 if (!spec.paths?.["/v1/jobs/{jobId}/quote"]?.post) {
   errors.push("POST /v1/jobs/{jobId}/quote is required");
 }
+if (!spec.paths?.["/v1/jobs/{jobId}/invoice-preview"]?.post) {
+  errors.push("POST /v1/jobs/{jobId}/invoice-preview is required");
+}
+if (!spec.paths?.["/v1/jobs/{jobId}/issue-invoice"]?.post) {
+  errors.push("POST /v1/jobs/{jobId}/issue-invoice is required");
+}
+if (
+  spec.paths?.["/v1/jobs/{jobId}/issue-invoice"]?.post &&
+  !spec.paths["/v1/jobs/{jobId}/issue-invoice"].post.parameters?.some((item) => item.name === "Idempotency-Key")
+) {
+  errors.push("POST /v1/jobs/{jobId}/issue-invoice requires Idempotency-Key");
+}
 if (!spec.paths?.["/v1/drafts/{draftId}"]?.get) {
   errors.push("GET /v1/drafts/{draftId} is required");
 }
@@ -159,4 +171,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log("OpenAPI 3.1 owner jobs, quote-publish, portal, and S12 request-controls contract is valid.");
+console.log("OpenAPI 3.1 owner jobs, quote-publish, invoice-issue, portal, and S12 request-controls contract is valid.");

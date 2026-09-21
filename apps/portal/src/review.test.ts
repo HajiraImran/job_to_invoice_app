@@ -28,6 +28,10 @@ describe("portal fragment and states", () => {
   it("disables approve until the PDF is ready and consent is ticked", () => {
     expect(documentKind({ accessState: "pending", pdfState: "preparing" })).toBe("pdf_loading");
     expect(documentKind({ accessState: "pending", pdfState: "ready" })).toBe("quote_ready");
+    expect(documentKind({ accessState: "pending", pdfState: "ready", allowedActions: ["download", "report"] })).toBe(
+      "invoice_ready",
+    );
+    expect(canApprove("invoice_ready", true, true)).toBe(false);
     expect(canApprove("quote_ready", false, true)).toBe(false);
     expect(canApprove("quote_ready", true, true)).toBe(true);
     expect(canApprove("pdf_loading", true, false)).toBe(false);
@@ -50,7 +54,8 @@ describe("portal fragment and states", () => {
     expect(document).toContain("consent");
     expect(document).toContain("createIdempotencyKey()");
     expect(document).toContain("PortalIdentifierError");
-    expect(document).toContain("portalCopy.identifierError");
+    expect(document).toContain("portalCopy.invoiceReady");
+    expect(document).toContain("viewOnly");
     expect(document).not.toContain("crypto.randomUUID");
     expect(document).not.toContain("Math.random");
     expect(portalCopy.identifierError).toBe("Could not start this request. Try again.");

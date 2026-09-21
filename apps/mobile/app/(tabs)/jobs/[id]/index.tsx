@@ -5,7 +5,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
 import { nextActionCopy, presentJobDetail, quoteLifecycleLabel, type JobDetail } from "../../../../src/jobs/presentation.ts";
-import { jobQuotePath, jobPublishPath, jobRequestPath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
+import { jobQuotePath, jobPublishPath, jobRequestPath, jobInvoicePath, jobInvoiceDetailPath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
 import { quoteActionLabel } from "../../../../src/quotes/presentation.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
@@ -58,8 +58,9 @@ export default function JobDetailScreen() {
     error,
   });
   const next = view.job
-    ? nextActionCopy(view.job.mode, view.job.lifecycle, view.job.current_quote?.lifecycle)
+    ? nextActionCopy(view.job.mode, view.job.lifecycle, view.job.current_quote?.lifecycle, Boolean(view.job.active_invoice))
     : "none";
+  const activeInvoice = view.job?.active_invoice;
   const quoteAction = quoteActionLabel(Boolean(view.job?.quote_draft));
   const quoteDisabled =
     opening || auth.snapshot.status === "access_expired" || auth.snapshot.status === "offline_cached";
@@ -158,6 +159,8 @@ export default function JobDetailScreen() {
             {next === "quote" ? <Text style={styles.banner}>{copy.jobNextDraftQuote}</Text> : null}
             {next === "direct" ? <Text style={styles.banner}>{copy.jobNextDraftDirect}</Text> : null}
             {next === "published" ? <Text style={styles.banner}>{copy.jobNextPublished}</Text> : null}
+            {next === "invoice" ? <Text style={styles.banner}>{copy.jobNextInvoice}</Text> : null}
+            {next === "view_invoice" ? <Text style={styles.banner}>{copy.jobNextViewInvoice}</Text> : null}
             {next === "quote" ? (
               <Pressable
                 accessibilityRole="button"
@@ -175,6 +178,26 @@ export default function JobDetailScreen() {
                         ? copy.openQuote
                         : copy.createQuote}
                 </Text>
+              </Pressable>
+            ) : null}
+            {next === "invoice" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={copy.createInvoice}
+                onPress={() => router.push(jobInvoicePath(jobId))}
+                style={styles.primary}
+              >
+                <Text style={styles.primaryLabel}>{copy.createInvoice}</Text>
+              </Pressable>
+            ) : null}
+            {next === "view_invoice" && activeInvoice ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={copy.viewInvoice}
+                onPress={() => router.push(jobInvoiceDetailPath(jobId, activeInvoice.id))}
+                style={styles.primary}
+              >
+                <Text style={styles.primaryLabel}>{copy.viewInvoice}</Text>
               </Pressable>
             ) : null}
             {view.job?.current_quote ? (

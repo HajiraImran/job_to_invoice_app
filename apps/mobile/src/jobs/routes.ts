@@ -22,6 +22,14 @@ export function jobRequestPath(jobId: string): string {
   return `/(tabs)/jobs/${jobId}/request`;
 }
 
+export function jobInvoicePath(jobId: string): string {
+  return `/(tabs)/jobs/${jobId}/invoice`;
+}
+
+export function jobInvoiceDetailPath(jobId: string, invoiceId: string): string {
+  return `/(tabs)/jobs/${jobId}/invoice/${invoiceId}`;
+}
+
 export function canOpenCreateJob(status: string): boolean {
   return status === "authenticated" || status === "offline_cached";
 }

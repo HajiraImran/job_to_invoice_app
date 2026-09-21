@@ -69,6 +69,86 @@ export type QuoteSnapshotV1 = {
   tax_by_rate: Array<{ tax_bp: number; net_cents: number; tax_cents: number }>;
 };
 
+export const INVOICE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+
+export type InvoiceSnapshotLine = {
+  position: number;
+  source_line_id: string;
+  description: string;
+  unit: string;
+  custom_unit_label: string | null;
+  quantity: string;
+  unit_price_cents: number;
+  discount_cents: number;
+  tax_bp: number;
+  gross_cents: number;
+  net_cents: number;
+  tax_cents: number;
+  total_cents: number;
+};
+
+export type InvoiceSnapshotV1 = {
+  schema_version: typeof INVOICE_SNAPSHOT_SCHEMA_VERSION;
+  kind: "invoice";
+  currency: "USD";
+  business: QuoteSnapshotV1["business"];
+  customer: QuoteSnapshotV1["customer"];
+  job: QuoteSnapshotV1["job"];
+  notes: string;
+  payment_instructions: string;
+  issue_date: string;
+  due_date: string;
+  source_quote_id: string;
+  source_quote_number: string;
+  lines: InvoiceSnapshotLine[];
+  net_cents: number;
+  tax_cents: number;
+  total_cents: number;
+  tax_by_rate: Array<{ tax_bp: number; net_cents: number; tax_cents: number }>;
+};
+
+export type ResidualSourceLine = InvoiceSnapshotLine;
+
+export function buildInvoiceSnapshot(input: {
+  business: QuoteSnapshotV1["business"];
+  customer: QuoteSnapshotV1["customer"];
+  job: QuoteSnapshotV1["job"];
+  notes: string;
+  payment_instructions: string;
+  issue_date: string;
+  due_date: string;
+  source_quote_id: string;
+  source_quote_number: string;
+  lines: ResidualSourceLine[];
+  net_cents: number;
+  tax_cents: number;
+  total_cents: number;
+  tax_by_rate: InvoiceSnapshotV1["tax_by_rate"];
+}): InvoiceSnapshotV1 {
+  if (input.lines.length < 1) {
+    throw new Error("An invoice must retain its source lines");
+  }
+  return {
+    schema_version: INVOICE_SNAPSHOT_SCHEMA_VERSION,
+    kind: "invoice",
+    currency: "USD",
+    business: input.business,
+    customer: input.customer,
+    job: input.job,
+    notes: input.notes,
+    payment_instructions: input.payment_instructions,
+    issue_date: input.issue_date,
+    due_date: input.due_date,
+    source_quote_id: input.source_quote_id,
+    source_quote_number: input.source_quote_number,
+    lines: input.lines,
+    net_cents: input.net_cents,
+    tax_cents: input.tax_cents,
+    total_cents: input.total_cents,
+    tax_by_rate: input.tax_by_rate,
+  };
+}
+
 export type QuoteDraftLineSnapshotInput = LineInput & {
   client_line_id: string;
   description: string;

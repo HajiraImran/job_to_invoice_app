@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import {
   originalPdfObjectKey,
+  renderInvoiceOriginalHtml,
   renderQuoteOriginalHtml,
+  type InvoicePdfDocument,
+  type InvoiceSnapshotV1,
   type QuotePdfDocument,
   type QuoteSnapshotV1,
 } from "@job-to-invoice/domain";
@@ -10,7 +13,7 @@ import { withWorkerRole, WORKER_CLAIM_TIMEOUT_MS, WORKER_STATEMENT_TIMEOUT_MS } 
 import type { DocumentsObjectStore } from "./documents-store.ts";
 import type { WorkerPdfStage } from "./worker-log.ts";
 
-export type PdfRenderer = (document: QuotePdfDocument) => Promise<Buffer>;
+export type PdfRenderer = (document: QuotePdfDocument | InvoicePdfDocument) => Promise<Buffer>;
 
 export class PermanentPdfError extends Error {
   readonly code: string;
@@ -38,7 +41,7 @@ type SourceRow = {
   created_by: string;
   number: string;
   revision_no: number;
-  snapshot_json: QuoteSnapshotV1;
+  snapshot_json: QuoteSnapshotV1 | InvoiceSnapshotV1;
   net_cents: string | number;
   tax_cents: string | number;
   total_cents: string | number;
@@ -53,40 +56,45 @@ function asCents(value: string | number): number {
   return parsed;
 }
 
-function asDocument(row: SourceRow): QuotePdfDocument {
+function isInvoicePdf(document: QuotePdfDocument | InvoicePdfDocument): document is InvoicePdfDocument {
+  return document.snapshot.kind === "invoice";
+}
+
+function asDocument(row: SourceRow): QuotePdfDocument | InvoicePdfDocument {
   const snapshot = row.snapshot_json;
-  if (!snapshot || snapshot.kind !== "quote") {
-    throw new PermanentPdfError("VALIDATION_FAILED", "PDF source must be a published quote");
+  if (!snapshot || (snapshot.kind !== "quote" && snapshot.kind !== "invoice")) {
+    throw new PermanentPdfError("VALIDATION_FAILED", "PDF source must be a published quote or invoice");
   }
   const lines = Array.isArray(row.lines_json) ? row.lines_json : [];
   if (lines.length < 1) {
     throw new PermanentPdfError("VALIDATION_FAILED", "PDF source must include line items");
   }
+  const mapped = lines.map((line) => {
+    const record = line as Record<string, unknown>;
+    return {
+      position: Number(record.position),
+      description: String(record.description ?? ""),
+      quantity: record.quantity == null ? null : String(record.quantity),
+      unit: record.unit == null ? null : String(record.unit),
+      custom_unit_label:
+        snapshot.lines?.find((item) => item.position === Number(record.position))?.custom_unit_label ?? null,
+      unit_price_cents: record.unit_price_cents == null ? null : Number(record.unit_price_cents),
+      discount_cents: Number(record.discount_cents),
+      net_cents: Number(record.net_cents),
+      tax_bp: Number(record.tax_bp),
+      tax_cents: Number(record.tax_cents),
+      total_cents: Number(record.total_cents),
+    };
+  });
   return {
     number: row.number,
     revision_no: row.revision_no,
     snapshot,
-    lines: lines.map((line) => {
-      const record = line as Record<string, unknown>;
-      return {
-        position: Number(record.position),
-        description: String(record.description ?? ""),
-        quantity: record.quantity == null ? null : String(record.quantity),
-        unit: record.unit == null ? null : String(record.unit),
-        custom_unit_label:
-          snapshot.lines?.find((item) => item.position === Number(record.position))?.custom_unit_label ?? null,
-        unit_price_cents: record.unit_price_cents == null ? null : Number(record.unit_price_cents),
-        discount_cents: Number(record.discount_cents),
-        net_cents: Number(record.net_cents),
-        tax_bp: Number(record.tax_bp),
-        tax_cents: Number(record.tax_cents),
-        total_cents: Number(record.total_cents),
-      };
-    }),
+    lines: mapped,
     net_cents: asCents(row.net_cents),
     tax_cents: asCents(row.tax_cents),
     total_cents: asCents(row.total_cents),
-  };
+  } as QuotePdfDocument | InvoicePdfDocument;
 }
 
 export const WORKER_LEASE_HEARTBEAT_MS = 15_000;
@@ -158,10 +166,14 @@ export async function processGenerateOriginalPdf(input: {
       return { row: loaded.rows[0], artifactId: reserved.rows[0]?.reserve_original_pdf_artifact };
     });
     if (!source.row || !source.artifactId) {
-      throw new PermanentPdfError("VALIDATION_FAILED", "Published quote was not found");
+      throw new PermanentPdfError("VALIDATION_FAILED", "Published document was not found");
     }
     const document = asDocument(source.row);
-    renderQuoteOriginalHtml(document);
+    if (isInvoicePdf(document)) {
+      renderInvoiceOriginalHtml(document);
+    } else {
+      renderQuoteOriginalHtml(document);
+    }
     const key = originalPdfObjectKey({
       workspaceId: source.row.workspace_id,
       documentId: source.row.document_id,
@@ -193,7 +205,7 @@ export async function processGenerateOriginalPdf(input: {
     const permanent =
       error instanceof PermanentPdfError ||
       (error instanceof Error &&
-        /at least one line|must match the issued snapshot|must be a published quote/.test(error.message));
+        /at least one line|must match the issued snapshot|must be a published quote|must be a published invoice/.test(error.message));
     const code =
       error instanceof PermanentPdfError ? error.code : permanent ? "VALIDATION_FAILED" : "PDF_RENDER_FAILED";
     const status = await withWorkerRole(input.pool, async (client) => {
