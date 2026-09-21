@@ -5,6 +5,7 @@ import {
   encodeFragmentToken,
   encryptDeliveryToken,
   encryptRecipientEmail,
+  encryptUtf8,
   generateApprovalToken,
   hashApprovalToken,
   parseVersionedSecret,
@@ -32,6 +33,8 @@ import {
   parseCreditPreview,
   parseInvoiceIssue,
   parseInvoicePreview,
+  parseInvoiceReplacementPreview,
+  parseInvoiceVoid,
   parseLedgerPayment,
   parseLedgerRefund,
   parseLedgerReverse,
@@ -82,6 +85,7 @@ type IssueRow = {
   pdf_state: string;
   request_id?: string;
   delivery_state?: string;
+  void_reason?: string | null;
   replayed?: boolean;
 };
 
@@ -176,6 +180,39 @@ function envSecret(env: Record<string, unknown>, name: string): string | undefin
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function overlayReplacementSnapshot(
+  source: InvoiceSnapshotV1,
+  overlay: {
+    due_date?: string;
+    payment_instructions?: string;
+    customer?: {
+      name?: string;
+      email?: string;
+      phone?: string | null;
+      billing_address?: InvoiceSnapshotV1["customer"]["billing_address"];
+    };
+  },
+  issueDate: string,
+): InvoiceSnapshotV1 {
+  const dueDate = overlay.due_date ?? (source.due_date < issueDate ? issueDate : source.due_date);
+  return {
+    ...source,
+    issue_date: issueDate,
+    due_date: dueDate,
+    payment_instructions: overlay.payment_instructions ?? source.payment_instructions,
+    customer: {
+      ...source.customer,
+      name: overlay.customer?.name ?? source.customer.name,
+      email: overlay.customer?.email !== undefined ? overlay.customer.email : source.customer.email,
+      phone: overlay.customer?.phone !== undefined ? overlay.customer.phone : source.customer.phone,
+      billing_address:
+        overlay.customer?.billing_address !== undefined
+          ? overlay.customer.billing_address
+          : source.customer.billing_address,
+    },
+  };
+}
+
 function resolveApprovalSecrets(env: Record<string, unknown>) {
   try {
     const hashKey = envSecret(env, "APPROVAL_TOKEN_HASH_KEY");
@@ -218,6 +255,7 @@ export async function loadInvoiceLedgerState(
   invoiceId: string,
   invoiceIssuedCents: number,
   dueDate: string | null,
+  voided = false,
 ): Promise<{ state: LedgerState; entries: LedgerEntryDb[]; credit_sources: CreditSource[] }> {
   const entries = await client.query<LedgerEntryDb>(
     `select id, type, amount_cents, reverses_entry_id, effective_date, method, reference, note
@@ -282,7 +320,7 @@ export async function loadInvoiceLedgerState(
         payment_entry_id: allocation.payment_entry_id,
         amount_cents: asCents(allocation.amount_cents),
       })),
-      voided: false,
+      voided,
       due_date: dueDate,
       agreed_job_total_cents: invoiceIssuedCents,
     },
@@ -369,6 +407,8 @@ export function presentIssuedInvoice(
     net_cents: asCents(row.net_cents),
     tax_cents: asCents(row.tax_cents),
     total_cents: asCents(row.total_cents),
+    voided: row.lifecycle === "voided",
+    void_reason: row.void_reason ?? null,
   };
 }
 
@@ -457,6 +497,17 @@ function mapInvoiceError(
       "Reverse dependent refunds before reversing this payment.",
       { field_errors: [{ field: "reverses_entry_id", message: "Reverse dependent refunds first." }] },
     );
+  }
+  if (code === "P0050") {
+    return sendFail(
+      request,
+      reply,
+      API_ERROR_CODES.LEDGER_BLOCKS_VOID,
+      "This invoice cannot be voided while a payment, refund, or issued credit remains.",
+    );
+  }
+  if (code === "23001") {
+    return sendFail(request, reply, API_ERROR_CODES.DOCUMENT_IMMUTABLE, "This invoice cannot be changed.");
   }
   if (code === "23505") {
     return sendFail(request, reply, API_ERROR_CODES.DOCUMENT_IMMUTABLE, "This job already has an issued invoice.");
@@ -1023,7 +1074,7 @@ export function registerInvoiceRoutes(
         const invoice = await client.query<IssueRow>(
           `select d.id, d.workspace_id, d.job_id, null::uuid as draft_id, d.kind, d.number, d.revision_no, d.lifecycle,
                   d.issued_at, d.issue_date, d.due_date, d.currency, d.net_cents, d.tax_cents, d.total_cents,
-                  d.snapshot_json, d.schema_version, d.snapshot_sha256,
+                  d.snapshot_json, d.schema_version, d.snapshot_sha256, d.void_reason,
                   coalesce(p.download_state, 'preparing') as pdf_state
            from commercial.documents d
            left join lateral commercial.original_pdf_download($2::uuid, d.id) p on true
@@ -1045,6 +1096,7 @@ export function registerInvoiceRoutes(
           row.id,
           asCents(row.total_cents),
           dueDate,
+          row.lifecycle === "voided",
         );
         return { kind: "ok" as const, presented: presentIssuedInvoice(row, row.pdf_state, ledger) };
       });
@@ -1647,6 +1699,404 @@ export function registerInvoiceRoutes(
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
       }
       return reply.status(202).send(success(request.id, presentIssuedCredit(issued.row)));
+    } catch (error) {
+      const mapped = mapInvoiceError(request, reply, error);
+      if (mapped) {
+        return mapped;
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    } finally {
+      approvalToken.fill(0);
+    }
+  });
+
+  app.post("/v1/invoices/:invoiceId/void", async (request, reply) => {
+    const token = bearerToken(request.headers.authorization);
+    if (!token) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+    }
+    if (!deps.verifyJwt || !deps.pool) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    let access: VerifiedAccess;
+    try {
+      access = await deps.verifyJwt(token);
+    } catch {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const parsedEmail = parseOwnerEmail(access.email);
+    if (!parsedEmail.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const limited = options.limiterAllow(access.sub);
+    if (!limited.ok) {
+      const result = fail(request.id, API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.");
+      void reply.header("Retry-After", String(limited.retryAfterSec));
+      return reply.status(result.status).send(result.body);
+    }
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const params = request.params as { invoiceId?: string };
+    if (!isClientUuid(params.invoiceId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "invoiceId", message: "An invoice UUID is required." }],
+      });
+    }
+    const parsed = parseInvoiceVoid(request.body ?? {});
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    const secrets = resolveApprovalSecrets(deps.env ?? {});
+    if (!secrets) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    const hash = requestHash({ invoiceId: params.invoiceId, reason: parsed.value.reason });
+    const notice = encryptUtf8(JSON.stringify({ kind: "voided" }), secrets.delivery);
+    try {
+      const voided = await withApiRole(deps.pool, async (client) => {
+        const owner = await client.query<ProvisionRow>(
+          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
+           from identity.provision_owner($1::uuid, $2, $3)`,
+          [access.sub, parsedEmail.display, parsedEmail.normalized],
+        );
+        const provisioned = owner.rows[0];
+        if (!provisioned) {
+          return undefined;
+        }
+        if (provisioned.account_status === "suspended") {
+          return { kind: "suspended" as const };
+        }
+        if (provisioned.account_status !== "active") {
+          return { kind: "locked" as const };
+        }
+        if (!provisioned.setup_completed) {
+          return { kind: "setup" as const };
+        }
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          provisioned.workspace_id,
+          provisioned.actor_id,
+        ]);
+        const packedEmail = encryptRecipientEmail(parsedEmail.display, secrets.delivery);
+        const row = await client.query<IssueRow>(
+          `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date, due_date,
+                  currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
+                  request_id, delivery_state, void_reason, replayed
+           from commercial.void_invoice(
+             $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6,
+             $7::bytea, $8, $9::integer, $10::bytea, $11::bytea
+           )`,
+          [
+            provisioned.actor_id,
+            key,
+            hash,
+            request.id,
+            params.invoiceId,
+            parsed.value.reason,
+            Buffer.concat([packedEmail.nonce, packedEmail.ciphertext]),
+            notice.algorithm,
+            notice.keyVersion,
+            notice.nonce,
+            notice.ciphertext,
+          ],
+        );
+        return { kind: "ok" as const, row: row.rows[0] };
+      });
+      if (!voided) {
+        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      }
+      if (voided.kind === "suspended") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_SUSPENDED, "This account cannot make changes.");
+      }
+      if (voided.kind === "locked") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+      }
+      if (voided.kind === "setup") {
+        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (!voided.row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      return success(request.id, presentIssuedInvoice(voided.row));
+    } catch (error) {
+      const mapped = mapInvoiceError(request, reply, error);
+      if (mapped) {
+        return mapped;
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
+  app.post("/v1/invoices/:invoiceId/replacement-preview", async (request, reply) => {
+    const owner = await requireOwner(request, reply);
+    if (!owner || !deps.pool) {
+      return;
+    }
+    const params = request.params as { invoiceId?: string };
+    if (!isClientUuid(params.invoiceId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "invoiceId", message: "An invoice UUID is required." }],
+      });
+    }
+    const parsed = parseInvoiceReplacementPreview(request.body ?? {});
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    try {
+      const frozen = await withApiRole(deps.pool, async (client) => {
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          owner.workspace_id,
+          owner.actor_id,
+        ]);
+        const invoice = await client.query<IssueRow>(
+          `select d.id, d.workspace_id, d.job_id, null::uuid as draft_id, d.kind, d.number, d.revision_no, d.lifecycle,
+                  d.issued_at, d.issue_date, d.due_date, d.currency, d.net_cents, d.tax_cents, d.total_cents,
+                  d.snapshot_json, d.schema_version, d.snapshot_sha256, d.void_reason, 'preparing'::text as pdf_state
+           from commercial.documents d
+           where d.id = $1 and d.kind = 'invoice'`,
+          [params.invoiceId],
+        );
+        const row = invoice.rows[0];
+        if (!row || row.snapshot_json.kind !== "invoice") {
+          return { kind: "missing" as const };
+        }
+        if (row.lifecycle !== "voided") {
+          return { kind: "ineligible" as const };
+        }
+        const source = row.snapshot_json;
+        const issueDate = zonedCalendarDate(new Date(), source.business.timezone);
+        const snapshot = overlayReplacementSnapshot(source, parsed.value, issueDate);
+        if (
+          snapshot.net_cents !== source.net_cents ||
+          snapshot.tax_cents !== source.tax_cents ||
+          snapshot.total_cents !== source.total_cents
+        ) {
+          return { kind: "invalid" as const };
+        }
+        const bytes = canonicalizeToBytes(snapshot);
+        const hash = createHash("sha256").update(bytes).digest("hex");
+        const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS);
+        const stored = await client.query<{
+          id: string;
+          version: number;
+          preview_hash: string;
+          preview_expires_at: Date | string;
+          snapshot_json: InvoiceSnapshotV1;
+        }>(
+          `select id, version, preview_hash, preview_expires_at, snapshot_json
+           from commercial.freeze_replacement_preview(
+             $1::uuid, $2::uuid, $3, $4::bytea, $5::jsonb, $6::timestamptz
+           )`,
+          [owner.actor_id, params.invoiceId, hash, Buffer.from(bytes), JSON.stringify(snapshot), expiresAt.toISOString()],
+        );
+        return { kind: "ok" as const, row: stored.rows[0], snapshot, hash };
+      });
+      if (frozen.kind === "missing") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      if (frozen.kind === "ineligible") {
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Only a voided invoice can be replaced.");
+      }
+      if (frozen.kind === "invalid") {
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Replacement amounts must match the voided invoice.");
+      }
+      if (!frozen.row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      return success(request.id, {
+        draft_id: frozen.row.id,
+        invoice_id: params.invoiceId,
+        job_id: frozen.snapshot.job.id,
+        version: frozen.row.version,
+        preview_hash: frozen.hash,
+        preview_expires_at: asIso(frozen.row.preview_expires_at),
+        schema_version: frozen.snapshot.schema_version,
+        number_label: "Draft",
+        snapshot: frozen.snapshot,
+        prior_document_id: params.invoiceId,
+      });
+    } catch (error) {
+      const mapped = mapInvoiceError(request, reply, error);
+      if (mapped) {
+        return mapped;
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
+  app.post("/v1/invoices/:invoiceId/issue-replacement", async (request, reply) => {
+    const token = bearerToken(request.headers.authorization);
+    if (!token) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+    }
+    if (!deps.verifyJwt || !deps.pool) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    let access: VerifiedAccess;
+    try {
+      access = await deps.verifyJwt(token);
+    } catch {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const parsedEmail = parseOwnerEmail(access.email);
+    if (!parsedEmail.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const limited = options.limiterAllow(access.sub);
+    if (!limited.ok) {
+      const result = fail(request.id, API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.");
+      void reply.header("Retry-After", String(limited.retryAfterSec));
+      return reply.status(result.status).send(result.body);
+    }
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const params = request.params as { invoiceId?: string };
+    if (!isClientUuid(params.invoiceId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "invoiceId", message: "An invoice UUID is required." }],
+      });
+    }
+    const parsed = parseInvoiceIssue(request.body ?? {});
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    const secrets = resolveApprovalSecrets(deps.env ?? {});
+    if (!secrets) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    const hash = requestHash({ invoiceId: params.invoiceId, preview_hash: parsed.value.preview_hash });
+    const approvalToken = generateApprovalToken();
+    try {
+      let tokenHash: string;
+      let tokenKeyVersion: number;
+      let ciphertext: Buffer;
+      let nonce: Buffer;
+      let algorithm: string;
+      let deliveryKeyVersion: number;
+      let encryptedEmail: Buffer;
+      const issued = await withApiRole(deps.pool, async (client) => {
+        const owner = await client.query<ProvisionRow>(
+          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
+           from identity.provision_owner($1::uuid, $2, $3)`,
+          [access.sub, parsedEmail.display, parsedEmail.normalized],
+        );
+        const provisioned = owner.rows[0];
+        if (!provisioned) {
+          return undefined;
+        }
+        if (provisioned.account_status === "suspended") {
+          return { kind: "suspended" as const };
+        }
+        if (provisioned.account_status !== "active") {
+          return { kind: "locked" as const };
+        }
+        if (!provisioned.setup_completed) {
+          return { kind: "setup" as const };
+        }
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          provisioned.workspace_id,
+          provisioned.actor_id,
+        ]);
+        const preview = await client.query<{ recipient: string | null }>(
+          `select recipient
+           from (
+             select 1 as rank, d.preview_snapshot_json#>>'{customer,email}' as recipient
+             from commercial.document_drafts d
+             where d.parent_document_id = $1 and d.kind = 'invoice' and d.draft_state = 'editing'
+             union all
+             select 2, doc.snapshot_json#>>'{customer,email}'
+             from commercial.documents doc
+             where doc.id = $1 and doc.kind = 'invoice'
+           ) s
+           where nullif(btrim(recipient), '') is not null
+           order by rank
+           limit 1`,
+          [params.invoiceId],
+        );
+        const recipient = preview.rows[0]?.recipient;
+        if (!recipient) {
+          return { kind: "preview" as const };
+        }
+        const parsedRecipient = parseOwnerEmail(recipient);
+        if (!parsedRecipient.ok) {
+          return { kind: "preview" as const };
+        }
+        encodeFragmentToken(approvalToken);
+        const hashed = hashApprovalToken(approvalToken, secrets.hash);
+        tokenHash = hashed.hash;
+        tokenKeyVersion = hashed.keyVersion;
+        const encrypted = encryptDeliveryToken(approvalToken, secrets.delivery);
+        ciphertext = encrypted.ciphertext;
+        nonce = encrypted.nonce;
+        algorithm = encrypted.algorithm;
+        deliveryKeyVersion = encrypted.keyVersion;
+        const packedEmail = encryptRecipientEmail(parsedRecipient.display, secrets.delivery);
+        encryptedEmail = Buffer.concat([packedEmail.nonce, packedEmail.ciphertext]);
+        const accessUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+        const row = await client.query<IssueRow>(
+          `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date, due_date,
+                  currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
+                  request_id, delivery_state, replayed
+           from commercial.issue_replacement(
+             $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6,
+             $7, $8::integer, $9::bytea, $10::bytea, $11::bytea, $12, $13::integer, $14::timestamptz
+           )`,
+          [
+            provisioned.actor_id,
+            key,
+            hash,
+            request.id,
+            params.invoiceId,
+            parsed.value.preview_hash,
+            tokenHash,
+            tokenKeyVersion,
+            encryptedEmail,
+            ciphertext,
+            nonce,
+            algorithm,
+            deliveryKeyVersion,
+            accessUntil.toISOString(),
+          ],
+        );
+        return { kind: "ok" as const, row: row.rows[0] };
+      });
+      if (!issued) {
+        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      }
+      if (issued.kind === "suspended") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_SUSPENDED, "This account cannot make changes.");
+      }
+      if (issued.kind === "locked") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+      }
+      if (issued.kind === "setup") {
+        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (issued.kind === "preview") {
+        return sendFail(
+          request,
+          reply,
+          API_ERROR_CODES.PREVIEW_CHANGED,
+          "This preview is out of date. Review the invoice again before issuing.",
+        );
+      }
+      if (!issued.row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      return reply.status(202).send(success(request.id, presentIssuedInvoice(issued.row)));
     } catch (error) {
       const mapped = mapInvoiceError(request, reply, error);
       if (mapped) {

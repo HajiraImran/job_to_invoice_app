@@ -468,6 +468,107 @@
         }
       }
     },
+    "/v1/invoices/{invoiceId}/void": {
+      "post": {
+        "summary": "Void an unpaid issued invoice",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "invoiceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InvoiceVoid" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Invoice voided; number retained; view_only links revoked" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
+          "404": { "description": "Unknown or cross-tenant invoice" },
+          "409": { "description": "Already voided, ledger blocks void, or idempotency mismatch" },
+          "422": { "description": "Validation failed or invoice is not issued" }
+        }
+      }
+    },
+    "/v1/invoices/{invoiceId}/replacement-preview": {
+      "post": {
+        "summary": "Preview a replacement invoice from a voided source",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "invoiceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InvoiceReplacementPreview" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Replacement preview hash and snapshot" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
+          "404": { "description": "Unknown or cross-tenant invoice" },
+          "422": { "description": "Source is not voided or unknown fields" }
+        }
+      }
+    },
+    "/v1/invoices/{invoiceId}/issue-replacement": {
+      "post": {
+        "summary": "Issue a replacement invoice with a new INV number",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "invoiceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InvoiceIssue" }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Replacement issued; original PDF and EMAIL06 queued" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
+          "404": { "description": "Unknown or cross-tenant invoice" },
+          "409": { "description": "Preview changed, already replaced, or idempotency mismatch" },
+          "422": { "description": "Validation failed or source is not voided" }
+        }
+      }
+    },
     "/v1/ledger/{entryId}/reverse": {
       "post": {
         "summary": "Reverse one payment or refund entry",
@@ -1184,6 +1285,43 @@
           "method": { "type": "string", "enum": ["cash", "check", "bank_transfer", "external_card", "other"] },
           "reference": { "type": "string", "maxLength": 100 },
           "note": { "type": "string", "maxLength": 500 }
+        }
+      },
+      "InvoiceVoid": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason"],
+        "properties": {
+          "reason": { "type": "string", "minLength": 5, "maxLength": 500 }
+        }
+      },
+      "InvoiceReplacementPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "due_date": { "type": "string", "format": "date" },
+          "payment_instructions": { "type": "string", "maxLength": 4000 },
+          "customer": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "email": { "type": "string", "format": "email" },
+              "phone": { "type": ["string", "null"] },
+              "billing_address": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["line1", "city", "state", "postal_code"],
+                "properties": {
+                  "line1": { "type": "string", "minLength": 1, "maxLength": 150 },
+                  "line2": { "type": ["string", "null"], "maxLength": 150 },
+                  "city": { "type": "string", "minLength": 1, "maxLength": 80 },
+                  "state": { "type": "string", "minLength": 2, "maxLength": 2 },
+                  "postal_code": { "type": "string" }
+                }
+              }
+            }
+          }
         }
       },
       "LedgerReverse": {

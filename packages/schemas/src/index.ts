@@ -130,10 +130,16 @@ export { parseQuotePublish, type QuotePublishInput, type QuotePublishParseResult
 export {
   parseInvoiceIssue,
   parseInvoicePreview,
+  parseInvoiceReplacementPreview,
+  parseInvoiceVoid,
+  VOID_REASON_MAX,
+  VOID_REASON_MIN,
   type InvoiceIssueInput,
   type InvoiceIssueParseResult,
   type InvoicePreviewInput,
   type InvoicePreviewParseResult,
+  type InvoiceReplacementPreviewInput,
+  type InvoiceVoidInput,
 } from "./invoice.ts";
 export {
   CREDIT_REASON_MAX,

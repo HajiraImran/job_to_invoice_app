@@ -104,6 +104,7 @@ describe("redaction", () => {
     expect(text).not.toContain("Bearer eyJ");
     expect(API_ERROR_CODES.AUTHENTICATION_REQUIRED).toBe("AUTHENTICATION_REQUIRED");
     expect(API_ERROR_CODES.ENTRY_ALREADY_REVERSED).toBe("ENTRY_ALREADY_REVERSED");
+    expect(API_ERROR_CODES.LEDGER_BLOCKS_VOID).toBe("LEDGER_BLOCKS_VOID");
   });
 
   it("redacts nested sensitive keys and rejects unsafe analytics properties", () => {

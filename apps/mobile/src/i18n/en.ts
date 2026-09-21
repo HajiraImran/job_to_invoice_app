@@ -337,4 +337,21 @@ export const copy = {
   creditIrreversible:
     "Issuing this credit cannot be undone. To charge more later, create a linked new invoice or job. This does not claim customer approval.",
   creditError: "Could not issue this credit. Try again.",
+  invoiceVoid: "Void invoice",
+  invoiceVoidTitle: "Void invoice",
+  invoiceVoidReason: "Reason",
+  invoiceVoidConfirm: "Void this invoice",
+  invoiceVoiding: "Voiding",
+  invoiceVoided: "Invoice voided",
+  invoiceStatusVoided: "Voided",
+  invoiceVoidWarning:
+    "This keeps the original invoice number and ledger. Customer links stop working. A replacement is a separate step and gets a new number.",
+  invoiceVoidBlocked: "This invoice cannot be voided while a payment, refund, or issued credit remains.",
+  invoiceVoidOffline: "Reconnect to void this invoice. It is not saved to an offline queue.",
+  invoiceVoidError: "Could not void this invoice. Try again.",
+  invoiceReplace: "Create replacement",
+  invoiceReplaceTitle: "Replacement invoice",
+  invoiceReplaceConfirm:
+    "Issue this replacement? Amounts stay the same as the voided invoice. Customer billing details can be corrected.",
+  jobNextReplaceInvoice: "Next: create a replacement invoice.",
 } as const;

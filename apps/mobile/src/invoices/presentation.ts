@@ -70,6 +70,8 @@ export type IssuedInvoiceRecord = {
     credited_net_cents: number;
     remaining_net_cents: number;
   }>;
+  voided?: boolean;
+  void_reason?: string | null;
 };
 
 export type InvoicePreviewKind =
@@ -133,7 +135,28 @@ export function presentInvoicePreview(input: {
   return { kind: offline ? "offline" : "ready", showRetry: false, issueDisabled: offline };
 }
 
-export function presentInvoiceStatus(status: string): string {
+export function canVoidInvoice(invoice: {
+  lifecycle: string;
+  credits_cents?: number;
+  effective_payments_cents?: number;
+  effective_refunds_cents?: number;
+}): boolean {
+  return (
+    invoice.lifecycle === "issued" &&
+    (invoice.credits_cents ?? 0) === 0 &&
+    (invoice.effective_payments_cents ?? 0) === 0 &&
+    (invoice.effective_refunds_cents ?? 0) === 0
+  );
+}
+
+export function canReplaceInvoice(invoice: { lifecycle: string }): boolean {
+  return invoice.lifecycle === "voided";
+}
+
+export function presentInvoiceStatus(status: string, voided = false): string {
+  if (voided) {
+    return copy.invoiceStatusVoided;
+  }
   switch (status) {
     case "issued_unpaid":
       return copy.invoiceStatusUnpaid;

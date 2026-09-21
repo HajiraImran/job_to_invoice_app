@@ -46,6 +46,14 @@ export type JobDetail = JobSummary & {
     total_cents: number;
     due_date: string | null;
   } | null;
+  latest_invoice: {
+    id: string;
+    number: string;
+    revision_no: number;
+    lifecycle: string;
+    total_cents: number;
+    due_date: string | null;
+  } | null;
 };
 
 export type JobsListKind = "loading" | "empty" | "loaded" | "error" | "offline" | "access_expired";
@@ -170,9 +178,12 @@ export function nextActionCopy(
   lifecycle: string,
   quoteLifecycle?: string | null,
   hasInvoice?: boolean,
-): "quote" | "direct" | "published" | "invoice" | "view_invoice" | "none" {
-  if (hasInvoice || lifecycle === "invoiced") {
+): "quote" | "direct" | "published" | "invoice" | "view_invoice" | "replace_invoice" | "none" {
+  if (hasInvoice) {
     return "view_invoice";
+  }
+  if (lifecycle === "invoiced") {
+    return "replace_invoice";
   }
   if (lifecycle === "draft") {
     return mode === "direct_invoice" ? "direct" : "quote";

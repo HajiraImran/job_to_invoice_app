@@ -159,9 +159,9 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /requests/{id}/replace-link | Owner + X-Action-Grant replace_link | Rotate token_hash and sessions; preserve decisions. **Implemented:** `POST /v1/requests/{requestId}/replace-link`; Idempotency-Key + X-Action-Grant. |
 | POST /jobs/{id}/invoice-preview | Owner | Due date/instructions; preview_hash |
 | POST /jobs/{id}/issue-invoice | Owner | preview_hash; immutable invoice |
-| POST /invoices/{id}/void | Owner | Reason; strict ledger conditions |
-| POST /invoices/{id}/replacement-preview | Owner | Voided source; permitted identity fields |
-| POST /invoices/{id}/issue-replacement | Owner | preview_hash; new number |
+| POST /invoices/{id}/void | Owner | Reason; strict ledger conditions. **Implemented:** `POST /v1/invoices/{invoiceId}/void`; Idempotency-Key; unpaid only; EMAIL08 no new link; view_only revoked; LEDGER_BLOCKS_VOID 409. |
+| POST /invoices/{id}/replacement-preview | Owner | Voided source; permitted identity fields. **Implemented:** `POST /v1/invoices/{invoiceId}/replacement-preview`; customer/due/instructions overlay only. |
+| POST /invoices/{id}/issue-replacement | Owner | preview_hash; new number. **Implemented:** `POST /v1/invoices/{invoiceId}/issue-replacement`; Idempotency-Key; new INV; prior_document_id; EMAIL06 + original PDF; `invoice_issued`. |
 | POST /invoices/{id}/credits/preview | Owner | Allocations/reason. **Implemented:** `POST /v1/invoices/{invoiceId}/credits/preview`; integer-cent allocations; CREDIT_EXCEEDS_SOURCE 422. |
 | POST /invoices/{id}/credits | Owner | preview_hash; issue + notify. **Implemented:** `POST /v1/invoices/{invoiceId}/credits`; Idempotency-Key; financial permanence; CN-00000N; EMAIL07 + original PDF queued. |
 | GET /invoices/{id}/ledger | Owner | Entries and derived balance. **Implemented:** `GET /v1/invoices/{invoiceId}/ledger`; derived payment_status including issued credits; credit_sources remaining net. |

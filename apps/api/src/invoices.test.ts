@@ -71,13 +71,47 @@ const KEYS = {
   refundDep: "57575757-5757-4757-8757-575757575770",
   reversePayDep: "59595959-5959-4959-8959-595959595963",
   reverseRefundDep: "59595959-5959-4959-8959-595959595964",
+  setupC: "56565656-5656-4656-8656-565656565652",
+  setupD: "56565656-5656-4656-8656-565656565653",
+  jobVoid: "53535353-5353-4353-8353-535353535372",
+  openVoid: "53535353-5353-4353-8353-535353535373",
+  saveVoid: "53535353-5353-4353-8353-535353535374",
+  publishVoid: "53535353-5353-4353-8353-535353535375",
+  decideVoid: "54545454-5454-4454-8454-545454545456",
+  issueVoid: "55555555-5555-4555-8555-555555555556",
+  voidKey: "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a51",
+  voidReplay: "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a52",
+  voidDup: "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a53",
+  replaceIssue: "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a54",
+  replaceReplay: "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a55",
+  jobVoidPay: "53535353-5353-4353-8353-535353535376",
+  openVoidPay: "53535353-5353-4353-8353-535353535377",
+  saveVoidPay: "53535353-5353-4353-8353-535353535378",
+  publishVoidPay: "53535353-5353-4353-8353-535353535379",
+  decideVoidPay: "54545454-5454-4454-8454-545454545457",
+  issueVoidPay: "55555555-5555-4555-8555-555555555557",
+  payVoid: "57575757-5757-4757-8757-575757575771",
+  voidPay: "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a56",
+  jobVoidCredit: "53535353-5353-4353-8353-535353535380",
+  openVoidCredit: "53535353-5353-4353-8353-535353535381",
+  saveVoidCredit: "53535353-5353-4353-8353-535353535382",
+  publishVoidCredit: "53535353-5353-4353-8353-535353535383",
+  decideVoidCredit: "54545454-5454-4454-8454-545454545458",
+  issueVoidCredit: "55555555-5555-4555-8555-555555555558",
+  creditVoid: "58585858-5858-4858-8858-585858585862",
+  voidCredit: "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a57",
 };
+const AUTH_C = "53535353-5353-4353-8353-535353535253";
+const AUTH_D = "54545454-5454-4454-8454-545454545450";
 const JOB = "57575757-5757-4757-8757-575757575751";
 const JOB_B = "57575757-5757-4757-8757-575757575752";
 const JOB_LEDGER = "57575757-5757-4757-8757-575757575753";
 const JOB_CREDIT = "57575757-5757-4757-8757-575757575754";
 const JOB_REVERSE = "57575757-5757-4757-8757-575757575755";
 const JOB_REVERSE_DEP = "57575757-5757-4757-8757-575757575756";
+const JOB_VOID = "57575757-5757-4757-8757-575757575757";
+const JOB_VOID_PAY = "57575757-5757-4757-8757-575757575758";
+const JOB_VOID_CREDIT = "57575757-5757-4757-8757-575757575759";
 const DELIVERY = parseVersionedSecret("APPROVAL_DELIVERY_ENCRYPTION_KEY", "delivery-key-material-ok");
 
 describe("invoice issue API", () => {
@@ -338,6 +372,41 @@ describe("invoice issue API", () => {
     });
     expect(decided.statusCode).toBe(200);
     return token;
+  }
+
+  async function issueInvoice(
+    token: string,
+    jobId: string,
+    keys: {
+      job: string;
+      open: string;
+      save: string;
+      publish: string;
+      decide: string;
+      issue: string;
+    },
+  ) {
+    const published = await publishQuote(token, jobId, keys);
+    await approveQuote(token, published, keys.decide);
+    const preview = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${jobId}/invoice-preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(preview.statusCode).toBe(200);
+    const issued = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${jobId}/issue-invoice`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": keys.issue,
+      },
+      payload: { preview_hash: preview.json().data.preview_hash },
+    });
+    expect(issued.statusCode).toBe(202);
+    return issued.json().data as { id: string; number: string; request_id: string; snapshot_sha256: string };
   }
 
   it("previews and issues one invoice from accepted residuals, then replays", async () => {
@@ -1024,5 +1093,303 @@ describe("invoice issue API", () => {
     expect(ledger.json().data.effective_refunds_cents).toBe(0);
     expect(ledger.json().data.balance_cents).toBe(23980);
     expect(ledger.json().data.payment_status).toBe("partially_paid");
+  }, 60_000);
+
+  it("voids an unpaid invoice, blocks replay races, and issues a replacement", async () => {
+    const token = await sign({ sub: AUTH_C, email: "owner.c@example.com" });
+    expect((await completeSetup(token, KEYS.setupC)).statusCode).toBe(200);
+    const issued = await issueInvoice(token, JOB_VOID, {
+      job: KEYS.jobVoid,
+      open: KEYS.openVoid,
+      save: KEYS.saveVoid,
+      publish: KEYS.publishVoid,
+      decide: KEYS.decideVoid,
+      issue: KEYS.issueVoid,
+    });
+    expect(issued.number).toBe("INV-000001");
+    const originalSha = issued.snapshot_sha256;
+    const packed = await running().admin.query<{ nonce: Buffer; ciphertext: Buffer }>(
+      `select p.nonce, p.ciphertext
+       from commercial.encrypted_delivery_payloads p
+       join commercial.delivery_attempts a on a.id = p.delivery_attempt_id
+       where a.request_id = $1 and a.template_id = 'EMAIL06'`,
+      [issued.request_id],
+    );
+    await completePdf(issued.id);
+    const packedRow = packed.rows[0];
+    if (!packedRow) {
+      throw new Error("EMAIL06 payload was not found");
+    }
+    const fragment = encodeFragmentToken(
+      decryptDeliveryToken(
+        { algorithm: "aes-256-gcm", keyVersion: 1, nonce: packedRow.nonce, ciphertext: packedRow.ciphertext },
+        DELIVERY,
+      ),
+    );
+    const exchanged = await running().app.inject({ method: "POST", url: "/v1/portal/exchange", payload: { token: fragment } });
+    expect(exchanged.statusCode).toBe(200);
+    expect(exchanged.json().data.purpose).toBe("view_only");
+
+    const [first, second] = await Promise.all([
+      running().app.inject({
+        method: "POST",
+        url: `/v1/invoices/${issued.id}/void`,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          "idempotency-key": KEYS.voidKey,
+        },
+        payload: { reason: "Wrong customer email typed" },
+      }),
+      running().app.inject({
+        method: "POST",
+        url: `/v1/invoices/${issued.id}/void`,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          "idempotency-key": KEYS.voidDup,
+        },
+        payload: { reason: "Wrong customer email typed" },
+      }),
+    ]);
+    const statuses = [first.statusCode, second.statusCode].sort();
+    expect(statuses).toEqual([200, 409]);
+    const winner = first.statusCode === 200 ? first : second;
+    expect(winner.json().data.lifecycle).toBe("voided");
+    expect(winner.json().data.voided).toBe(true);
+    expect(winner.json().data.number).toBe("INV-000001");
+    const replay = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/void`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.voidKey,
+      },
+      payload: { reason: "Wrong customer email typed" },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data.id).toBe(issued.id);
+    const mismatch = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/void`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.voidKey,
+      },
+      payload: { reason: "Different void reason now" },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json().error.code).toBe("IDEMPOTENCY_MISMATCH");
+    const already = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/void`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.voidReplay,
+      },
+      payload: { reason: "Trying to void again" },
+    });
+    expect(already.statusCode).toBe(409);
+    expect(already.json().error.code).toBe("DOCUMENT_IMMUTABLE");
+    const afterPortal = await running().app.inject({
+      method: "POST",
+      url: "/v1/portal/exchange",
+      payload: { token: fragment },
+    });
+    expect(afterPortal.statusCode).toBe(404);
+    expect(afterPortal.json().error.code).toBe("REQUEST_UNAVAILABLE");
+    const emails = await running().admin.query<{ n: string }>(
+      `select count(*)::text as n from commercial.delivery_attempts
+       where document_id = $1 and template_id = 'EMAIL08'`,
+      [issued.id],
+    );
+    expect(Number(emails.rows[0]?.n)).toBe(1);
+    const original = await running().admin.query<{ sha: string; number: string; lifecycle: string }>(
+      `select snapshot_sha256 as sha, number, lifecycle from commercial.documents where id = $1`,
+      [issued.id],
+    );
+    expect(original.rows[0]?.sha).toBe(originalSha);
+    expect(original.rows[0]?.number).toBe("INV-000001");
+    expect(original.rows[0]?.lifecycle).toBe("voided");
+    const ledger = await running().app.inject({
+      method: "GET",
+      url: `/v1/invoices/${issued.id}/ledger`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ledger.statusCode).toBe(200);
+    expect(ledger.json().data.entries).toEqual([]);
+    expect(ledger.json().data.voided).toBe(true);
+    const job = await running().app.inject({
+      method: "GET",
+      url: `/v1/jobs/${JOB_VOID}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(job.json().data.active_invoice).toBeNull();
+    expect(job.json().data.permitted_actions).toContain("create_replacement");
+    const preview = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/replacement-preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: { customer: { name: "Riley Chen", email: "fixed@example.com" } },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().data.snapshot.net_cents).toBe(24000);
+    expect(preview.json().data.prior_document_id).toBe(issued.id);
+    const replacement = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/issue-replacement`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.replaceIssue,
+      },
+      payload: { preview_hash: preview.json().data.preview_hash },
+    });
+    expect(replacement.statusCode).toBe(202);
+    expect(replacement.json().data.number).toBe("INV-000002");
+    expect(replacement.json().data.id).not.toBe(issued.id);
+    const retry = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/issue-replacement`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.replaceIssue,
+      },
+      payload: { preview_hash: preview.json().data.preview_hash },
+    });
+    expect(retry.statusCode).toBe(202);
+    expect(retry.json().data.id).toBe(replacement.json().data.id);
+    const linked = await running().admin.query<{ prior: string; active: string | null }>(
+      `select d.prior_document_id::text as prior, j.active_invoice_id::text as active
+       from commercial.documents d
+       join commercial.jobs j on j.id = d.job_id
+       where d.id = $1`,
+      [replacement.json().data.id],
+    );
+    expect(linked.rows[0]?.prior).toBe(issued.id);
+    expect(linked.rows[0]?.active).toBe(replacement.json().data.id);
+    const other = await sign({ sub: AUTH_D, email: "owner.d@example.com" });
+    expect((await completeSetup(other, KEYS.setupD)).statusCode).toBe(200);
+    const stolen = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/void`,
+      headers: {
+        authorization: `Bearer ${other}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.voidKey,
+      },
+      payload: { reason: "Wrong customer email typed" },
+    });
+    expect(stolen.statusCode).toBe(404);
+  }, 60_000);
+
+  it("rejects void when an unreversed payment remains", async () => {
+    const token = await sign({ sub: AUTH_C, email: "owner.c@example.com" });
+    const issued = await issueInvoice(token, JOB_VOID_PAY, {
+      job: KEYS.jobVoidPay,
+      open: KEYS.openVoidPay,
+      save: KEYS.saveVoidPay,
+      publish: KEYS.publishVoidPay,
+      decide: KEYS.decideVoidPay,
+      issue: KEYS.issueVoidPay,
+    });
+    const paid = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.payVoid,
+      },
+      payload: { amount_cents: 4000, effective_date: "2026-09-21", method: "cash" },
+    });
+    expect(paid.statusCode).toBe(200);
+    const blocked = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/void`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.voidPay,
+      },
+      payload: { reason: "Want to void after taking money" },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().error.code).toBe("LEDGER_BLOCKS_VOID");
+    const ledger = await running().app.inject({
+      method: "GET",
+      url: `/v1/invoices/${issued.id}/ledger`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ledger.json().data.entries).toHaveLength(1);
+    expect(ledger.json().data.effective_payments_cents).toBe(4000);
+    const after = await running().admin.query<{ lifecycle: string }>(
+      `select lifecycle from commercial.documents where id = $1`,
+      [issued.id],
+    );
+    expect(after.rows[0]?.lifecycle).toBe("issued");
+  }, 60_000);
+
+  it("rejects void when an issued credit remains", async () => {
+    const token = await sign({ sub: AUTH_C, email: "owner.c@example.com" });
+    const issued = await issueInvoice(token, JOB_VOID_CREDIT, {
+      job: KEYS.jobVoidCredit,
+      open: KEYS.openVoidCredit,
+      save: KEYS.saveVoidCredit,
+      publish: KEYS.publishVoidCredit,
+      decide: KEYS.decideVoidCredit,
+      issue: KEYS.issueVoidCredit,
+    });
+    const ledger = await running().app.inject({
+      method: "GET",
+      url: `/v1/invoices/${issued.id}/ledger`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const lineId = ledger.json().data.credit_sources[0].invoice_line_id as string;
+    const preview = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/credits/preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: { reason: "Scope reduced after issue", allocations: [{ invoice_line_id: lineId, net_credit_cents: 2000 }] },
+    });
+    expect(preview.statusCode).toBe(200);
+    const credit = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/credits`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.creditVoid,
+      },
+      payload: { preview_hash: preview.json().data.preview_hash },
+    });
+    expect(credit.statusCode).toBe(202);
+    const blocked = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${issued.id}/void`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.voidCredit,
+      },
+      payload: { reason: "Want to void after credit" },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().error.code).toBe("LEDGER_BLOCKS_VOID");
+    const credits = await running().admin.query<{ n: string }>(
+      `select count(*)::text as n from commercial.documents
+       where prior_document_id = $1 and kind = 'credit' and lifecycle = 'issued'`,
+      [issued.id],
+    );
+    expect(Number(credits.rows[0]?.n)).toBe(1);
+    const after = await running().admin.query<{ lifecycle: string }>(
+      `select lifecycle from commercial.documents where id = $1`,
+      [issued.id],
+    );
+    expect(after.rows[0]?.lifecycle).toBe("issued");
   }, 60_000);
 });

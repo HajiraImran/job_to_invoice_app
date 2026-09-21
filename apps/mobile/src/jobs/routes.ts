@@ -42,6 +42,14 @@ export function jobLedgerReversePath(jobId: string, invoiceId: string, entryId: 
   return `/(tabs)/jobs/${jobId}/ledger/reverse?invoiceId=${encodeURIComponent(invoiceId)}&entryId=${encodeURIComponent(entryId)}`;
 }
 
+export function jobInvoiceVoidPath(jobId: string, invoiceId: string): string {
+  return `/(tabs)/jobs/${jobId}/invoice/void?invoiceId=${encodeURIComponent(invoiceId)}`;
+}
+
+export function jobInvoiceReplacePath(jobId: string, invoiceId: string): string {
+  return `/(tabs)/jobs/${jobId}/invoice/replace?invoiceId=${encodeURIComponent(invoiceId)}`;
+}
+
 export function canOpenCreateJob(status: string): boolean {
   return status === "authenticated" || status === "offline_cached";
 }

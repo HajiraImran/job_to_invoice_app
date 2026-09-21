@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   canRecordRefund,
+  canReplaceInvoice,
   canReverseLedgerEntry,
+  canVoidInvoice,
   dueDateFromOption,
   presentInvoicePdf,
   presentInvoicePreview,
@@ -74,5 +76,24 @@ describe("invoice presentation", () => {
     expect(canReverseLedgerEntry(payment, [payment, reversal])).toBe(false);
     expect(canReverseLedgerEntry(reversal, [payment, reversal])).toBe(false);
     expect(canReverseLedgerEntry(refund, [payment, refund])).toBe(true);
+    expect(presentInvoiceStatus("issued_unpaid", true)).toBe("Voided");
+    expect(
+      canVoidInvoice({
+        lifecycle: "issued",
+        credits_cents: 0,
+        effective_payments_cents: 0,
+        effective_refunds_cents: 0,
+      }),
+    ).toBe(true);
+    expect(
+      canVoidInvoice({
+        lifecycle: "issued",
+        credits_cents: 0,
+        effective_payments_cents: 4000,
+        effective_refunds_cents: 0,
+      }),
+    ).toBe(false);
+    expect(canReplaceInvoice({ lifecycle: "voided" })).toBe(true);
+    expect(canReplaceInvoice({ lifecycle: "issued" })).toBe(false);
   });
 });

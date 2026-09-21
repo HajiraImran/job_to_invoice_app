@@ -104,8 +104,8 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA39 | Refund exceeds available | Rejected; partial refund works | API; apps/api/src/invoices.test.ts REFUND_EXCEEDS_BALANCE then partial then settling refund. Not VERIFIED on device. |
 | QA40 | Reverse payment once and retry | One reversal; ledger correct. Replay after simulated 31-day ephemeral cache expiry still one `operation_id`. | API; apps/api/src/invoices.test.ts second-owner INV-000001 pay 4000 then reverse; financial idempotency survives ephemeral delete. Not VERIFIED on device. Do not reuse hosted INV-000001. |
 | QA41 | Reverse payment with dependent refund | Block or require correction | API; apps/api/src/invoices.test.ts second-owner INV-000002: reverse payment while refund allocated is 422, then refund reverse unlocks payment reverse. Not VERIFIED on device. |
-| QA42 | Void with payment or issued credit | Rejected; history intact | API |
-| QA43 | Unpaid void then replacement | New number; link; one active invoice | API |
+| QA42 | Void with payment or issued credit | Rejected; history intact | API; apps/api/src/invoices.test.ts third-owner INV payment 4000 and CN credit 2000 both LEDGER_BLOCKS_VOID; original issued row and ledger/credit remain. Not VERIFIED on device. |
+| QA43 | Unpaid void then replacement | New number; link; one active invoice | API; apps/api/src/invoices.test.ts third-owner INV-000001 voided then INV-000002 replacement with prior_document_id; concurrent void 200+409; EMAIL08 once; portal REQUEST_UNAVAILABLE. Not VERIFIED on device. |
 | QA44 | Direct invoice without quote | No-prior-approval label; ordinary calc | E2E |
 | QA45 | Monthly purchase canceled/pending/success | No false Pro; success server-verified | Sandbox |
 | QA46 | SDK success, backend unavailable | Pending verification UI; context kept | Device |

@@ -52,6 +52,27 @@ if (
 ) {
   errors.push("POST /v1/invoices/{invoiceId}/payments requires Idempotency-Key");
 }
+if (!spec.paths?.["/v1/invoices/{invoiceId}/void"]?.post) {
+  errors.push("POST /v1/invoices/{invoiceId}/void is required");
+}
+if (
+  spec.paths?.["/v1/invoices/{invoiceId}/void"]?.post &&
+  !spec.paths["/v1/invoices/{invoiceId}/void"].post.parameters?.some((item) => item.name === "Idempotency-Key")
+) {
+  errors.push("POST /v1/invoices/{invoiceId}/void requires Idempotency-Key");
+}
+if (!spec.paths?.["/v1/invoices/{invoiceId}/replacement-preview"]?.post) {
+  errors.push("POST /v1/invoices/{invoiceId}/replacement-preview is required");
+}
+if (!spec.paths?.["/v1/invoices/{invoiceId}/issue-replacement"]?.post) {
+  errors.push("POST /v1/invoices/{invoiceId}/issue-replacement is required");
+}
+if (
+  spec.paths?.["/v1/invoices/{invoiceId}/issue-replacement"]?.post &&
+  !spec.paths["/v1/invoices/{invoiceId}/issue-replacement"].post.parameters?.some((item) => item.name === "Idempotency-Key")
+) {
+  errors.push("POST /v1/invoices/{invoiceId}/issue-replacement requires Idempotency-Key");
+}
 if (!spec.paths?.["/v1/invoices/{invoiceId}/refunds"]?.post) {
   errors.push("POST /v1/invoices/{invoiceId}/refunds is required");
 }

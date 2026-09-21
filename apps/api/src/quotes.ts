@@ -104,6 +104,7 @@ type PublishRow = {
   pdf_state: string;
   request_id?: string;
   delivery_state?: string;
+  void_reason?: string | null;
   replayed?: boolean;
 };
 
@@ -842,7 +843,7 @@ export function registerQuotePublishRoutes(
         const result = await client.query<PublishRow>(
           `select d.id, d.workspace_id, d.job_id, dr.id as draft_id, d.kind, d.number, d.revision_no, d.lifecycle,
                   d.issued_at, d.issue_date, d.due_date, d.currency, d.net_cents, d.tax_cents, d.total_cents, d.snapshot_json,
-                  d.schema_version, d.snapshot_sha256,
+                  d.schema_version, d.snapshot_sha256, d.void_reason,
                   coalesce(p.download_state, 'preparing') as pdf_state,
                   da.delivery_state, da.request_id
            from commercial.documents d
@@ -871,6 +872,7 @@ export function registerQuotePublishRoutes(
           row.id,
           typeof row.total_cents === "number" ? row.total_cents : Number(row.total_cents),
           dueDate,
+          row.lifecycle === "voided",
         );
         return { row, ledger };
       });

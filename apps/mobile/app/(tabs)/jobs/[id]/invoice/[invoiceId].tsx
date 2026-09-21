@@ -8,10 +8,12 @@ import {
   presentInvoicePdf,
   presentInvoiceStatus,
   canRecordRefund,
+  canReplaceInvoice,
   canReverseLedgerEntry,
+  canVoidInvoice,
   type IssuedInvoiceRecord,
 } from "../../../../../src/invoices/presentation.ts";
-import { jobCreditPath, jobDetailPath, jobLedgerEntryPath, jobLedgerReversePath } from "../../../../../src/jobs/routes.ts";
+import { jobCreditPath, jobDetailPath, jobInvoiceReplacePath, jobInvoiceVoidPath, jobLedgerEntryPath, jobLedgerReversePath } from "../../../../../src/jobs/routes.ts";
 import { useAuth } from "../../../../../src/session/AuthProvider.tsx";
 import { colors, space, type } from "../../../../../src/theme.ts";
 
@@ -123,7 +125,7 @@ export default function InvoiceDetailScreen() {
             <Text style={styles.body}>{formatUsdCents(invoice.balance_cents ?? invoice.total_cents)}</Text>
             <Text style={styles.section}>{copy.invoiceDueDate}</Text>
             <Text style={styles.body}>{invoice.due_date}</Text>
-            <Text style={styles.body}>{presentInvoiceStatus(invoice.payment_status)}</Text>
+            <Text style={styles.body}>{presentInvoiceStatus(invoice.payment_status, invoice.voided || invoice.lifecycle === "voided")}</Text>
             <Text style={styles.banner}>{copy.ledgerRecordedBy}</Text>
             <Text style={styles.section}>{copy.invoiceLedger}</Text>
             {(invoice.entries ?? []).length === 0 ? <Text style={styles.body}>{copy.ledgerEmpty}</Text> : null}
@@ -164,8 +166,31 @@ export default function InvoiceDetailScreen() {
               <Text accessibilityLiveRegion="polite" style={styles.banner}>
                 {copy.ledgerOffline}
               </Text>
+            ) : invoice.voided || invoice.lifecycle === "voided" ? (
+              canReplaceInvoice(invoice) ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={copy.invoiceReplace}
+                  disabled={auth.snapshot.status !== "authenticated"}
+                  onPress={() => router.push(jobInvoiceReplacePath(jobId, invoiceId))}
+                  style={styles.primary}
+                >
+                  <Text style={styles.primaryLabel}>{copy.invoiceReplace}</Text>
+                </Pressable>
+              ) : null
             ) : (
               <>
+                {canVoidInvoice(invoice) ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={copy.invoiceVoid}
+                    disabled={auth.snapshot.status !== "authenticated"}
+                    onPress={() => router.push(jobInvoiceVoidPath(jobId, invoiceId))}
+                    style={styles.secondary}
+                  >
+                    <Text style={styles.secondaryLabel}>{copy.invoiceVoid}</Text>
+                  </Pressable>
+                ) : null}
                 {(invoice.amount_due_cents ?? invoice.total_cents) > 0 ? (
                   <Pressable
                     accessibilityRole="button"

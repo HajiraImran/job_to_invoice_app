@@ -58,6 +58,12 @@ type JobRow = {
   active_invoice_lifecycle?: string | null;
   active_invoice_total?: string | number | null;
   active_invoice_due?: Date | string | null;
+  latest_invoice_id?: string | null;
+  latest_invoice_number?: string | null;
+  latest_invoice_revision?: number | null;
+  latest_invoice_lifecycle?: string | null;
+  latest_invoice_total?: string | number | null;
+  latest_invoice_due?: Date | string | null;
   replayed?: boolean;
 };
 
@@ -163,7 +169,9 @@ function jobSummary(row: JobListRow) {
 function jobDetail(row: JobRow) {
   const canCreateInvoice =
     row.lifecycle === "active" && row.current_quote_lifecycle === "accepted" && !row.active_invoice_id;
-  const canViewInvoice = Boolean(row.active_invoice_id);
+  const canViewInvoice = Boolean(row.active_invoice_id || row.latest_invoice_id);
+  const canReplaceInvoice =
+    row.lifecycle === "invoiced" && !row.active_invoice_id && row.latest_invoice_lifecycle === "voided";
   return {
     id: row.id,
     customer_id: row.customer_id,
@@ -180,6 +188,7 @@ function jobDetail(row: JobRow) {
     permitted_actions: [
       ...(canCreateInvoice ? ["create_invoice"] : []),
       ...(canViewInvoice ? ["view_invoice"] : []),
+      ...(canReplaceInvoice ? ["create_replacement"] : []),
     ],
     quote_draft:
       row.quote_draft_id && row.quote_draft_version
@@ -210,6 +219,24 @@ function jobDetail(row: JobRow) {
               ? row.active_invoice_due instanceof Date
                 ? row.active_invoice_due.toISOString().slice(0, 10)
                 : String(row.active_invoice_due).slice(0, 10)
+              : null,
+          }
+        : null,
+    latest_invoice:
+      row.latest_invoice_id && row.latest_invoice_number && row.latest_invoice_revision && row.latest_invoice_lifecycle
+        ? {
+            id: row.latest_invoice_id,
+            number: row.latest_invoice_number,
+            revision_no: row.latest_invoice_revision,
+            lifecycle: row.latest_invoice_lifecycle,
+            total_cents:
+              typeof row.latest_invoice_total === "number"
+                ? row.latest_invoice_total
+                : Number(row.latest_invoice_total ?? 0),
+            due_date: row.latest_invoice_due
+              ? row.latest_invoice_due instanceof Date
+                ? row.latest_invoice_due.toISOString().slice(0, 10)
+                : String(row.latest_invoice_due).slice(0, 10)
               : null,
           }
         : null,
@@ -533,7 +560,10 @@ export function registerJobRoutes(
                   q.id as current_quote_id, q.number as current_quote_number, q.revision_no as current_quote_revision,
                   q.lifecycle as current_quote_lifecycle, q.total_cents as current_quote_total,
                   inv.id as active_invoice_id, inv.number as active_invoice_number, inv.revision_no as active_invoice_revision,
-                  inv.lifecycle as active_invoice_lifecycle, inv.total_cents as active_invoice_total, inv.due_date as active_invoice_due
+                  inv.lifecycle as active_invoice_lifecycle, inv.total_cents as active_invoice_total, inv.due_date as active_invoice_due,
+                  latest_inv.id as latest_invoice_id, latest_inv.number as latest_invoice_number,
+                  latest_inv.revision_no as latest_invoice_revision, latest_inv.lifecycle as latest_invoice_lifecycle,
+                  latest_inv.total_cents as latest_invoice_total, latest_inv.due_date as latest_invoice_due
            from commercial.jobs j
            join commercial.customers c
              on c.workspace_id = j.workspace_id and c.id = j.customer_id
@@ -548,6 +578,13 @@ export function registerJobRoutes(
            left join commercial.documents inv
              on inv.workspace_id = j.workspace_id
             and inv.id = j.active_invoice_id
+           left join lateral (
+             select d2.id, d2.number, d2.revision_no, d2.lifecycle, d2.total_cents, d2.due_date
+             from commercial.documents d2
+             where d2.workspace_id = j.workspace_id and d2.job_id = j.id and d2.kind = 'invoice'
+             order by d2.issued_at desc, d2.id desc
+             limit 1
+           ) latest_inv on true
            where j.id = $1`,
           [params.jobId],
         );

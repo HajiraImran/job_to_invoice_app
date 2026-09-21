@@ -303,6 +303,8 @@ Also:
 - Status transitions are restricted commands and append `audit_events`
 - `api_app` / `worker_app` have no arbitrary writes to financial tables
 - Ledger reversal function: reference must belong to the same invoice/workspace and must not already be reversed
+- Invoice void (`commercial.void_invoice` in `0017_invoice_void_replacement.sql`): issued invoice only; no effective payment/refund/issued credit; lifecycle `issued`→`voided` with `void_reason`; clear `jobs.active_invoice_id`; retain number and snapshot; revoke view_only sessions; queue EMAIL08 without a new link
+- Replacement (`freeze_replacement_preview` + `issue_replacement`): voided source; overlay customer/due/instructions only; new INV number; `prior_document_id` = voided invoice; one active non-voided invoice
 - Authorization tests must exercise database access paths
 
 ## Deletion (DB05, PRV04–PRV06)
