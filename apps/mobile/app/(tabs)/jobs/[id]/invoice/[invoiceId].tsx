@@ -8,9 +8,10 @@ import {
   presentInvoicePdf,
   presentInvoiceStatus,
   canRecordRefund,
+  canReverseLedgerEntry,
   type IssuedInvoiceRecord,
 } from "../../../../../src/invoices/presentation.ts";
-import { jobCreditPath, jobDetailPath, jobLedgerEntryPath } from "../../../../../src/jobs/routes.ts";
+import { jobCreditPath, jobDetailPath, jobLedgerEntryPath, jobLedgerReversePath } from "../../../../../src/jobs/routes.ts";
 import { useAuth } from "../../../../../src/session/AuthProvider.tsx";
 import { colors, space, type } from "../../../../../src/theme.ts";
 
@@ -127,9 +128,23 @@ export default function InvoiceDetailScreen() {
             <Text style={styles.section}>{copy.invoiceLedger}</Text>
             {(invoice.entries ?? []).length === 0 ? <Text style={styles.body}>{copy.ledgerEmpty}</Text> : null}
             {(invoice.entries ?? []).map((entry) => (
-              <Text key={entry.id} style={styles.body}>
-                {entry.effective_date} · {entry.type} · {formatUsdCents(entry.amount_cents)}
-              </Text>
+              <View key={entry.id}>
+                <Text style={styles.body}>
+                  {entry.effective_date} · {entry.type} · {formatUsdCents(entry.amount_cents)}
+                  {entry.reverses_entry_id ? ` · ${copy.ledgerReverseTitle}` : ""}
+                </Text>
+                {canReverseLedgerEntry(entry, invoice.entries ?? []) && auth.snapshot.status !== "offline_cached" ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={copy.ledgerReverse}
+                    disabled={auth.snapshot.status !== "authenticated"}
+                    onPress={() => router.push(jobLedgerReversePath(jobId, invoiceId, entry.id))}
+                    style={styles.secondary}
+                  >
+                    <Text style={styles.secondaryLabel}>{copy.ledgerReverse}</Text>
+                  </Pressable>
+                ) : null}
+              </View>
             ))}
             <Text accessibilityLiveRegion="polite" style={styles.banner}>
               {pdf.label}

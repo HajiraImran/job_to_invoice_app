@@ -1,10 +1,12 @@
 import { parseIntegerCents } from "./draft.ts";
-import { parseOptionalBoundedText } from "./text.ts";
+import { parseBoundedText, parseOptionalBoundedText } from "./text.ts";
 
 const DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
 export const LEDGER_METHODS = ["cash", "check", "bank_transfer", "external_card", "other"] as const;
 export const LEDGER_REFERENCE_MAX = 100;
 export const LEDGER_NOTE_MAX = 500;
+export const LEDGER_REASON_MIN = 5;
+export const LEDGER_REASON_MAX = 500;
 
 export type LedgerMethod = (typeof LEDGER_METHODS)[number];
 export type FieldError = { field: string; message: string };
@@ -24,6 +26,10 @@ export type LedgerRefundInput = {
   method: LedgerMethod;
   reference?: string;
   note?: string;
+};
+
+export type LedgerReverseInput = {
+  reason: string;
 };
 
 export type LedgerParseResult<T> = { ok: true; value: T } | { ok: false; field_errors: FieldError[] };
@@ -161,4 +167,25 @@ export function parseLedgerRefund(input: unknown): LedgerParseResult<LedgerRefun
       ...(shared.note ? { note: shared.note } : {}),
     },
   };
+}
+
+export function parseLedgerReverse(input: unknown): LedgerParseResult<LedgerReverseInput> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { ok: false, field_errors: [{ field: "body", message: "Invalid request." }] };
+  }
+  const record = input as Record<string, unknown>;
+  const field_errors: FieldError[] = [];
+  for (const key of Object.keys(record)) {
+    if (key !== "reason") {
+      field_errors.push({ field: key, message: "Unknown fields are not allowed." });
+    }
+  }
+  const reason = parseBoundedText(record.reason, { min: LEDGER_REASON_MIN, max: LEDGER_REASON_MAX, multiline: true });
+  if (!reason.ok) {
+    field_errors.push({ field: "reason", message: "Enter a reason between 5 and 500 characters." });
+  }
+  if (field_errors.length > 0 || !reason.ok) {
+    return { ok: false, field_errors };
+  }
+  return { ok: true, value: { reason: reason.value } };
 }

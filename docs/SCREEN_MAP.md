@@ -43,7 +43,7 @@ Every data screen implements UI04: loading, empty, loaded, refresh failure, offl
 | S13 | Extra work editor | mobile | `/(tabs)/jobs/[id]/change` | Publish extra | JRN03 | `change_started` | S08 after accepted quote |
 | S14 | Reduction editor | mobile | `/(tabs)/jobs/[id]/reduce` | Publish reduction | JRN04 | `change_started` | S08 |
 | S15 | Invoice preview | mobile | `/(tabs)/jobs/[id]/invoice` | Issue invoice | JRN05, JRN06 | `invoice_issued` | S08 |
-| S16 | Invoice detail | mobile | `/(tabs)/jobs/[id]/invoice/[invoiceId]` | Share, pay, credit, void | JRN05 | `payment_recorded` | S08, S15 |
+| S16 | Invoice detail | mobile | `/(tabs)/jobs/[id]/invoice/[invoiceId]` | Share, pay, credit, reverse | JRN05 | `payment_recorded` | S08, S15 |
 | S17 | Payment or refund | mobile | `/(tabs)/jobs/[id]/ledger/entry` | Confirm entry | JRN05 | `payment_recorded` | S16 |
 | S18 | Credit note | mobile | `/(tabs)/jobs/[id]/credit` | Issue credit | JRN05 | — | S16 |
 | S19 | Customers | mobile | `/(tabs)/customers` | Create / open | JRN01 | — | Tab |
@@ -163,13 +163,13 @@ PDF/share, issued total, credits, received/refunded/balance, ledger. Record paym
 
 Derived states: issued_unpaid, partially_paid, settled, overdue, refund_due, voided flag (BIL08).
 
-Implemented route: `/(tabs)/jobs/[id]/invoice/[invoiceId]`. Status, totals, ledger list, Mark paid, Record payment, Record refund, Issue credit. No Void. Device 2026-09-21: preview/issue passed; PDF/share/EMAIL06/worker NOT VERIFIED. Do not retry INV-000001.
+Implemented route: `/(tabs)/jobs/[id]/invoice/[invoiceId]`. Status, totals, ledger list, Mark paid, Record payment, Record refund, Issue credit, Reverse on unreversed payment/refund rows. Reverse confirm: `/(tabs)/jobs/[id]/ledger/reverse`. No Void. Device 2026-09-21: preview/issue passed; PDF/share/EMAIL06/worker/reversal NOT VERIFIED. Do not retry INV-000001.
 
 ### S17 Payment or refund
 
 Amount, date, method, reference, confirmation. Overpayment warning. Refund maximum. Online only. NTF05 ledger warning.
 
-Implemented route: `/(tabs)/jobs/[id]/ledger/entry`. Integer-cent payment/refund, overpay confirm, refund blocked unless amount to refund > 0. Never queued in SYNC01 outbox. Reverse later. Not VERIFIED on device.
+Implemented route: `/(tabs)/jobs/[id]/ledger/entry`. Integer-cent payment/refund, overpay confirm, refund blocked unless amount to refund > 0. Never queued in SYNC01 outbox. Reverse is S16. Not VERIFIED on device.
 
 ### S18 Credit note
 

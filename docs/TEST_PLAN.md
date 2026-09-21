@@ -102,8 +102,8 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA37 | Manual partial/overpayment | Derived balance; overpay confirm | API; apps/api/src/invoices.test.ts partial 4000 then unconfirmed overpay 422 then confirmed refund_due. Not VERIFIED on device. Do not retry INV-000001. |
 | QA38 | Credit after full payment | Negative balance; refund due; no money moved | API; apps/api/src/invoices.test.ts INV-000003 pay 25980 then CN-000001 credit 2000 net / 2165 total; refund_due; one payment entry only. Not VERIFIED on device. Do not use INV-000001. |
 | QA39 | Refund exceeds available | Rejected; partial refund works | API; apps/api/src/invoices.test.ts REFUND_EXCEEDS_BALANCE then partial then settling refund. Not VERIFIED on device. |
-| QA40 | Reverse payment once and retry | One reversal; ledger correct. Replay after simulated 31-day ephemeral cache expiry still one `operation_id`. | API |
-| QA41 | Reverse payment with dependent refund | Block or require correction | API |
+| QA40 | Reverse payment once and retry | One reversal; ledger correct. Replay after simulated 31-day ephemeral cache expiry still one `operation_id`. | API; apps/api/src/invoices.test.ts second-owner INV-000001 pay 4000 then reverse; financial idempotency survives ephemeral delete. Not VERIFIED on device. Do not reuse hosted INV-000001. |
+| QA41 | Reverse payment with dependent refund | Block or require correction | API; apps/api/src/invoices.test.ts second-owner INV-000002: reverse payment while refund allocated is 422, then refund reverse unlocks payment reverse. Not VERIFIED on device. |
 | QA42 | Void with payment or issued credit | Rejected; history intact | API |
 | QA43 | Unpaid void then replacement | New number; link; one active invoice | API |
 | QA44 | Direct invoice without quote | No-prior-approval label; ordinary calc | E2E |

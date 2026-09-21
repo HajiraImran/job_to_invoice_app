@@ -468,6 +468,42 @@
         }
       }
     },
+    "/v1/ledger/{entryId}/reverse": {
+      "post": {
+        "summary": "Reverse one payment or refund entry",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "entryId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LedgerReverse" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Append-only reversal recorded; original entry retained" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
+          "404": { "description": "Unknown or cross-tenant ledger entry" },
+          "409": { "description": "Entry already reversed or idempotency mismatch" },
+          "422": { "description": "Validation failed, reversal of a reversal, or dependent refunds remain" }
+        }
+      }
+    },
     "/v1/drafts/{draftId}": {
       "get": {
         "summary": "Read an editing quote draft and server-calculated totals",
@@ -1148,6 +1184,14 @@
           "method": { "type": "string", "enum": ["cash", "check", "bank_transfer", "external_card", "other"] },
           "reference": { "type": "string", "maxLength": 100 },
           "note": { "type": "string", "maxLength": 500 }
+        }
+      },
+      "LedgerReverse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason"],
+        "properties": {
+          "reason": { "type": "string", "minLength": 5, "maxLength": 500 }
         }
       },
       "ActionGrantCreate": {

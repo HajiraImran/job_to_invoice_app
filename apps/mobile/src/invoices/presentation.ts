@@ -154,12 +154,22 @@ export function canRecordRefund(status: string, amountToRefundCents: number): bo
   return status === "refund_due" && amountToRefundCents > 0;
 }
 
+export function canReverseLedgerEntry(
+  entry: { id: string; type: string },
+  entries: Array<{ id: string; type: string; reverses_entry_id?: string | null }>,
+): boolean {
+  if (entry.type !== "payment" && entry.type !== "refund") {
+    return false;
+  }
+  return !entries.some((item) => item.type === "reversal" && item.reverses_entry_id === entry.id);
+}
+
 export function presentLedgerKind(kind: string): string {
   if (kind === "refund") {
     return copy.ledgerRefundTitle;
   }
   if (kind === "reversal") {
-    return "Reversal";
+    return copy.ledgerReverseTitle;
   }
   return copy.ledgerPaymentTitle;
 }

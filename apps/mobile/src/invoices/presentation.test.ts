@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canRecordRefund,
+  canReverseLedgerEntry,
   dueDateFromOption,
   presentInvoicePdf,
   presentInvoicePreview,
@@ -66,5 +67,12 @@ describe("invoice presentation", () => {
     expect(presentInvoicePdf("ready").canShare).toBe(true);
     expect(canRecordRefund("refund_due", 8020)).toBe(true);
     expect(canRecordRefund("partially_paid", 0)).toBe(false);
+    const payment = { id: "p1", type: "payment", reverses_entry_id: null };
+    const refund = { id: "r1", type: "refund", reverses_entry_id: null };
+    const reversal = { id: "x1", type: "reversal", reverses_entry_id: "p1" };
+    expect(canReverseLedgerEntry(payment, [payment])).toBe(true);
+    expect(canReverseLedgerEntry(payment, [payment, reversal])).toBe(false);
+    expect(canReverseLedgerEntry(reversal, [payment, reversal])).toBe(false);
+    expect(canReverseLedgerEntry(refund, [payment, refund])).toBe(true);
   });
 });

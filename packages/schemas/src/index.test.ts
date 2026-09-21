@@ -103,6 +103,7 @@ describe("redaction", () => {
     expect(text).not.toContain("123456");
     expect(text).not.toContain("Bearer eyJ");
     expect(API_ERROR_CODES.AUTHENTICATION_REQUIRED).toBe("AUTHENTICATION_REQUIRED");
+    expect(API_ERROR_CODES.ENTRY_ALREADY_REVERSED).toBe("ENTRY_ALREADY_REVERSED");
   });
 
   it("redacts nested sensitive keys and rejects unsafe analytics properties", () => {

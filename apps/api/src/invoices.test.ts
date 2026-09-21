@@ -51,11 +51,33 @@ const KEYS = {
   issue3: "55555555-5555-4555-8555-555555555553",
   payFull: "57575757-5757-4757-8757-575757575766",
   credit: "58585858-5858-4858-8858-585858585861",
+  job4: "53535353-5353-4353-8353-535353535364",
+  open4: "53535353-5353-4353-8353-535353535365",
+  save4: "53535353-5353-4353-8353-535353535366",
+  publish4: "53535353-5353-4353-8353-535353535367",
+  decide4: "54545454-5454-4454-8454-545454545454",
+  issue4: "55555555-5555-4555-8555-555555555554",
+  payRev: "57575757-5757-4757-8757-575757575767",
+  reverse: "59595959-5959-4959-8959-595959595961",
+  reverse2: "59595959-5959-4959-8959-595959595962",
+  job5: "53535353-5353-4353-8353-535353535368",
+  open5: "53535353-5353-4353-8353-535353535369",
+  save5: "53535353-5353-4353-8353-535353535370",
+  publish5: "53535353-5353-4353-8353-535353535371",
+  decide5: "54545454-5454-4454-8454-545454545455",
+  issue5: "55555555-5555-4555-8555-555555555555",
+  payDep: "57575757-5757-4757-8757-575757575768",
+  overpayDep: "57575757-5757-4757-8757-575757575769",
+  refundDep: "57575757-5757-4757-8757-575757575770",
+  reversePayDep: "59595959-5959-4959-8959-595959595963",
+  reverseRefundDep: "59595959-5959-4959-8959-595959595964",
 };
 const JOB = "57575757-5757-4757-8757-575757575751";
 const JOB_B = "57575757-5757-4757-8757-575757575752";
 const JOB_LEDGER = "57575757-5757-4757-8757-575757575753";
 const JOB_CREDIT = "57575757-5757-4757-8757-575757575754";
+const JOB_REVERSE = "57575757-5757-4757-8757-575757575755";
+const JOB_REVERSE_DEP = "57575757-5757-4757-8757-575757575756";
 const DELIVERY = parseVersionedSecret("APPROVAL_DELIVERY_ENCRYPTION_KEY", "delivery-key-material-ok");
 
 describe("invoice issue API", () => {
@@ -741,5 +763,266 @@ describe("invoice issue API", () => {
       },
     });
     expect(stolen.statusCode).toBe(404);
+  }, 60_000);
+
+  it("reverses a payment once, replays after ephemeral expiry, and rejects a second reversal", async () => {
+    const token = await sign({ sub: AUTH_B, email: "owner.b@example.com" });
+    expect((await completeSetup(token, KEYS.setupB)).statusCode).toBe(200);
+    const published = await publishQuote(token, JOB_REVERSE, {
+      job: KEYS.job4,
+      open: KEYS.open4,
+      save: KEYS.save4,
+      publish: KEYS.publish4,
+    });
+    await approveQuote(token, published, KEYS.decide4);
+    const preview = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_REVERSE}/invoice-preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(preview.statusCode).toBe(200);
+    const issued = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_REVERSE}/issue-invoice`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.issue4,
+      },
+      payload: { preview_hash: preview.json().data.preview_hash },
+    });
+    expect(issued.statusCode).toBe(202);
+    const invoiceId = issued.json().data.id as string;
+    expect(issued.json().data.number).toBe("INV-000001");
+    const paid = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.payRev,
+      },
+      payload: { amount_cents: 4000, effective_date: "2026-09-21", method: "cash" },
+    });
+    expect(paid.statusCode).toBe(200);
+    const paymentId = paid.json().data.id as string;
+    const reversed = await running().app.inject({
+      method: "POST",
+      url: `/v1/ledger/${paymentId}/reverse`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.reverse,
+      },
+      payload: { reason: "Typed the wrong amount" },
+    });
+    expect(reversed.statusCode).toBe(200);
+    expect(reversed.json().data.type).toBe("reversal");
+    expect(reversed.json().data.amount_cents).toBe(4000);
+    expect(reversed.json().data.reverses_entry_id).toBe(paymentId);
+    expect(reversed.json().data.payment_status).toBe("issued_unpaid");
+    expect(reversed.json().data.balance_cents).toBe(25980);
+    expect(reversed.json().data.effective_payments_cents).toBe(0);
+    const firstId = reversed.json().data.id as string;
+    const stored = await running().admin.query<{ operation_id: string; permanence: string }>(
+      `select operation_id, permanence from commercial.idempotency_records where key = $1`,
+      [KEYS.reverse],
+    );
+    expect(stored.rows[0]?.permanence).toBe("financial");
+    const operationId = stored.rows[0]?.operation_id;
+    await running().admin.query(`delete from commercial.idempotency_records where permanence = 'ephemeral'`);
+    const replay = await running().app.inject({
+      method: "POST",
+      url: `/v1/ledger/${paymentId}/reverse`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.reverse,
+      },
+      payload: { reason: "Typed the wrong amount" },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data.id).toBe(firstId);
+    expect(replay.json().data.replayed).toBe(true);
+    const afterExpiry = await running().admin.query<{ operation_id: string; n: string }>(
+      `select operation_id, count(*)::text as n
+       from commercial.idempotency_records
+       where key = $1
+       group by operation_id`,
+      [KEYS.reverse],
+    );
+    expect(afterExpiry.rows).toHaveLength(1);
+    expect(afterExpiry.rows[0]?.operation_id).toBe(operationId);
+    const second = await running().app.inject({
+      method: "POST",
+      url: `/v1/ledger/${paymentId}/reverse`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.reverse2,
+      },
+      payload: { reason: "Trying again after the first reversal" },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error.code).toBe("ENTRY_ALREADY_REVERSED");
+    const reverseReversal = await running().app.inject({
+      method: "POST",
+      url: `/v1/ledger/${firstId}/reverse`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.reverse2,
+      },
+      payload: { reason: "Trying to reverse the reversal" },
+    });
+    expect(reverseReversal.statusCode).toBe(422);
+    const ledger = await running().app.inject({
+      method: "GET",
+      url: `/v1/invoices/${invoiceId}/ledger`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ledger.statusCode).toBe(200);
+    expect(ledger.json().data.entries).toHaveLength(2);
+    expect(ledger.json().data.entries.map((entry: { type: string }) => entry.type)).toEqual(["payment", "reversal"]);
+    expect(ledger.json().data.balance_cents).toBe(25980);
+    expect(ledger.json().data.payment_status).toBe("issued_unpaid");
+    const analytics = await running().admin.query<{ n: string }>(
+      `select count(*)::text as n from commercial.analytics_events
+       where event_name = 'payment_recorded' and job_id = $1`,
+      [JOB_REVERSE],
+    );
+    expect(Number(analytics.rows[0]?.n)).toBe(1);
+    const other = await sign({ sub: AUTH, email: "owner.i@example.com" });
+    const stolen = await running().app.inject({
+      method: "POST",
+      url: `/v1/ledger/${paymentId}/reverse`,
+      headers: {
+        authorization: `Bearer ${other}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.reverse,
+      },
+      payload: { reason: "Typed the wrong amount" },
+    });
+    expect(stolen.statusCode).toBe(404);
+  }, 60_000);
+
+  it("blocks reversing a payment while an effective dependent refund remains", async () => {
+    const token = await sign({ sub: AUTH_B, email: "owner.b@example.com" });
+    const published = await publishQuote(token, JOB_REVERSE_DEP, {
+      job: KEYS.job5,
+      open: KEYS.open5,
+      save: KEYS.save5,
+      publish: KEYS.publish5,
+    });
+    await approveQuote(token, published, KEYS.decide5);
+    const preview = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_REVERSE_DEP}/invoice-preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(preview.statusCode).toBe(200);
+    const issued = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_REVERSE_DEP}/issue-invoice`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.issue5,
+      },
+      payload: { preview_hash: preview.json().data.preview_hash },
+    });
+    expect(issued.statusCode).toBe(202);
+    const invoiceId = issued.json().data.id as string;
+    expect(issued.json().data.number).toBe("INV-000002");
+    const paid = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.payDep,
+      },
+      payload: { amount_cents: 25980, effective_date: "2026-09-21", method: "cash" },
+    });
+    expect(paid.statusCode).toBe(200);
+    const paymentId = paid.json().data.id as string;
+    const overpay = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.overpayDep,
+      },
+      payload: {
+        amount_cents: 2000,
+        effective_date: "2026-09-21",
+        method: "check",
+        confirm_overpayment: true,
+      },
+    });
+    expect(overpay.statusCode).toBe(200);
+    const refund = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/refunds`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.refundDep,
+      },
+      payload: { amount_cents: 2000, effective_date: "2026-09-21", method: "cash" },
+    });
+    expect(refund.statusCode).toBe(200);
+    const refundId = refund.json().data.id as string;
+    const blocked = await running().app.inject({
+      method: "POST",
+      url: `/v1/ledger/${paymentId}/reverse`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.reversePayDep,
+      },
+      payload: { reason: "Want to void after refunding" },
+    });
+    expect(blocked.statusCode).toBe(422);
+    expect(blocked.json().error.code).toBe("VALIDATION_FAILED");
+    const refundReversed = await running().app.inject({
+      method: "POST",
+      url: `/v1/ledger/${refundId}/reverse`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.reverseRefundDep,
+      },
+      payload: { reason: "Refund was recorded in error" },
+    });
+    expect(refundReversed.statusCode).toBe(200);
+    expect(refundReversed.json().data.type).toBe("reversal");
+    expect(refundReversed.json().data.reverses_entry_id).toBe(refundId);
+    const afterCorrection = await running().app.inject({
+      method: "POST",
+      url: `/v1/ledger/${paymentId}/reverse`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.reversePayDep,
+      },
+      payload: { reason: "Want to void after refunding" },
+    });
+    expect(afterCorrection.statusCode).toBe(200);
+    expect(afterCorrection.json().data.reverses_entry_id).toBe(paymentId);
+    const ledger = await running().app.inject({
+      method: "GET",
+      url: `/v1/invoices/${invoiceId}/ledger`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ledger.statusCode).toBe(200);
+    expect(ledger.json().data.entries).toHaveLength(5);
+    expect(ledger.json().data.effective_payments_cents).toBe(2000);
+    expect(ledger.json().data.effective_refunds_cents).toBe(0);
+    expect(ledger.json().data.balance_cents).toBe(23980);
+    expect(ledger.json().data.payment_status).toBe("partially_paid");
   }, 60_000);
 });

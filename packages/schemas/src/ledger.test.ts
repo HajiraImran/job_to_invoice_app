@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseLedgerPayment, parseLedgerRefund } from "./ledger.ts";
+import { parseLedgerPayment, parseLedgerRefund, parseLedgerReverse } from "./ledger.ts";
 
 describe("ledger request bodies", () => {
   it("requires integer cents, a calendar date, and a method", () => {
@@ -39,5 +39,11 @@ describe("ledger request bodies", () => {
         confirm_overpayment: true,
       }).ok,
     ).toBe(false);
+  });
+
+  it("requires a 5 to 500 character reversal reason and rejects unknown fields", () => {
+    expect(parseLedgerReverse({ reason: "Typed wrong amount" }).ok).toBe(true);
+    expect(parseLedgerReverse({ reason: "nope" }).ok).toBe(false);
+    expect(parseLedgerReverse({ reason: "Typed wrong amount", amount_cents: 4000 }).ok).toBe(false);
   });
 });

@@ -38,6 +38,10 @@ export function jobCreditPath(jobId: string, invoiceId: string): string {
   return `/(tabs)/jobs/${jobId}/credit?invoiceId=${encodeURIComponent(invoiceId)}`;
 }
 
+export function jobLedgerReversePath(jobId: string, invoiceId: string, entryId: string): string {
+  return `/(tabs)/jobs/${jobId}/ledger/reverse?invoiceId=${encodeURIComponent(invoiceId)}&entryId=${encodeURIComponent(entryId)}`;
+}
+
 export function canOpenCreateJob(status: string): boolean {
   return status === "authenticated" || status === "offline_cached";
 }

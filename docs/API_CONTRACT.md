@@ -167,7 +167,7 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | GET /invoices/{id}/ledger | Owner | Entries and derived balance. **Implemented:** `GET /v1/invoices/{invoiceId}/ledger`; derived payment_status including issued credits; credit_sources remaining net. |
 | POST /invoices/{id}/payments | Owner | Manual payment. **Implemented:** `POST /v1/invoices/{invoiceId}/payments`; Idempotency-Key; financial permanence; overpay confirm; `payment_recorded` settlement only. |
 | POST /invoices/{id}/refunds | Owner | Manual refund. **Implemented:** `POST /v1/invoices/{invoiceId}/refunds`; Idempotency-Key; REFUND_EXCEEDS_BALANCE; oldest-first allocations. |
-| POST /ledger/{id}/reverse | Owner | Reason; one reversal |
+| POST /ledger/{id}/reverse | Owner | Reason; one reversal. **Implemented:** `POST /v1/ledger/{entryId}/reverse`; Idempotency-Key; financial permanence; ENTRY_ALREADY_REVERSED 409; dependent refunds 422. |
 | POST /documents/{id}/send | Owner | Recipient or verified view_only link |
 | POST /assets/upload-url | Owner | Signed upload; display filename only |
 | POST /assets/{id}/complete | Owner | Enqueue validation |

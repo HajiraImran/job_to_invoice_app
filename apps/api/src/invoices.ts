@@ -34,6 +34,7 @@ import {
   parseInvoicePreview,
   parseLedgerPayment,
   parseLedgerRefund,
+  parseLedgerReverse,
   parseOwnerEmail,
   PREVIEW_TTL_MS,
   zonedCalendarDate,
@@ -438,6 +439,23 @@ function mapInvoiceError(
       reply,
       API_ERROR_CODES.CREDIT_EXCEEDS_SOURCE,
       "That credit is more than the remaining amount on the invoice line.",
+    );
+  }
+  if (code === "P0048") {
+    return sendFail(
+      request,
+      reply,
+      API_ERROR_CODES.ENTRY_ALREADY_REVERSED,
+      "This entry is already reversed.",
+    );
+  }
+  if (code === "P0049") {
+    return sendFail(
+      request,
+      reply,
+      API_ERROR_CODES.VALIDATION_FAILED,
+      "Reverse dependent refunds before reversing this payment.",
+      { field_errors: [{ field: "reverses_entry_id", message: "Reverse dependent refunds first." }] },
     );
   }
   if (code === "23505") {
@@ -934,6 +952,7 @@ export function registerInvoiceRoutes(
     amount_to_refund_cents: string | number;
     settlement: string | null;
     replayed: boolean;
+    reverses_entry_id?: string | null;
   };
 
   function presentLedgerCommand(row: LedgerCommandRow) {
@@ -947,6 +966,7 @@ export function registerInvoiceRoutes(
       method: row.method,
       reference: row.reference,
       note: row.note,
+      reverses_entry_id: row.reverses_entry_id ?? null,
       payment_status: row.payment_status,
       invoice_issued_cents: asCents(row.invoice_issued_cents),
       credits_cents: asCents(row.credits_cents),
@@ -1191,6 +1211,106 @@ export function registerInvoiceRoutes(
 
   app.post("/v1/invoices/:invoiceId/payments", async (request, reply) => runLedgerCommand(request, reply, "payment"));
   app.post("/v1/invoices/:invoiceId/refunds", async (request, reply) => runLedgerCommand(request, reply, "refund"));
+
+  app.post("/v1/ledger/:entryId/reverse", async (request, reply) => {
+    const token = bearerToken(request.headers.authorization);
+    if (!token) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+    }
+    if (!deps.verifyJwt || !deps.pool) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    let access: VerifiedAccess;
+    try {
+      access = await deps.verifyJwt(token);
+    } catch {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const parsedEmail = parseOwnerEmail(access.email);
+    if (!parsedEmail.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const limited = options.limiterAllow(access.sub);
+    if (!limited.ok) {
+      const result = fail(request.id, API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.");
+      void reply.header("Retry-After", String(limited.retryAfterSec));
+      return reply.status(result.status).send(result.body);
+    }
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const params = request.params as { entryId?: string };
+    if (!isClientUuid(params.entryId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "entryId", message: "A ledger entry UUID is required." }],
+      });
+    }
+    const parsed = parseLedgerReverse(request.body ?? {});
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    const hash = requestHash({ entryId: params.entryId, ...parsed.value });
+    try {
+      const recorded = await withApiRole(deps.pool, async (client) => {
+        const owner = await client.query<ProvisionRow>(
+          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
+           from identity.provision_owner($1::uuid, $2, $3)`,
+          [access.sub, parsedEmail.display, parsedEmail.normalized],
+        );
+        const provisioned = owner.rows[0];
+        if (!provisioned) {
+          return undefined;
+        }
+        if (provisioned.account_status === "suspended") {
+          return { kind: "suspended" as const };
+        }
+        if (provisioned.account_status !== "active") {
+          return { kind: "locked" as const };
+        }
+        if (!provisioned.setup_completed) {
+          return { kind: "setup" as const };
+        }
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          provisioned.workspace_id,
+          provisioned.actor_id,
+        ]);
+        const row = await client.query<LedgerCommandRow>(
+          `select * from commercial.record_invoice_reversal(
+             $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6
+           )`,
+          [provisioned.actor_id, key, hash, request.id, params.entryId, parsed.value.reason],
+        );
+        return { kind: "ok" as const, row: row.rows[0] };
+      });
+      if (!recorded) {
+        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      }
+      if (recorded.kind === "suspended") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_SUSPENDED, "This account cannot make changes.");
+      }
+      if (recorded.kind === "locked") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+      }
+      if (recorded.kind === "setup") {
+        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (!recorded.row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      return success(request.id, presentLedgerCommand(recorded.row));
+    } catch (error) {
+      const mapped = mapInvoiceError(request, reply, error);
+      if (mapped) {
+        return mapped;
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
 
   function presentIssuedCredit(row: IssueRow) {
     return {
