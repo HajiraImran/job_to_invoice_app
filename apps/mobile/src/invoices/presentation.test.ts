@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { dueDateFromOption, presentInvoicePdf, presentInvoicePreview, presentInvoiceStatus } from "./presentation.ts";
+import {
+  canRecordRefund,
+  dueDateFromOption,
+  presentInvoicePdf,
+  presentInvoicePreview,
+  presentInvoiceStatus,
+} from "./presentation.ts";
 
 describe("invoice presentation", () => {
   it("disables issue while offline and maps preview conflicts", () => {
@@ -53,7 +59,12 @@ describe("invoice presentation", () => {
     expect(dueDateFromOption("2026-09-21", "receipt")).toBe("2026-09-21");
     expect(dueDateFromOption("2026-09-21", "14")).toBe("2026-10-05");
     expect(presentInvoiceStatus("issued_unpaid")).toBe("Issued, unpaid");
+    expect(presentInvoiceStatus("partially_paid")).toBe("Partially paid");
+    expect(presentInvoiceStatus("settled")).toBe("Settled");
+    expect(presentInvoiceStatus("refund_due")).toBe("Amount to refund");
     expect(presentInvoicePdf("preparing").canShare).toBe(false);
     expect(presentInvoicePdf("ready").canShare).toBe(true);
+    expect(canRecordRefund("refund_due", 8020)).toBe(true);
+    expect(canRecordRefund("partially_paid", 0)).toBe(false);
   });
 });

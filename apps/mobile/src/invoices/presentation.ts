@@ -46,6 +46,22 @@ export type IssuedInvoiceRecord = {
   net_cents: number;
   tax_cents: number;
   total_cents: number;
+  credits_cents?: number;
+  effective_payments_cents?: number;
+  effective_refunds_cents?: number;
+  net_received_cents?: number;
+  balance_cents?: number;
+  amount_due_cents?: number;
+  amount_to_refund_cents?: number;
+  recorded_by?: string;
+  entries?: Array<{
+    id: string;
+    type: string;
+    amount_cents: number;
+    effective_date: string;
+    method: string | null;
+    reverses_entry_id: string | null;
+  }>;
 };
 
 export type InvoicePreviewKind =
@@ -113,11 +129,31 @@ export function presentInvoiceStatus(status: string): string {
   switch (status) {
     case "issued_unpaid":
       return copy.invoiceStatusUnpaid;
+    case "partially_paid":
+      return copy.invoiceStatusPartial;
+    case "settled":
+      return copy.invoiceStatusSettled;
     case "overdue":
       return copy.invoiceStatusOverdue;
+    case "refund_due":
+      return copy.invoiceStatusRefundDue;
     default:
       return status;
   }
+}
+
+export function canRecordRefund(status: string, amountToRefundCents: number): boolean {
+  return status === "refund_due" && amountToRefundCents > 0;
+}
+
+export function presentLedgerKind(kind: string): string {
+  if (kind === "refund") {
+    return copy.ledgerRefundTitle;
+  }
+  if (kind === "reversal") {
+    return "Reversal";
+  }
+  return copy.ledgerPaymentTitle;
 }
 
 export function presentInvoicePdf(state: string): { label: string; canShare: boolean } {

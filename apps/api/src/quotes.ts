@@ -32,7 +32,7 @@ import type { Pool } from "pg";
 import { payloadFromJson } from "./drafts.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { fail, success } from "./envelope.ts";
-import { presentIssuedInvoice } from "./invoices.ts";
+import { presentIssuedInvoice, loadInvoiceLedgerState } from "./invoices.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
 import {
   quotePublishDatabaseStage,
@@ -838,7 +838,7 @@ export function registerQuotePublishRoutes(
       });
     }
     try {
-      const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
+      const loaded = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
         const result = await client.query<PublishRow>(
           `select d.id, d.workspace_id, d.job_id, dr.id as draft_id, d.kind, d.number, d.revision_no, d.lifecycle,
                   d.issued_at, d.issue_date, d.due_date, d.currency, d.net_cents, d.tax_cents, d.total_cents, d.snapshot_json,
@@ -853,22 +853,45 @@ export function registerQuotePublishRoutes(
            where d.id = $1 and d.kind in ('quote', 'invoice')`,
           [params.documentId, owner.workspace_id],
         );
-        return result.rows[0];
+        const row = result.rows[0];
+        if (!row) {
+          return undefined;
+        }
+        if (row.kind !== "invoice") {
+          return { row };
+        }
+        const dueDate = row.due_date
+          ? row.due_date instanceof Date
+            ? row.due_date.toISOString().slice(0, 10)
+            : String(row.due_date).slice(0, 10)
+          : null;
+        const ledger = await loadInvoiceLedgerState(
+          client,
+          owner.workspace_id,
+          row.id,
+          typeof row.total_cents === "number" ? row.total_cents : Number(row.total_cents),
+          dueDate,
+        );
+        return { row, ledger };
       });
-      if (!row) {
+      if (!loaded?.row) {
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, DOCUMENT_NOT_FOUND);
       }
-      if (row.kind === "invoice") {
+      if (loaded.row.kind === "invoice") {
         return success(
           request.id,
-          presentIssuedInvoice({
-            ...row,
-            snapshot_json: row.snapshot_json as never,
-            due_date: row.due_date ?? null,
-          }),
+          presentIssuedInvoice(
+            {
+              ...loaded.row,
+              snapshot_json: loaded.row.snapshot_json as never,
+              due_date: loaded.row.due_date ?? null,
+            },
+            loaded.row.pdf_state,
+            loaded.ledger,
+          ),
         );
       }
-      return success(request.id, presentPublishedQuote(row));
+      return success(request.id, presentPublishedQuote(loaded.row));
     } catch {
       return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
     }

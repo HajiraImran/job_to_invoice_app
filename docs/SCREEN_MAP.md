@@ -155,15 +155,21 @@ Eligible source line, net reduction, reason, tax/new total. Bound max. Block all
 
 Source summary, lines, due date, instructions, issue. Block unresolved changes. Direct-invoice label (JRN06).
 
+Implemented route: `/(tabs)/jobs/[id]/invoice`. Online-only quote-based preview/issue. Direct-invoice path not in this slice. Device 2026-09-21: preview and issue passed. PDF readiness/open/share, EMAIL06, and worker completion NOT VERIFIED (intermittent network/database). Do not retry INV-000001.
+
 ### S16 Invoice detail
 
 PDF/share, issued total, credits, received/refunded/balance, ledger. Record payment, Credit, Record refund, Void if permitted.
 
 Derived states: issued_unpaid, partially_paid, settled, overdue, refund_due, voided flag (BIL08).
 
+Implemented route: `/(tabs)/jobs/[id]/invoice/[invoiceId]`. Status, totals, ledger list, Mark paid, Record payment, Record refund. No Credit/Void. Device 2026-09-21: preview/issue passed; PDF/share/EMAIL06/worker NOT VERIFIED. Do not retry INV-000001.
+
 ### S17 Payment or refund
 
 Amount, date, method, reference, confirmation. Overpayment warning. Refund maximum. Online only. NTF05 ledger warning.
+
+Implemented route: `/(tabs)/jobs/[id]/ledger/entry`. Integer-cent payment/refund, overpay confirm, refund blocked unless amount to refund > 0. Never queued in SYNC01 outbox. Credits/reverse later. Not VERIFIED on device.
 
 ### S18 Credit note
 

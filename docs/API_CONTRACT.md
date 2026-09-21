@@ -164,9 +164,9 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /invoices/{id}/issue-replacement | Owner | preview_hash; new number |
 | POST /invoices/{id}/credits/preview | Owner | Allocations/reason |
 | POST /invoices/{id}/credits | Owner | preview_hash; issue + notify |
-| GET /invoices/{id}/ledger | Owner | Entries and derived balance |
-| POST /invoices/{id}/payments | Owner | Manual payment |
-| POST /invoices/{id}/refunds | Owner | Manual refund |
+| GET /invoices/{id}/ledger | Owner | Entries and derived balance. **Implemented:** `GET /v1/invoices/{invoiceId}/ledger`; derived payment_status; credits remain 0 until credit notes. |
+| POST /invoices/{id}/payments | Owner | Manual payment. **Implemented:** `POST /v1/invoices/{invoiceId}/payments`; Idempotency-Key; financial permanence; overpay confirm; `payment_recorded` settlement only. |
+| POST /invoices/{id}/refunds | Owner | Manual refund. **Implemented:** `POST /v1/invoices/{invoiceId}/refunds`; Idempotency-Key; REFUND_EXCEEDS_BALANCE; oldest-first allocations. |
 | POST /ledger/{id}/reverse | Owner | Reason; one reversal |
 | POST /documents/{id}/send | Owner | Recipient or verified view_only link |
 | POST /assets/upload-url | Owner | Signed upload; display filename only |

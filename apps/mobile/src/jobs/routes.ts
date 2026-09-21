@@ -30,6 +30,10 @@ export function jobInvoiceDetailPath(jobId: string, invoiceId: string): string {
   return `/(tabs)/jobs/${jobId}/invoice/${invoiceId}`;
 }
 
+export function jobLedgerEntryPath(jobId: string, invoiceId: string, kind: "payment" | "refund"): string {
+  return `/(tabs)/jobs/${jobId}/ledger/entry?invoiceId=${encodeURIComponent(invoiceId)}&kind=${kind}`;
+}
+
 export function canOpenCreateJob(status: string): boolean {
   return status === "authenticated" || status === "offline_cached";
 }

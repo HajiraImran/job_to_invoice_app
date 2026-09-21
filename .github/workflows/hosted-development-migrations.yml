@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type APPLY_0013 to apply pending hosted development migration 0013_invoice_issue.sql
+        description: Type APPLY_0014 to apply pending hosted development migration 0014_invoice_ledger.sql
         required: true
         type: string
 
@@ -24,7 +24,7 @@ jobs:
           CONFIRMATION: ${{ github.event.inputs.confirmation }}
         run: |
           set -euo pipefail
-          if [ "$CONFIRMATION" != "APPLY_0013" ]; then
+          if [ "$CONFIRMATION" != "APPLY_0014" ]; then
             echo "Confirmation phrase did not match. Hosted apply aborted."
             exit 1
           fi
@@ -56,7 +56,7 @@ jobs:
           mkdir -p supabase/.temp
           printf '%s' 'fhgacxkpgjdcjuvanesv' > supabase/.temp/project-ref
 
-      - name: Check pending hosted migration 0013
+      - name: Check pending hosted migration 0014
         env:
           DATABASE_URL_MIGRATIONS: ${{ secrets.DATABASE_URL_MIGRATIONS }}
         run: |
@@ -69,9 +69,9 @@ jobs:
           report="$(pnpm hosted:db-check)"
           printf '%s\n' "$report"
           printf '%s\n' "$report" | grep -qx 'ok: true'
-          printf '%s\n' "$report" | grep -qx 'pending: 0013_invoice_issue.sql'
+          printf '%s\n' "$report" | grep -qx 'pending: 0014_invoice_ledger.sql'
 
-      - name: Apply hosted migration 0013
+      - name: Apply hosted migration 0014
         env:
           DATABASE_URL_MIGRATIONS: ${{ secrets.DATABASE_URL_MIGRATIONS }}
         run: |

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { PoolClient } from "pg";
 import {
   encodeFragmentToken,
   encryptDeliveryToken,
@@ -16,6 +17,7 @@ import {
   emptyLedger,
   isDomainError,
   type InvoiceSnapshotV1,
+  type LedgerState,
   type QuoteSnapshotV1,
 } from "@job-to-invoice/domain";
 import {
@@ -24,6 +26,8 @@ import {
   isClientUuid,
   parseInvoiceIssue,
   parseInvoicePreview,
+  parseLedgerPayment,
+  parseLedgerRefund,
   parseOwnerEmail,
   PREVIEW_TTL_MS,
   zonedCalendarDate,
@@ -181,18 +185,93 @@ function resolveApprovalSecrets(env: Record<string, unknown>) {
   }
 }
 
-export function presentIssuedInvoice(row: IssueRow, pdfState = row.pdf_state) {
+type LedgerEntryDb = {
+  id: string;
+  type: "payment" | "refund" | "reversal";
+  amount_cents: string | number;
+  reverses_entry_id: string | null;
+  effective_date: Date | string;
+  method: string | null;
+  reference: string | null;
+  note: string | null;
+};
+
+export async function loadInvoiceLedgerState(
+  client: PoolClient,
+  workspaceId: string,
+  invoiceId: string,
+  invoiceIssuedCents: number,
+  dueDate: string | null,
+): Promise<{ state: LedgerState; entries: LedgerEntryDb[] }> {
+  const entries = await client.query<LedgerEntryDb>(
+    `select id, type, amount_cents, reverses_entry_id, effective_date, method, reference, note
+     from commercial.ledger_entries
+     where workspace_id = $1 and invoice_id = $2
+     order by created_at, id`,
+    [workspaceId, invoiceId],
+  );
+  const allocations = await client.query<{
+    refund_entry_id: string;
+    payment_entry_id: string;
+    amount_cents: string | number;
+  }>(
+    `select a.refund_entry_id, a.payment_entry_id, a.amount_cents
+     from commercial.ledger_refund_allocations a
+     join commercial.ledger_entries e
+       on e.workspace_id = a.workspace_id and e.id = a.refund_entry_id
+     where a.workspace_id = $1 and e.invoice_id = $2`,
+    [workspaceId, invoiceId],
+  );
+  return {
+    state: {
+      invoice_issued_cents: invoiceIssuedCents,
+      credits_cents: 0,
+      entries: entries.rows.map((entry) => ({
+        entry_id: entry.id,
+        type: entry.type,
+        amount_cents: asCents(entry.amount_cents),
+        reverses_entry_id: entry.reverses_entry_id,
+      })),
+      allocations: allocations.rows.map((allocation) => ({
+        refund_entry_id: allocation.refund_entry_id,
+        payment_entry_id: allocation.payment_entry_id,
+        amount_cents: asCents(allocation.amount_cents),
+      })),
+      voided: false,
+      due_date: dueDate,
+      agreed_job_total_cents: invoiceIssuedCents,
+    },
+    entries: entries.rows,
+  };
+}
+
+function presentLedgerEntries(entries: LedgerEntryDb[]) {
+  return entries.map((entry) => ({
+    id: entry.id,
+    type: entry.type,
+    amount_cents: asCents(entry.amount_cents),
+    effective_date: asDate(entry.effective_date),
+    method: entry.method,
+    reverses_entry_id: entry.reverses_entry_id,
+  }));
+}
+
+export function presentIssuedInvoice(
+  row: IssueRow,
+  pdfState = row.pdf_state,
+  ledger?: { state: LedgerState; entries: LedgerEntryDb[] },
+) {
   const snapshot = row.snapshot_json;
   const dueDate = row.due_date ? asDate(row.due_date) : snapshot.due_date;
   const today = snapshot.business.timezone ? zonedCalendarDate(new Date(), snapshot.business.timezone) : dueDate;
-  const ledger = deriveLedger(
+  const state =
+    ledger?.state ??
     emptyLedger({
       invoice_issued_cents: asCents(row.total_cents),
       due_date: dueDate,
       agreed_job_total_cents: asCents(row.total_cents),
-    }),
-    { as_of_date: today },
-  );
+    });
+  const derived = deriveLedger(state, { as_of_date: today });
   return {
     id: row.id,
     job_id: row.job_id,
@@ -212,7 +291,17 @@ export function presentIssuedInvoice(row: IssueRow, pdfState = row.pdf_state) {
     pdf_state: pdfState,
     request_id: row.request_id ?? null,
     delivery_state: row.delivery_state ?? null,
-    payment_status: ledger.payment_status,
+    payment_status: derived.payment_status,
+    settled_by: derived.settled_by,
+    credits_cents: derived.credits_cents,
+    effective_payments_cents: derived.effective_payments_cents,
+    effective_refunds_cents: derived.effective_refunds_cents,
+    net_received_cents: derived.net_received_cents,
+    balance_cents: derived.balance_cents,
+    amount_due_cents: derived.amount_due_cents,
+    amount_to_refund_cents: derived.amount_to_refund_cents,
+    recorded_by: "Recorded by business",
+    entries: presentLedgerEntries(ledger?.entries ?? []),
     snapshot,
     net_cents: asCents(row.net_cents),
     tax_cents: asCents(row.tax_cents),
@@ -271,6 +360,14 @@ function mapInvoiceError(
       reply,
       API_ERROR_CODES.SCOPE_CHANGED,
       "Accepted scope changed. Review the invoice again before issuing.",
+    );
+  }
+  if (code === "P0046") {
+    return sendFail(
+      request,
+      reply,
+      API_ERROR_CODES.REFUND_EXCEEDS_BALANCE,
+      "That refund is more than the refundable amount.",
     );
   }
   if (code === "23505") {
@@ -743,4 +840,281 @@ export function registerInvoiceRoutes(
       approvalToken.fill(0);
     }
   });
+
+  const INVOICE_NOT_FOUND = "Invoice was not found.";
+
+  type LedgerCommandRow = {
+    id: string;
+    invoice_id: string;
+    job_id: string;
+    type: string;
+    amount_cents: string | number;
+    effective_date: Date | string;
+    method: string | null;
+    reference: string | null;
+    note: string | null;
+    payment_status: string;
+    invoice_issued_cents: string | number;
+    credits_cents: string | number;
+    effective_payments_cents: string | number;
+    effective_refunds_cents: string | number;
+    net_received_cents: string | number;
+    balance_cents: string | number;
+    amount_due_cents: string | number;
+    amount_to_refund_cents: string | number;
+    settlement: string | null;
+    replayed: boolean;
+  };
+
+  function presentLedgerCommand(row: LedgerCommandRow) {
+    return {
+      id: row.id,
+      invoice_id: row.invoice_id,
+      job_id: row.job_id,
+      type: row.type,
+      amount_cents: asCents(row.amount_cents),
+      effective_date: asDate(row.effective_date),
+      method: row.method,
+      reference: row.reference,
+      note: row.note,
+      payment_status: row.payment_status,
+      invoice_issued_cents: asCents(row.invoice_issued_cents),
+      credits_cents: asCents(row.credits_cents),
+      effective_payments_cents: asCents(row.effective_payments_cents),
+      effective_refunds_cents: asCents(row.effective_refunds_cents),
+      net_received_cents: asCents(row.net_received_cents),
+      balance_cents: asCents(row.balance_cents),
+      amount_due_cents: asCents(row.amount_due_cents),
+      amount_to_refund_cents: asCents(row.amount_to_refund_cents),
+      recorded_by: "Recorded by business",
+      replayed: row.replayed,
+    };
+  }
+
+  app.get("/v1/invoices/:invoiceId/ledger", async (request, reply) => {
+    const token = bearerToken(request.headers.authorization);
+    if (!token) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+    }
+    if (!deps.verifyJwt || !deps.pool) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    let access: VerifiedAccess;
+    try {
+      access = await deps.verifyJwt(token);
+    } catch {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const parsedEmail = parseOwnerEmail(access.email);
+    if (!parsedEmail.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const params = request.params as { invoiceId?: string };
+    if (!isClientUuid(params.invoiceId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "invoiceId", message: "An invoice UUID is required." }],
+      });
+    }
+    try {
+      const loaded = await withApiRole(deps.pool, async (client) => {
+        const owner = await client.query<ProvisionRow>(
+          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
+           from identity.provision_owner($1::uuid, $2, $3)`,
+          [access.sub, parsedEmail.display, parsedEmail.normalized],
+        );
+        const provisioned = owner.rows[0];
+        if (!provisioned || provisioned.account_status !== "active" || !provisioned.setup_completed) {
+          return provisioned;
+        }
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          provisioned.workspace_id,
+          provisioned.actor_id,
+        ]);
+        const invoice = await client.query<IssueRow>(
+          `select d.id, d.workspace_id, d.job_id, null::uuid as draft_id, d.kind, d.number, d.revision_no, d.lifecycle,
+                  d.issued_at, d.issue_date, d.due_date, d.currency, d.net_cents, d.tax_cents, d.total_cents,
+                  d.snapshot_json, d.schema_version, d.snapshot_sha256,
+                  coalesce(p.download_state, 'preparing') as pdf_state
+           from commercial.documents d
+           left join lateral commercial.original_pdf_download($2::uuid, d.id) p on true
+           where d.id = $1 and d.kind = 'invoice'`,
+          [params.invoiceId, provisioned.workspace_id],
+        );
+        const row = invoice.rows[0];
+        if (!row) {
+          return { kind: "missing" as const };
+        }
+        const dueDate = row.due_date ? asDate(row.due_date) : row.snapshot_json.due_date;
+        const ledger = await loadInvoiceLedgerState(
+          client,
+          provisioned.workspace_id,
+          row.id,
+          asCents(row.total_cents),
+          dueDate,
+        );
+        return { kind: "ok" as const, presented: presentIssuedInvoice(row, row.pdf_state, ledger) };
+      });
+      if (!loaded || !("kind" in loaded)) {
+        const status = loaded?.account_status;
+        if (status === "suspended") {
+          return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_SUSPENDED, "This account cannot make changes.");
+        }
+        if (status && status !== "active") {
+          return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+        }
+        if (loaded && loaded.setup_completed === false) {
+          return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+        }
+        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      }
+      if (loaded.kind === "missing") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      return success(request.id, loaded.presented);
+    } catch (error) {
+      const mapped = mapInvoiceError(request, reply, error);
+      if (mapped) {
+        return mapped;
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
+  async function runLedgerCommand(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    kind: "payment" | "refund",
+  ) {
+    const token = bearerToken(request.headers.authorization);
+    if (!token) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+    }
+    if (!deps.verifyJwt || !deps.pool) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    let access: VerifiedAccess;
+    try {
+      access = await deps.verifyJwt(token);
+    } catch {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const parsedEmail = parseOwnerEmail(access.email);
+    if (!parsedEmail.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const limited = options.limiterAllow(access.sub);
+    if (!limited.ok) {
+      const result = fail(request.id, API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.");
+      void reply.header("Retry-After", String(limited.retryAfterSec));
+      return reply.status(result.status).send(result.body);
+    }
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const params = request.params as { invoiceId?: string };
+    if (!isClientUuid(params.invoiceId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "invoiceId", message: "An invoice UUID is required." }],
+      });
+    }
+    const parsed =
+      kind === "payment" ? parseLedgerPayment(request.body ?? {}) : parseLedgerRefund(request.body ?? {});
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    const hash = requestHash({ invoiceId: params.invoiceId, ...parsed.value });
+    try {
+      const recorded = await withApiRole(deps.pool, async (client) => {
+        const owner = await client.query<ProvisionRow>(
+          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
+           from identity.provision_owner($1::uuid, $2, $3)`,
+          [access.sub, parsedEmail.display, parsedEmail.normalized],
+        );
+        const provisioned = owner.rows[0];
+        if (!provisioned) {
+          return undefined;
+        }
+        if (provisioned.account_status === "suspended") {
+          return { kind: "suspended" as const };
+        }
+        if (provisioned.account_status !== "active") {
+          return { kind: "locked" as const };
+        }
+        if (!provisioned.setup_completed) {
+          return { kind: "setup" as const };
+        }
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          provisioned.workspace_id,
+          provisioned.actor_id,
+        ]);
+        const sql =
+          kind === "payment"
+            ? `select * from commercial.record_invoice_payment(
+                 $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::bigint, $7::date, $8, $9, $10, $11::boolean
+               )`
+            : `select * from commercial.record_invoice_refund(
+                 $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::bigint, $7::date, $8, $9, $10
+               )`;
+        const args =
+          kind === "payment"
+            ? [
+                provisioned.actor_id,
+                key,
+                hash,
+                request.id,
+                params.invoiceId,
+                parsed.value.amount_cents,
+                parsed.value.effective_date,
+                parsed.value.method,
+                "reference" in parsed.value ? parsed.value.reference ?? null : null,
+                "note" in parsed.value ? parsed.value.note ?? null : null,
+                "confirm_overpayment" in parsed.value ? parsed.value.confirm_overpayment : false,
+              ]
+            : [
+                provisioned.actor_id,
+                key,
+                hash,
+                request.id,
+                params.invoiceId,
+                parsed.value.amount_cents,
+                parsed.value.effective_date,
+                parsed.value.method,
+                "reference" in parsed.value ? parsed.value.reference ?? null : null,
+                "note" in parsed.value ? parsed.value.note ?? null : null,
+              ];
+        const row = await client.query<LedgerCommandRow>(sql, args);
+        return { kind: "ok" as const, row: row.rows[0] };
+      });
+      if (!recorded) {
+        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      }
+      if (recorded.kind === "suspended") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_SUSPENDED, "This account cannot make changes.");
+      }
+      if (recorded.kind === "locked") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+      }
+      if (recorded.kind === "setup") {
+        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (!recorded.row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      return success(request.id, presentLedgerCommand(recorded.row));
+    } catch (error) {
+      const mapped = mapInvoiceError(request, reply, error);
+      if (mapped) {
+        return mapped;
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  }
+
+  app.post("/v1/invoices/:invoiceId/payments", async (request, reply) => runLedgerCommand(request, reply, "payment"));
+  app.post("/v1/invoices/:invoiceId/refunds", async (request, reply) => runLedgerCommand(request, reply, "refund"));
 }

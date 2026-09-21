@@ -7,9 +7,10 @@ import { copy } from "../../../../../src/i18n/en.ts";
 import {
   presentInvoicePdf,
   presentInvoiceStatus,
+  canRecordRefund,
   type IssuedInvoiceRecord,
 } from "../../../../../src/invoices/presentation.ts";
-import { jobDetailPath } from "../../../../../src/jobs/routes.ts";
+import { jobDetailPath, jobLedgerEntryPath } from "../../../../../src/jobs/routes.ts";
 import { useAuth } from "../../../../../src/session/AuthProvider.tsx";
 import { colors, space, type } from "../../../../../src/theme.ts";
 
@@ -111,9 +112,25 @@ export default function InvoiceDetailScreen() {
             <Text style={styles.body}>{invoice.number}</Text>
             <Text style={styles.section}>{copy.quoteTotal}</Text>
             <Text style={styles.body}>{formatUsdCents(invoice.total_cents)}</Text>
+            <Text style={styles.section}>{copy.invoiceCredits}</Text>
+            <Text style={styles.body}>{formatUsdCents(invoice.credits_cents ?? 0)}</Text>
+            <Text style={styles.section}>{copy.invoiceReceived}</Text>
+            <Text style={styles.body}>{formatUsdCents(invoice.effective_payments_cents ?? 0)}</Text>
+            <Text style={styles.section}>{copy.invoiceRefunded}</Text>
+            <Text style={styles.body}>{formatUsdCents(invoice.effective_refunds_cents ?? 0)}</Text>
+            <Text style={styles.section}>{copy.invoiceBalance}</Text>
+            <Text style={styles.body}>{formatUsdCents(invoice.balance_cents ?? invoice.total_cents)}</Text>
             <Text style={styles.section}>{copy.invoiceDueDate}</Text>
             <Text style={styles.body}>{invoice.due_date}</Text>
             <Text style={styles.body}>{presentInvoiceStatus(invoice.payment_status)}</Text>
+            <Text style={styles.banner}>{copy.ledgerRecordedBy}</Text>
+            <Text style={styles.section}>{copy.invoiceLedger}</Text>
+            {(invoice.entries ?? []).length === 0 ? <Text style={styles.body}>{copy.ledgerEmpty}</Text> : null}
+            {(invoice.entries ?? []).map((entry) => (
+              <Text key={entry.id} style={styles.body}>
+                {entry.effective_date} · {entry.type} · {formatUsdCents(entry.amount_cents)}
+              </Text>
+            ))}
             <Text accessibilityLiveRegion="polite" style={styles.banner}>
               {pdf.label}
             </Text>
@@ -128,6 +145,45 @@ export default function InvoiceDetailScreen() {
                 <Text style={styles.primaryLabel}>{copy.invoiceShare}</Text>
               </Pressable>
             ) : null}
+            {auth.snapshot.status === "offline_cached" ? (
+              <Text accessibilityLiveRegion="polite" style={styles.banner}>
+                {copy.ledgerOffline}
+              </Text>
+            ) : (
+              <>
+                {(invoice.amount_due_cents ?? invoice.total_cents) > 0 ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={copy.invoiceMarkPaid}
+                    disabled={auth.snapshot.status !== "authenticated"}
+                    onPress={() => router.push(jobLedgerEntryPath(jobId, invoiceId, "payment"))}
+                    style={styles.primary}
+                  >
+                    <Text style={styles.primaryLabel}>{copy.invoiceMarkPaid}</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={copy.invoiceRecordPayment}
+                  disabled={auth.snapshot.status !== "authenticated"}
+                  onPress={() => router.push(jobLedgerEntryPath(jobId, invoiceId, "payment"))}
+                  style={styles.secondary}
+                >
+                  <Text style={styles.secondaryLabel}>{copy.invoiceRecordPayment}</Text>
+                </Pressable>
+                {canRecordRefund(invoice.payment_status, invoice.amount_to_refund_cents ?? 0) ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={copy.invoiceRecordRefund}
+                    disabled={auth.snapshot.status !== "authenticated"}
+                    onPress={() => router.push(jobLedgerEntryPath(jobId, invoiceId, "refund"))}
+                    style={styles.secondary}
+                  >
+                    <Text style={styles.secondaryLabel}>{copy.invoiceRecordRefund}</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            )}
           </>
         ) : null}
         <Pressable accessibilityRole="button" onPress={() => router.replace(jobDetailPath(jobId))} style={styles.secondary}>

@@ -33,9 +33,20 @@ const KEYS = {
   issue: "55555555-5555-4555-8555-555555555551",
   issue2: "55555555-5555-4555-8555-555555555552",
   setupB: "56565656-5656-4656-8656-565656565651",
+  job2: "53535353-5353-4353-8353-535353535356",
+  open2: "53535353-5353-4353-8353-535353535357",
+  save2: "53535353-5353-4353-8353-535353535358",
+  publish2: "53535353-5353-4353-8353-535353535359",
+  decide2: "54545454-5454-4454-8454-545454545452",
+  pay: "57575757-5757-4757-8757-575757575761",
+  payReplay: "57575757-5757-4757-8757-575757575762",
+  overpay: "57575757-5757-4757-8757-575757575763",
+  refund: "57575757-5757-4757-8757-575757575764",
+  refund2: "57575757-5757-4757-8757-575757575765",
 };
 const JOB = "57575757-5757-4757-8757-575757575751";
 const JOB_B = "57575757-5757-4757-8757-575757575752";
+const JOB_LEDGER = "57575757-5757-4757-8757-575757575753";
 const DELIVERY = parseVersionedSecret("APPROVAL_DELIVERY_ENCRYPTION_KEY", "delivery-key-material-ok");
 
 describe("invoice issue API", () => {
@@ -124,17 +135,26 @@ describe("invoice issue API", () => {
     });
   }
 
-  async function publishQuote(token: string, jobId: string) {
+  async function publishQuote(
+    token: string,
+    jobId: string,
+    keys: { job: string; open: string; save: string; publish: string } = {
+      job: KEYS.job,
+      open: KEYS.open,
+      save: KEYS.save,
+      publish: KEYS.publish,
+    },
+  ) {
     await running().app.inject({
       method: "POST",
       url: "/v1/jobs",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "idempotency-key": KEYS.job },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "idempotency-key": keys.job },
       payload: { id: jobId, customer_name: "Riley Chen", title: "Kitchen faucet", no_site: true, mode: "quote" },
     });
     const opened = await running().app.inject({
       method: "POST",
       url: `/v1/jobs/${jobId}/quote`,
-      headers: { authorization: `Bearer ${token}`, "idempotency-key": KEYS.open },
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": keys.open },
     });
     const draftId = opened.json().data.id as string;
     const saved = await running().app.inject({
@@ -143,7 +163,7 @@ describe("invoice issue API", () => {
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
-        "idempotency-key": KEYS.save,
+        "idempotency-key": keys.save,
         "if-match": String(opened.json().data.version),
       },
       payload: {
@@ -174,7 +194,7 @@ describe("invoice issue API", () => {
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
-        "idempotency-key": KEYS.publish,
+        "idempotency-key": keys.publish,
         "if-match": String(saved.json().data.version),
       },
       payload: { preview_hash: previewed.json().data.preview_hash, recipient_email: "customer@example.com" },
@@ -213,7 +233,11 @@ describe("invoice issue API", () => {
     }
   }
 
-  async function approveQuote(token: string, published: { id: string; request_id: string; snapshot_sha256: string }) {
+  async function approveQuote(
+    token: string,
+    published: { id: string; request_id: string; snapshot_sha256: string },
+    decideKey = KEYS.decide,
+  ) {
     const packed = await running().admin.query<{ nonce: Buffer; ciphertext: Buffer }>(
       `select p.nonce, p.ciphertext
        from commercial.encrypted_delivery_payloads p
@@ -270,7 +294,7 @@ describe("invoice issue API", () => {
       headers: {
         cookie,
         "x-csrf-token": csrf,
-        "idempotency-key": KEYS.decide,
+        "idempotency-key": decideKey,
         "content-type": "application/json",
       },
       payload: {
@@ -416,6 +440,163 @@ describe("invoice issue API", () => {
       url: `/v1/jobs/${JOB}/invoice-preview`,
       headers: { authorization: `Bearer ${other}`, "content-type": "application/json" },
       payload: {},
+    });
+    expect(stolen.statusCode).toBe(404);
+  }, 60_000);
+
+  it("records a partial payment, rejects unconfirmed overpay, then refunds the overpayment", async () => {
+    const token = await sign({ sub: AUTH, email: "owner.i@example.com" });
+    expect((await completeSetup(token, KEYS.setup)).statusCode).toBe(200);
+    const published = await publishQuote(token, JOB_LEDGER, {
+      job: KEYS.job2,
+      open: KEYS.open2,
+      save: KEYS.save2,
+      publish: KEYS.publish2,
+    });
+    await approveQuote(token, published, KEYS.decide2);
+    const preview = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_LEDGER}/invoice-preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(preview.statusCode).toBe(200);
+    const issued = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_LEDGER}/issue-invoice`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.issue2,
+      },
+      payload: { preview_hash: preview.json().data.preview_hash },
+    });
+    expect(issued.statusCode).toBe(202);
+    const invoiceId = issued.json().data.id as string;
+    expect(issued.json().data.number).toBe("INV-000002");
+    const partial = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.pay,
+      },
+      payload: { amount_cents: 4000, effective_date: "2026-09-21", method: "cash" },
+    });
+    expect(partial.statusCode).toBe(200);
+    expect(partial.json().data.payment_status).toBe("partially_paid");
+    expect(partial.json().data.amount_due_cents).toBe(21980);
+    expect(partial.json().data.recorded_by).toBe("Recorded by business");
+    const replay = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.pay,
+      },
+      payload: { amount_cents: 4000, effective_date: "2026-09-21", method: "cash" },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data.id).toBe(partial.json().data.id);
+    const blockedRefund = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/refunds`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.refund,
+      },
+      payload: { amount_cents: 1000, effective_date: "2026-09-21", method: "cash" },
+    });
+    expect(blockedRefund.statusCode).toBe(409);
+    expect(blockedRefund.json().error.code).toBe("REFUND_EXCEEDS_BALANCE");
+    const unconfirmed = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.overpay,
+      },
+      payload: { amount_cents: 30000, effective_date: "2026-09-21", method: "check" },
+    });
+    expect(unconfirmed.statusCode).toBe(422);
+    const overpay = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.overpay,
+      },
+      payload: {
+        amount_cents: 30000,
+        effective_date: "2026-09-21",
+        method: "check",
+        confirm_overpayment: true,
+      },
+    });
+    expect(overpay.statusCode).toBe(200);
+    expect(overpay.json().data.payment_status).toBe("refund_due");
+    expect(overpay.json().data.amount_to_refund_cents).toBe(8020);
+    const partialRefund = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/refunds`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.refund,
+      },
+      payload: { amount_cents: 2000, effective_date: "2026-09-21", method: "bank_transfer" },
+    });
+    expect(partialRefund.statusCode).toBe(200);
+    expect(partialRefund.json().data.payment_status).toBe("refund_due");
+    expect(partialRefund.json().data.amount_to_refund_cents).toBe(6020);
+    const overRefund = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/refunds`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.refund2,
+      },
+      payload: { amount_cents: 6021, effective_date: "2026-09-21", method: "bank_transfer" },
+    });
+    expect(overRefund.statusCode).toBe(409);
+    expect(overRefund.json().error.code).toBe("REFUND_EXCEEDS_BALANCE");
+    const refund = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/refunds`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.refund2,
+      },
+      payload: { amount_cents: 6020, effective_date: "2026-09-21", method: "bank_transfer" },
+    });
+    expect(refund.statusCode).toBe(200);
+    expect(refund.json().data.payment_status).toBe("settled");
+    expect(refund.json().data.balance_cents).toBe(0);
+    const ledger = await running().app.inject({
+      method: "GET",
+      url: `/v1/invoices/${invoiceId}/ledger`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ledger.statusCode).toBe(200);
+    expect(ledger.json().data.entries).toHaveLength(4);
+    const event = await running().admin.query<{ n: string }>(
+      `select count(*)::text as n from commercial.analytics_events
+       where event_name = 'payment_recorded' and job_id = $1`,
+      [JOB_LEDGER],
+    );
+    expect(Number(event.rows[0]?.n)).toBe(2);
+    const other = await sign({ sub: AUTH_B, email: "owner.b@example.com" });
+    const stolen = await running().app.inject({
+      method: "GET",
+      url: `/v1/invoices/${invoiceId}/ledger`,
+      headers: { authorization: `Bearer ${other}` },
     });
     expect(stolen.statusCode).toBe(404);
   }, 60_000);

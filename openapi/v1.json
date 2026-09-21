@@ -311,6 +311,98 @@
         }
       }
     },
+    "/v1/invoices/{invoiceId}/ledger": {
+      "get": {
+        "summary": "Read derived invoice ledger totals and append-only entries",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "invoiceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Derived balance, payment status, and ledger entries. Credits remain zero until credit notes." },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant invoice" }
+        }
+      }
+    },
+    "/v1/invoices/{invoiceId}/payments": {
+      "post": {
+        "summary": "Record an external payment against an issued invoice",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "invoiceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InvoicePayment" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Append-only payment recorded; payment_status is derived" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
+          "404": { "description": "Unknown or cross-tenant invoice" },
+          "409": { "description": "Idempotency mismatch" },
+          "422": { "description": "Validation failed or overpayment not confirmed" }
+        }
+      }
+    },
+    "/v1/invoices/{invoiceId}/refunds": {
+      "post": {
+        "summary": "Record an external refund against an issued invoice",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "invoiceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InvoiceRefund" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Append-only refund recorded and allocated oldest-first" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
+          "404": { "description": "Unknown or cross-tenant invoice" },
+          "409": { "description": "Refund exceeds balance or idempotency mismatch" },
+          "422": { "description": "Validation failed" }
+        }
+      }
+    },
     "/v1/drafts/{draftId}": {
       "get": {
         "summary": "Read an editing quote draft and server-calculated totals",
@@ -937,6 +1029,31 @@
         "required": ["preview_hash"],
         "properties": {
           "preview_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      },
+      "InvoicePayment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["amount_cents", "effective_date", "method"],
+        "properties": {
+          "amount_cents": { "type": "integer", "minimum": 1 },
+          "effective_date": { "type": "string", "format": "date" },
+          "method": { "type": "string", "enum": ["cash", "check", "bank_transfer", "external_card", "other"] },
+          "reference": { "type": "string", "maxLength": 100 },
+          "note": { "type": "string", "maxLength": 500 },
+          "confirm_overpayment": { "type": "boolean", "default": false }
+        }
+      },
+      "InvoiceRefund": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["amount_cents", "effective_date", "method"],
+        "properties": {
+          "amount_cents": { "type": "integer", "minimum": 1 },
+          "effective_date": { "type": "string", "format": "date" },
+          "method": { "type": "string", "enum": ["cash", "check", "bank_transfer", "external_card", "other"] },
+          "reference": { "type": "string", "maxLength": 100 },
+          "note": { "type": "string", "maxLength": 500 }
         }
       },
       "ActionGrantCreate": {

@@ -99,9 +99,9 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA34 | Email timeout after acceptance | Reconcile before retry | Worker; EMAIL06 claim waits for ready original PDF and does not blind-resend. Hosted Resend timeout unverified |
 | QA35 | Permanent bounce | Not delivered; suppression path | Integration |
 | QA36 | Full scope reduced to zero | Zero invoice; no fake payment | Domain |
-| QA37 | Manual partial/overpayment | Derived balance; overpay confirm | API |
+| QA37 | Manual partial/overpayment | Derived balance; overpay confirm | API; apps/api/src/invoices.test.ts partial 4000 then unconfirmed overpay 422 then confirmed refund_due. Not VERIFIED on device. Do not retry INV-000001. |
 | QA38 | Credit after full payment | Negative balance; refund due; no money moved | API |
-| QA39 | Refund exceeds available | Rejected; partial refund works | API |
+| QA39 | Refund exceeds available | Rejected; partial refund works | API; apps/api/src/invoices.test.ts REFUND_EXCEEDS_BALANCE then partial then settling refund. Not VERIFIED on device. |
 | QA40 | Reverse payment once and retry | One reversal; ledger correct. Replay after simulated 31-day ephemeral cache expiry still one `operation_id`. | API |
 | QA41 | Reverse payment with dependent refund | Block or require correction | API |
 | QA42 | Void with payment or issued credit | Rejected; history intact | API |
@@ -327,6 +327,20 @@ Still unverified after this pass:
 - iOS / TestFlight evidence
 - TX06 revoke-after-approve
 - Any scenario not physically executed above
+
+### Physical evidence — invoice issue (2026-09-21)
+
+Quote-based invoice preview and issue passed on device. Status remains **IMPLEMENTED**, not **VERIFIED**. Do **not** modify or retry invoice `INV-000001`.
+
+| Check | Result |
+| --- | --- |
+| Invoice preview | PASS |
+| Invoice issue | PASS |
+| PDF readiness | NOT VERIFIED (intermittent network/database) |
+| PDF open/share | NOT VERIFIED (intermittent network/database) |
+| EMAIL06 delivery | NOT VERIFIED (intermittent network/database) |
+| Worker completion | NOT VERIFIED (intermittent network/database) |
+| Record payment / refund (S17) | NOT VERIFIED |
 
 ## Setup slice commands
 

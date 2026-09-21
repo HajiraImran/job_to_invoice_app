@@ -40,6 +40,27 @@ if (!spec.paths?.["/v1/jobs/{jobId}/invoice-preview"]?.post) {
 if (!spec.paths?.["/v1/jobs/{jobId}/issue-invoice"]?.post) {
   errors.push("POST /v1/jobs/{jobId}/issue-invoice is required");
 }
+if (!spec.paths?.["/v1/invoices/{invoiceId}/ledger"]?.get) {
+  errors.push("GET /v1/invoices/{invoiceId}/ledger is required");
+}
+if (!spec.paths?.["/v1/invoices/{invoiceId}/payments"]?.post) {
+  errors.push("POST /v1/invoices/{invoiceId}/payments is required");
+}
+if (
+  spec.paths?.["/v1/invoices/{invoiceId}/payments"]?.post &&
+  !spec.paths["/v1/invoices/{invoiceId}/payments"].post.parameters?.some((item) => item.name === "Idempotency-Key")
+) {
+  errors.push("POST /v1/invoices/{invoiceId}/payments requires Idempotency-Key");
+}
+if (!spec.paths?.["/v1/invoices/{invoiceId}/refunds"]?.post) {
+  errors.push("POST /v1/invoices/{invoiceId}/refunds is required");
+}
+if (
+  spec.paths?.["/v1/invoices/{invoiceId}/refunds"]?.post &&
+  !spec.paths["/v1/invoices/{invoiceId}/refunds"].post.parameters?.some((item) => item.name === "Idempotency-Key")
+) {
+  errors.push("POST /v1/invoices/{invoiceId}/refunds requires Idempotency-Key");
+}
 if (
   spec.paths?.["/v1/jobs/{jobId}/issue-invoice"]?.post &&
   !spec.paths["/v1/jobs/{jobId}/issue-invoice"].post.parameters?.some((item) => item.name === "Idempotency-Key")
@@ -171,4 +192,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log("OpenAPI 3.1 owner jobs, quote-publish, invoice-issue, portal, and S12 request-controls contract is valid.");
+console.log("OpenAPI 3.1 owner jobs, quote-publish, invoice-issue, invoice-ledger, portal, and S12 request-controls contract is valid.");
