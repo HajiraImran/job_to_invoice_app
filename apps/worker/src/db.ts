@@ -117,6 +117,37 @@ export type AcquireConnectOptions = {
   deadlineMs?: number;
 };
 
+export type WorkerConnectTimeouts = {
+  attemptTimeoutMs: number;
+  deadlineMs: number;
+};
+
+const poolConnectTimeouts = new WeakMap<Pool, WorkerConnectTimeouts>();
+
+export function bindConnectTimeouts(pool: Pick<Pool, "connect">, timeouts: WorkerConnectTimeouts): void {
+  poolConnectTimeouts.set(pool as Pool, timeouts);
+}
+
+export function connectTimeoutsFor(
+  pool: Pick<Pool, "connect">,
+  options?: AcquireConnectOptions,
+): WorkerConnectTimeouts {
+  const stored = poolConnectTimeouts.get(pool as Pool);
+  return {
+    attemptTimeoutMs: stored?.attemptTimeoutMs ?? CONNECT_ATTEMPT_TIMEOUT_MS,
+    deadlineMs: options?.deadlineMs ?? stored?.deadlineMs ?? CONNECT_DEADLINE_MS,
+  };
+}
+
+export function workerPoolOptions(
+  timeouts?: Partial<WorkerConnectTimeouts>,
+): { max: number; connectionTimeoutMillis: number } {
+  return {
+    max: 4,
+    connectionTimeoutMillis: timeouts?.attemptTimeoutMs ?? CONNECT_ATTEMPT_TIMEOUT_MS,
+  };
+}
+
 export async function acquirePooledClient(
   pool: Pick<Pool, "connect">,
   options?: AcquireConnectOptions,
@@ -125,7 +156,7 @@ export async function acquirePooledClient(
   const sleep = options?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const random = options?.random ?? Math.random;
   const maxAttempts = options?.maxAttempts ?? CONNECT_MAX_ATTEMPTS;
-  const deadline = now() + (options?.deadlineMs ?? CONNECT_DEADLINE_MS);
+  const deadline = now() + connectTimeoutsFor(pool, options).deadlineMs;
   let lastError: unknown = new Error("unavailable");
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -193,12 +224,17 @@ export async function withClaimBudget<T>(
   }
 }
 
-export function createWorkerPool(connectionString: string): Pool {
-  return new Pool({
+export function createWorkerPool(connectionString: string, timeouts?: Partial<WorkerConnectTimeouts>): Pool {
+  const resolved: WorkerConnectTimeouts = {
+    attemptTimeoutMs: timeouts?.attemptTimeoutMs ?? CONNECT_ATTEMPT_TIMEOUT_MS,
+    deadlineMs: timeouts?.deadlineMs ?? CONNECT_DEADLINE_MS,
+  };
+  const pool = new Pool({
     connectionString,
-    max: 4,
-    connectionTimeoutMillis: CONNECT_ATTEMPT_TIMEOUT_MS,
+    ...workerPoolOptions(resolved),
   });
+  bindConnectTimeouts(pool, resolved);
+  return pool;
 }
 
 export async function withWorkerRole<T>(

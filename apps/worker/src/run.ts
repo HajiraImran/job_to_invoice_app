@@ -109,7 +109,10 @@ export async function startWorker(): Promise<string> {
   if (!databaseUrl || !store) {
     throw new Error(`Invalid ${env.APP_ENV} configuration (QA68): worker storage configuration is required`);
   }
-  const pool = createWorkerPool(databaseUrl);
+  const pool = createWorkerPool(databaseUrl, {
+    attemptTimeoutMs: env.databaseConnectAttemptTimeoutMs,
+    deadlineMs: env.databaseConnectDeadlineMs,
+  });
   const writeStage = (stage: WorkerPdfStage, sqlstate?: string) => writeWorkerPdfEvent({ stage, sqlstate });
   const apiKey = env.EMAIL_API_KEY;
   const fromDomain = env.EMAIL_FROM_DOMAIN;

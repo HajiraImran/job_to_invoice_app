@@ -76,6 +76,18 @@ describe("loadEnv", () => {
     expect(JSON.stringify(env)).not.toMatch(/postgres:\/\/|password/i);
   });
 
+  it("loads worker connect timeout overrides without exposing them as public mobile keys", () => {
+    const env = loadWorkerEnv({
+      ...DEV_WORKER_STORAGE,
+      DATABASE_CONNECT_ATTEMPT_TIMEOUT_MS: "10000",
+      DATABASE_CONNECT_DEADLINE_MS: "25000",
+    });
+    expect(env.databaseConnectAttemptTimeoutMs).toBe(10_000);
+    expect(env.databaseConnectDeadlineMs).toBe(25_000);
+    expect(JSON.stringify(Object.keys(env))).not.toMatch(/EXPO_PUBLIC_/);
+    expect(JSON.stringify(env)).not.toMatch(/postgres:\/\/|password/i);
+  });
+
   it("rejects invalid API connect timeout configuration through QA68", () => {
     expect(() =>
       loadApiEnv({

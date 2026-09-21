@@ -165,9 +165,10 @@ export type LoadedApiEnv = Omit<LoadedEnv, WorkerCredentialField> &
     documentsStorage?: ApiDocumentsStorageConfig;
   };
 
-export type LoadedWorkerEnv = Omit<LoadedEnv, ApiCredentialField> & {
-  documentsStorage?: WorkerDocumentsStorageConfig;
-};
+export type LoadedWorkerEnv = Omit<LoadedEnv, ApiCredentialField> &
+  DatabaseConnectTimeouts & {
+    documentsStorage?: WorkerDocumentsStorageConfig;
+  };
 
 export const WORKER_ONLY_SECRET_FIELDS = [
   "STORAGE_WORKER_ACCESS_KEY_ID",
@@ -306,7 +307,7 @@ export function loadApiEnv(source: NodeJS.Dict<string> = process.env): LoadedApi
 
 export function loadWorkerEnv(source: NodeJS.Dict<string> = process.env): LoadedWorkerEnv {
   const parsed = parseWorkerEnv(source);
-  resolveDatabaseConnectTimeouts(source, parsed.APP_ENV);
+  const connectTimeouts = resolveDatabaseConnectTimeouts(source, parsed.APP_ENV);
   try {
     const documentsStorage = resolveWorkerDocumentsStorage({
       ...parsed,
@@ -314,6 +315,7 @@ export function loadWorkerEnv(source: NodeJS.Dict<string> = process.env): Loaded
     });
     return {
       ...omitFields(parsed, API_ONLY_SECRET_FIELDS),
+      ...connectTimeouts,
       documentsStorage,
     };
   } catch (error) {
