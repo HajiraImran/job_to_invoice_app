@@ -162,9 +162,9 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /invoices/{id}/void | Owner | Reason; strict ledger conditions |
 | POST /invoices/{id}/replacement-preview | Owner | Voided source; permitted identity fields |
 | POST /invoices/{id}/issue-replacement | Owner | preview_hash; new number |
-| POST /invoices/{id}/credits/preview | Owner | Allocations/reason |
-| POST /invoices/{id}/credits | Owner | preview_hash; issue + notify |
-| GET /invoices/{id}/ledger | Owner | Entries and derived balance. **Implemented:** `GET /v1/invoices/{invoiceId}/ledger`; derived payment_status; credits remain 0 until credit notes. |
+| POST /invoices/{id}/credits/preview | Owner | Allocations/reason. **Implemented:** `POST /v1/invoices/{invoiceId}/credits/preview`; integer-cent allocations; CREDIT_EXCEEDS_SOURCE 422. |
+| POST /invoices/{id}/credits | Owner | preview_hash; issue + notify. **Implemented:** `POST /v1/invoices/{invoiceId}/credits`; Idempotency-Key; financial permanence; CN-00000N; EMAIL07 + original PDF queued. |
+| GET /invoices/{id}/ledger | Owner | Entries and derived balance. **Implemented:** `GET /v1/invoices/{invoiceId}/ledger`; derived payment_status including issued credits; credit_sources remaining net. |
 | POST /invoices/{id}/payments | Owner | Manual payment. **Implemented:** `POST /v1/invoices/{invoiceId}/payments`; Idempotency-Key; financial permanence; overpay confirm; `payment_recorded` settlement only. |
 | POST /invoices/{id}/refunds | Owner | Manual refund. **Implemented:** `POST /v1/invoices/{invoiceId}/refunds`; Idempotency-Key; REFUND_EXCEEDS_BALANCE; oldest-first allocations. |
 | POST /ledger/{id}/reverse | Owner | Reason; one reversal |
@@ -204,7 +204,7 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 
 ## API05 view_only
 
-Invoice/credit access uses the same request/session machinery with `purpose=view_only`. `pending` means access enabled; no decision. Do not expire via the approval-expiry worker; use access expiry (default 90 days). `GET /portal/document` returns `allowed_actions=[download,report]`. `POST /portal/decision` returns 403. Pending uniqueness for approvals excludes view_only. Must be in migration and OpenAPI, not inferred from UI.
+Invoice/credit access uses the same request/session machinery with `purpose=view_only`. **Implemented for invoices (EMAIL06) and credit notes (EMAIL07):** issue inserts a 90-day `view_only` request; `pending` means access enabled; no decision. Do not expire via the approval-expiry worker; use access expiry (default 90 days). `GET /portal/document` returns `allowed_actions=[download,report]`. `POST /portal/decision` returns 403. Pending uniqueness for approvals excludes view_only. Must be in migration and OpenAPI, not inferred from UI. Live portal credit review is not device-verified.
 
 ## Transaction algorithms
 

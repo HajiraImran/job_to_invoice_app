@@ -62,6 +62,14 @@ export type IssuedInvoiceRecord = {
     method: string | null;
     reverses_entry_id: string | null;
   }>;
+  credit_sources?: Array<{
+    invoice_line_id: string;
+    description: string;
+    residual_net_cents: number;
+    residual_tax_cents: number;
+    credited_net_cents: number;
+    remaining_net_cents: number;
+  }>;
 };
 
 export type InvoicePreviewKind =

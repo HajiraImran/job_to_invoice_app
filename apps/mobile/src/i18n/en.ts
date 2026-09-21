@@ -315,4 +315,18 @@ export const copy = {
   ledgerError: "Could not record this entry. Try again.",
   ledgerRefundBlocked: "Refunds are available only when the balance is negative.",
   ledgerEmpty: "No payments or refunds recorded yet.",
+  invoiceCredit: "Issue credit",
+  creditTitle: "Credit note",
+  creditReason: "Reason",
+  creditAmount: "Net credit (USD)",
+  creditRemaining: "Remaining net",
+  creditPreview: "Preview credit",
+  creditPreviewing: "Previewing",
+  creditIssue: "Issue credit note",
+  creditIssuing: "Issuing",
+  creditOffline: "Reconnect to issue this credit. It is not saved to an offline queue.",
+  creditNoRefund: "This credit note reduces the invoice. It does not confirm a refund or move money.",
+  creditIrreversible:
+    "Issuing this credit cannot be undone. To charge more later, create a linked new invoice or job. This does not claim customer approval.",
+  creditError: "Could not issue this credit. Try again.",
 } as const;

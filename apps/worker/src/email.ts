@@ -128,6 +128,35 @@ export function renderEmail08(input: {
   return { subject, text, html };
 }
 
+export function renderEmail07(input: {
+  appName: string;
+  businessName: string;
+  number: string;
+  invoiceNumber: string;
+  totalCents: number;
+  href: string;
+}): { subject: string; text: string; html: string } {
+  const subject = `Credit note ${input.number} from ${input.businessName}`;
+  const total = formatUsdCents(input.totalCents);
+  const text = [
+    input.appName,
+    `${input.businessName} issued credit note ${input.number}.`,
+    `Credit total: ${total}.`,
+    `Referenced invoice: ${input.invoiceNumber}.`,
+    "This credit note does not confirm a refund or move money.",
+    "This message does not include a PDF attachment.",
+    `View credit: ${input.href}`,
+  ].join("\n");
+  const html = `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>${escapeHtml(input.businessName)} issued credit note ${escapeHtml(input.number)}.</p>
+<p>Credit total: ${escapeHtml(total)}. Referenced invoice: ${escapeHtml(input.invoiceNumber)}.</p>
+<p>This credit note does not confirm a refund or move money. This message does not include a PDF.</p>
+<p><a href="${escapeAttribute(input.href)}">View credit</a></p>
+</body></html>`;
+  return { subject, text, html };
+}
+
 export function renderEmail06(input: {
   appName: string;
   businessName: string;
@@ -436,6 +465,39 @@ export async function processSendEmail(input: {
         number: claimed.number,
         totalCents: typeof facts.total_cents === "number" ? facts.total_cents : Number(facts.total_cents),
         dueDate: facts.due_date instanceof Date ? facts.due_date.toISOString().slice(0, 10) : String(facts.due_date).slice(0, 10),
+        href: reviewHref(input.portalOrigin, encodeFragmentToken(raw)),
+      });
+      raw.fill(0);
+    } else if (claimed.template_id === "EMAIL07") {
+      const raw = decryptDeliveryToken(payload, secret);
+      const facts = await withWorkerRole(input.pool, async (client) => {
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          claimed.workspace_id,
+          claimed.created_by,
+        ]);
+        const result = await client.query<{
+          invoice_number: string;
+          total_cents: string | number;
+        }>("select invoice_number, total_cents from commercial.credit_email_facts($1::uuid)", [claimed.document_id]);
+        return result.rows[0];
+      });
+      if (!facts) {
+        raw.fill(0);
+        await withWorkerRole(input.pool, async (client) => {
+          await client.query("select commercial.fail_send_email($1::uuid, $2, $3)", [
+            claimed.id,
+            "VALIDATION_FAILED",
+            true,
+          ]);
+        });
+        return "dead";
+      }
+      rendered = renderEmail07({
+        appName: input.appName,
+        businessName: claimed.business_name,
+        number: claimed.number,
+        invoiceNumber: facts.invoice_number,
+        totalCents: typeof facts.total_cents === "number" ? facts.total_cents : Number(facts.total_cents),
         href: reviewHref(input.portalOrigin, encodeFragmentToken(raw)),
       });
       raw.fill(0);

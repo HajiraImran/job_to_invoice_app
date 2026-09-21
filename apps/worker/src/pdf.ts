@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { chromium } from "playwright";
-import { renderInvoiceOriginalHtml, renderQuoteOriginalHtml, type InvoicePdfDocument, type QuotePdfDocument } from "@job-to-invoice/domain";
+import {
+  renderCreditOriginalHtml,
+  renderInvoiceOriginalHtml,
+  renderQuoteOriginalHtml,
+  type CreditPdfDocument,
+  type InvoicePdfDocument,
+  type QuotePdfDocument,
+} from "@job-to-invoice/domain";
 
 const require = createRequire(import.meta.url);
 
@@ -19,11 +26,15 @@ export function embedInterFonts(html: string): string {
   return html.replace("</style>", `${css}\n  </style>`);
 }
 
-export async function renderQuoteOriginalPdf(document: QuotePdfDocument | InvoicePdfDocument): Promise<Buffer> {
+export async function renderQuoteOriginalPdf(
+  document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument,
+): Promise<Buffer> {
   const html = embedInterFonts(
     document.snapshot.kind === "invoice"
       ? renderInvoiceOriginalHtml(document as InvoicePdfDocument)
-      : renderQuoteOriginalHtml(document as QuotePdfDocument),
+      : document.snapshot.kind === "credit"
+        ? renderCreditOriginalHtml(document as CreditPdfDocument)
+        : renderQuoteOriginalHtml(document as QuotePdfDocument),
   );
   const browser = await chromium.launch({
     headless: true,

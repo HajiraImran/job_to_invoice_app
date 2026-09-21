@@ -109,6 +109,68 @@ export type InvoiceSnapshotV1 = {
 
 export type ResidualSourceLine = InvoiceSnapshotLine;
 
+export const CREDIT_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+
+export type CreditSnapshotLine = {
+  position: number;
+  invoice_line_id: string;
+  description: string;
+  net_credit_cents: number;
+  tax_credit_cents: number;
+  total_cents: number;
+};
+
+export type CreditSnapshotV1 = {
+  schema_version: typeof CREDIT_SNAPSHOT_SCHEMA_VERSION;
+  kind: "credit";
+  currency: "USD";
+  business: QuoteSnapshotV1["business"];
+  customer: QuoteSnapshotV1["customer"];
+  job: QuoteSnapshotV1["job"];
+  reason: string;
+  issue_date: string;
+  invoice_id: string;
+  invoice_number: string;
+  lines: CreditSnapshotLine[];
+  net_cents: number;
+  tax_cents: number;
+  total_cents: number;
+};
+
+export function buildCreditSnapshot(input: {
+  business: QuoteSnapshotV1["business"];
+  customer: QuoteSnapshotV1["customer"];
+  job: QuoteSnapshotV1["job"];
+  reason: string;
+  issue_date: string;
+  invoice_id: string;
+  invoice_number: string;
+  lines: CreditSnapshotLine[];
+  net_cents: number;
+  tax_cents: number;
+  total_cents: number;
+}): CreditSnapshotV1 {
+  if (input.lines.length < 1) {
+    throw new Error("A credit must allocate at least one invoice line");
+  }
+  return {
+    schema_version: CREDIT_SNAPSHOT_SCHEMA_VERSION,
+    kind: "credit",
+    currency: "USD",
+    business: input.business,
+    customer: input.customer,
+    job: input.job,
+    reason: input.reason,
+    issue_date: input.issue_date,
+    invoice_id: input.invoice_id,
+    invoice_number: input.invoice_number,
+    lines: input.lines,
+    net_cents: input.net_cents,
+    tax_cents: input.tax_cents,
+    total_cents: input.total_cents,
+  };
+}
+
 export function buildInvoiceSnapshot(input: {
   business: QuoteSnapshotV1["business"];
   customer: QuoteSnapshotV1["customer"];

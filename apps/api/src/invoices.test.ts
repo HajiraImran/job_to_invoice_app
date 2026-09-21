@@ -43,10 +43,19 @@ const KEYS = {
   overpay: "57575757-5757-4757-8757-575757575763",
   refund: "57575757-5757-4757-8757-575757575764",
   refund2: "57575757-5757-4757-8757-575757575765",
+  job3: "53535353-5353-4353-8353-535353535360",
+  open3: "53535353-5353-4353-8353-535353535361",
+  save3: "53535353-5353-4353-8353-535353535362",
+  publish3: "53535353-5353-4353-8353-535353535363",
+  decide3: "54545454-5454-4454-8454-545454545453",
+  issue3: "55555555-5555-4555-8555-555555555553",
+  payFull: "57575757-5757-4757-8757-575757575766",
+  credit: "58585858-5858-4858-8858-585858585861",
 };
 const JOB = "57575757-5757-4757-8757-575757575751";
 const JOB_B = "57575757-5757-4757-8757-575757575752";
 const JOB_LEDGER = "57575757-5757-4757-8757-575757575753";
+const JOB_CREDIT = "57575757-5757-4757-8757-575757575754";
 const DELIVERY = parseVersionedSecret("APPROVAL_DELIVERY_ENCRYPTION_KEY", "delivery-key-material-ok");
 
 describe("invoice issue API", () => {
@@ -597,6 +606,139 @@ describe("invoice issue API", () => {
       method: "GET",
       url: `/v1/invoices/${invoiceId}/ledger`,
       headers: { authorization: `Bearer ${other}` },
+    });
+    expect(stolen.statusCode).toBe(404);
+  }, 60_000);
+
+  it("issues a credit after full payment and leaves a refund due without moving money", async () => {
+    const token = await sign({ sub: AUTH, email: "owner.i@example.com" });
+    expect((await completeSetup(token, KEYS.setup)).statusCode).toBe(200);
+    const published = await publishQuote(token, JOB_CREDIT, {
+      job: KEYS.job3,
+      open: KEYS.open3,
+      save: KEYS.save3,
+      publish: KEYS.publish3,
+    });
+    await approveQuote(token, published, KEYS.decide3);
+    const preview = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_CREDIT}/invoice-preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(preview.statusCode).toBe(200);
+    const issued = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_CREDIT}/issue-invoice`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.issue3,
+      },
+      payload: { preview_hash: preview.json().data.preview_hash },
+    });
+    expect(issued.statusCode).toBe(202);
+    const invoiceId = issued.json().data.id as string;
+    expect(issued.json().data.number).toBe("INV-000003");
+    const paid = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.payFull,
+      },
+      payload: { amount_cents: 25980, effective_date: "2026-09-21", method: "cash" },
+    });
+    expect(paid.statusCode).toBe(200);
+    expect(paid.json().data.payment_status).toBe("settled");
+    const ledger = await running().app.inject({
+      method: "GET",
+      url: `/v1/invoices/${invoiceId}/ledger`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ledger.statusCode).toBe(200);
+    const lineId = ledger.json().data.credit_sources[0].invoice_line_id as string;
+    expect(ledger.json().data.credit_sources[0].remaining_net_cents).toBe(24000);
+    const over = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/credits/preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: {
+        reason: "Billing correction after overbilling labour",
+        allocations: [{ invoice_line_id: lineId, net_credit_cents: 24001 }],
+      },
+    });
+    expect(over.statusCode).toBe(422);
+    expect(over.json().error.code).toBe("CREDIT_EXCEEDS_SOURCE");
+    const creditPreview = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/credits/preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: {
+        reason: "Billing correction after overbilling labour",
+        allocations: [{ invoice_line_id: lineId, net_credit_cents: 2000 }],
+      },
+    });
+    expect(creditPreview.statusCode).toBe(200);
+    expect(creditPreview.json().data.snapshot.total_cents).toBe(2165);
+    const credit = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/credits`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.credit,
+      },
+      payload: { preview_hash: creditPreview.json().data.preview_hash },
+    });
+    expect(credit.statusCode).toBe(202);
+    expect(credit.json().data.number).toBe("CN-000001");
+    expect(credit.json().data.kind).toBe("credit");
+    const replay = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/credits`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": KEYS.credit,
+      },
+      payload: { preview_hash: creditPreview.json().data.preview_hash },
+    });
+    expect(replay.statusCode).toBe(202);
+    expect(replay.json().data.id).toBe(credit.json().data.id);
+    const after = await running().app.inject({
+      method: "GET",
+      url: `/v1/invoices/${invoiceId}/ledger`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.json().data.credits_cents).toBe(2165);
+    expect(after.json().data.balance_cents).toBe(-2165);
+    expect(after.json().data.payment_status).toBe("refund_due");
+    expect(after.json().data.amount_to_refund_cents).toBe(2165);
+    expect(after.json().data.entries).toHaveLength(1);
+    expect(after.json().data.entries[0].type).toBe("payment");
+    const emailed = await running().admin.query<{ template_id: string }>(
+      `select template_id from commercial.delivery_attempts where document_id = $1`,
+      [credit.json().data.id],
+    );
+    expect(emailed.rows[0]?.template_id).toBe("EMAIL07");
+    const analytics = await running().admin.query<{ n: string }>(
+      `select count(*)::text as n from commercial.analytics_events
+       where event_name = 'payment_recorded' and job_id = $1`,
+      [JOB_CREDIT],
+    );
+    expect(Number(analytics.rows[0]?.n)).toBe(1);
+    const other = await sign({ sub: AUTH_B, email: "owner.b@example.com" });
+    const stolen = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoiceId}/credits/preview`,
+      headers: { authorization: `Bearer ${other}`, "content-type": "application/json" },
+      payload: {
+        reason: "Billing correction after overbilling labour",
+        allocations: [{ invoice_line_id: lineId, net_credit_cents: 2000 }],
+      },
     });
     expect(stolen.statusCode).toBe(404);
   }, 60_000);

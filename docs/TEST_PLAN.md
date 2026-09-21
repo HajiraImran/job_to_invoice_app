@@ -100,7 +100,7 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA35 | Permanent bounce | Not delivered; suppression path | Integration |
 | QA36 | Full scope reduced to zero | Zero invoice; no fake payment | Domain |
 | QA37 | Manual partial/overpayment | Derived balance; overpay confirm | API; apps/api/src/invoices.test.ts partial 4000 then unconfirmed overpay 422 then confirmed refund_due. Not VERIFIED on device. Do not retry INV-000001. |
-| QA38 | Credit after full payment | Negative balance; refund due; no money moved | API |
+| QA38 | Credit after full payment | Negative balance; refund due; no money moved | API; apps/api/src/invoices.test.ts INV-000003 pay 25980 then CN-000001 credit 2000 net / 2165 total; refund_due; one payment entry only. Not VERIFIED on device. Do not use INV-000001. |
 | QA39 | Refund exceeds available | Rejected; partial refund works | API; apps/api/src/invoices.test.ts REFUND_EXCEEDS_BALANCE then partial then settling refund. Not VERIFIED on device. |
 | QA40 | Reverse payment once and retry | One reversal; ledger correct. Replay after simulated 31-day ephemeral cache expiry still one `operation_id`. | API |
 | QA41 | Reverse payment with dependent refund | Block or require correction | API |

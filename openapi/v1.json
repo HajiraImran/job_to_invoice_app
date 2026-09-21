@@ -324,10 +324,75 @@
           }
         ],
         "responses": {
-          "200": { "description": "Derived balance, payment status, and ledger entries. Credits remain zero until credit notes." },
+          "200": { "description": "Derived balance, payment status, credit_sources, and ledger entries" },
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant invoice" }
+        }
+      }
+    },
+    "/v1/invoices/{invoiceId}/credits/preview": {
+      "post": {
+        "summary": "Freeze an owner-issued credit-note preview against remaining invoice line net",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "invoiceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreditPreview" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Frozen credit preview with preview_hash; official number is not allocated" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant invoice" },
+          "422": { "description": "Validation failed or CREDIT_EXCEEDS_SOURCE" }
+        }
+      }
+    },
+    "/v1/invoices/{invoiceId}/credits": {
+      "post": {
+        "summary": "Issue one immutable credit note from a frozen preview",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "invoiceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreditIssue" }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Issued credit note; original PDF and EMAIL07 queued" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
+          "404": { "description": "Unknown or cross-tenant invoice" },
+          "409": { "description": "Preview changed or idempotency mismatch" },
+          "422": { "description": "Validation failed or CREDIT_EXCEEDS_SOURCE" }
         }
       }
     },
@@ -1021,6 +1086,35 @@
         "properties": {
           "due_date": { "type": "string", "format": "date" },
           "payment_instructions": { "type": "string", "maxLength": 4000 }
+        }
+      },
+      "CreditPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason", "allocations"],
+        "properties": {
+          "reason": { "type": "string", "minLength": 5, "maxLength": 500 },
+          "allocations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["invoice_line_id", "net_credit_cents"],
+              "properties": {
+                "invoice_line_id": { "type": "string", "format": "uuid" },
+                "net_credit_cents": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        }
+      },
+      "CreditIssue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["preview_hash"],
+        "properties": {
+          "preview_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
         }
       },
       "InvoiceIssue": {

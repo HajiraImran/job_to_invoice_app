@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderEmail01, renderEmail03, renderEmail04, renderEmail05, renderEmail06, renderEmail08, reviewHref, sendResendEmail } from "./email.ts";
+import { renderEmail01, renderEmail03, renderEmail04, renderEmail05, renderEmail06, renderEmail07, renderEmail08, reviewHref, sendResendEmail } from "./email.ts";
 
 describe("EMAIL01 template", () => {
   it("renders a fragment href without a token query parameter or PDF attachment", () => {
@@ -39,6 +39,26 @@ describe("EMAIL06 template", () => {
     expect(rendered.html).toContain("View invoice");
     expect(rendered.html).not.toContain("Approve");
     expect(rendered.html).not.toContain("tracking");
+    expect(rendered.html).not.toContain("?token=");
+  });
+});
+
+describe("EMAIL07 template", () => {
+  it("renders view-credit copy that does not confirm a refund", () => {
+    const rendered = renderEmail07({
+      appName: "Job to Invoice",
+      businessName: "Invoice Co",
+      number: "CN-000001",
+      invoiceNumber: "INV-000003",
+      totalCents: 2165,
+      href: "https://portal.example.test/review#tokenvalue",
+    });
+    expect(rendered.subject).toBe("Credit note CN-000001 from Invoice Co");
+    expect(rendered.text).toContain("Credit total: $21.65");
+    expect(rendered.text).toContain("Referenced invoice: INV-000003");
+    expect(rendered.text).toContain("does not confirm a refund");
+    expect(rendered.html).toContain("View credit");
+    expect(rendered.html).not.toContain("Approve");
     expect(rendered.html).not.toContain("?token=");
   });
 });

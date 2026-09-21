@@ -10,12 +10,16 @@ import {
   parseVersionedSecret,
 } from "@job-to-invoice/config";
 import {
+  buildCreditSnapshot,
   buildInvoiceSnapshot,
+  calculateCredit,
   calculateInvoiceFromResiduals,
   canonicalizeToBytes,
   deriveLedger,
   emptyLedger,
   isDomainError,
+  remainingAfterReductions,
+  type CreditSnapshotV1,
   type InvoiceSnapshotV1,
   type LedgerState,
   type QuoteSnapshotV1,
@@ -24,6 +28,8 @@ import {
   addCalendarDays,
   API_ERROR_CODES,
   isClientUuid,
+  parseCreditIssue,
+  parseCreditPreview,
   parseInvoiceIssue,
   parseInvoicePreview,
   parseLedgerPayment,
@@ -69,7 +75,7 @@ type IssueRow = {
   net_cents: string | number;
   tax_cents: string | number;
   total_cents: string | number;
-  snapshot_json: InvoiceSnapshotV1;
+  snapshot_json: InvoiceSnapshotV1 | CreditSnapshotV1;
   schema_version: number;
   snapshot_sha256: string;
   pdf_state: string;
@@ -185,6 +191,15 @@ function resolveApprovalSecrets(env: Record<string, unknown>) {
   }
 }
 
+export type CreditSource = {
+  invoice_line_id: string;
+  description: string;
+  residual_net_cents: number;
+  residual_tax_cents: number;
+  credited_net_cents: number;
+  remaining_net_cents: number;
+};
+
 type LedgerEntryDb = {
   id: string;
   type: "payment" | "refund" | "reversal";
@@ -202,7 +217,7 @@ export async function loadInvoiceLedgerState(
   invoiceId: string,
   invoiceIssuedCents: number,
   dueDate: string | null,
-): Promise<{ state: LedgerState; entries: LedgerEntryDb[] }> {
+): Promise<{ state: LedgerState; entries: LedgerEntryDb[]; credit_sources: CreditSource[] }> {
   const entries = await client.query<LedgerEntryDb>(
     `select id, type, amount_cents, reverses_entry_id, effective_date, method, reference, note
      from commercial.ledger_entries
@@ -222,10 +237,39 @@ export async function loadInvoiceLedgerState(
      where a.workspace_id = $1 and e.invoice_id = $2`,
     [workspaceId, invoiceId],
   );
+  const credits = await client.query<{ credits_cents: string | number }>(
+    `select coalesce(sum(d.total_cents), 0) as credits_cents
+     from commercial.documents d
+     where d.workspace_id = $1
+       and d.kind = 'credit'
+       and d.lifecycle = 'issued'
+       and d.prior_document_id = $2`,
+    [workspaceId, invoiceId],
+  );
+  const sources = await client.query<{
+    invoice_line_id: string;
+    description: string;
+    residual_net_cents: string | number;
+    residual_tax_cents: string | number;
+    credited_net_cents: string | number;
+  }>(
+    `select dl.id as invoice_line_id,
+            dl.description,
+            dl.net_cents as residual_net_cents,
+            dl.tax_cents as residual_tax_cents,
+            coalesce(sum(ca.net_credit_cents), 0) as credited_net_cents
+     from commercial.document_lines dl
+     left join commercial.credit_allocations ca
+       on ca.workspace_id = dl.workspace_id and ca.invoice_line_id = dl.id
+     where dl.workspace_id = $1 and dl.document_id = $2
+     group by dl.id
+     order by dl.position, dl.id`,
+    [workspaceId, invoiceId],
+  );
   return {
     state: {
       invoice_issued_cents: invoiceIssuedCents,
-      credits_cents: 0,
+      credits_cents: asCents(credits.rows[0]?.credits_cents ?? 0),
       entries: entries.rows.map((entry) => ({
         entry_id: entry.id,
         type: entry.type,
@@ -242,6 +286,23 @@ export async function loadInvoiceLedgerState(
       agreed_job_total_cents: invoiceIssuedCents,
     },
     entries: entries.rows,
+    credit_sources: sources.rows.map((row) => {
+      const residualNet = asCents(row.residual_net_cents);
+      const residualTax = asCents(row.residual_tax_cents);
+      const credited = asCents(row.credited_net_cents);
+      const remaining =
+        credited === 0
+          ? { remainingNet: BigInt(residualNet) }
+          : remainingAfterReductions(BigInt(residualNet), BigInt(residualTax), [BigInt(credited)]);
+      return {
+        invoice_line_id: row.invoice_line_id,
+        description: row.description,
+        residual_net_cents: residualNet,
+        residual_tax_cents: residualTax,
+        credited_net_cents: credited,
+        remaining_net_cents: Number(remaining.remainingNet),
+      };
+    }),
   };
 }
 
@@ -259,10 +320,10 @@ function presentLedgerEntries(entries: LedgerEntryDb[]) {
 export function presentIssuedInvoice(
   row: IssueRow,
   pdfState = row.pdf_state,
-  ledger?: { state: LedgerState; entries: LedgerEntryDb[] },
+  ledger?: { state: LedgerState; entries: LedgerEntryDb[]; credit_sources?: CreditSource[] },
 ) {
   const snapshot = row.snapshot_json;
-  const dueDate = row.due_date ? asDate(row.due_date) : snapshot.due_date;
+  const dueDate = row.due_date ? asDate(row.due_date) : snapshot.kind === "invoice" ? snapshot.due_date : asDate(row.issue_date);
   const today = snapshot.business.timezone ? zonedCalendarDate(new Date(), snapshot.business.timezone) : dueDate;
   const state =
     ledger?.state ??
@@ -302,6 +363,7 @@ export function presentIssuedInvoice(
     amount_to_refund_cents: derived.amount_to_refund_cents,
     recorded_by: "Recorded by business",
     entries: presentLedgerEntries(ledger?.entries ?? []),
+    credit_sources: ledger?.credit_sources ?? [],
     snapshot,
     net_cents: asCents(row.net_cents),
     tax_cents: asCents(row.tax_cents),
@@ -368,6 +430,14 @@ function mapInvoiceError(
       reply,
       API_ERROR_CODES.REFUND_EXCEEDS_BALANCE,
       "That refund is more than the refundable amount.",
+    );
+  }
+  if (code === "P0047") {
+    return sendFail(
+      request,
+      reply,
+      API_ERROR_CODES.CREDIT_EXCEEDS_SOURCE,
+      "That credit is more than the remaining amount on the invoice line.",
     );
   }
   if (code === "23505") {
@@ -944,7 +1014,11 @@ export function registerInvoiceRoutes(
         if (!row) {
           return { kind: "missing" as const };
         }
-        const dueDate = row.due_date ? asDate(row.due_date) : row.snapshot_json.due_date;
+        const dueDate = row.due_date
+          ? asDate(row.due_date)
+          : row.snapshot_json.kind === "invoice"
+            ? row.snapshot_json.due_date
+            : asDate(row.issue_date);
         const ledger = await loadInvoiceLedgerState(
           client,
           provisioned.workspace_id,
@@ -1117,4 +1191,350 @@ export function registerInvoiceRoutes(
 
   app.post("/v1/invoices/:invoiceId/payments", async (request, reply) => runLedgerCommand(request, reply, "payment"));
   app.post("/v1/invoices/:invoiceId/refunds", async (request, reply) => runLedgerCommand(request, reply, "refund"));
+
+  function presentIssuedCredit(row: IssueRow) {
+    return {
+      id: row.id,
+      job_id: row.job_id,
+      draft_id: row.draft_id,
+      kind: row.kind,
+      number: row.number,
+      revision_label: `R${row.revision_no}`,
+      revision_no: row.revision_no,
+      lifecycle: row.lifecycle,
+      issued_at: asIso(row.issued_at),
+      issue_date: asDate(row.issue_date),
+      currency: row.currency,
+      schema_version: row.schema_version,
+      snapshot_sha256: row.snapshot_sha256,
+      preview_hash: row.snapshot_sha256,
+      pdf_state: row.pdf_state,
+      request_id: row.request_id ?? null,
+      delivery_state: row.delivery_state ?? null,
+      snapshot: row.snapshot_json,
+      net_cents: asCents(row.net_cents),
+      tax_cents: asCents(row.tax_cents),
+      total_cents: asCents(row.total_cents),
+    };
+  }
+
+  app.post("/v1/invoices/:invoiceId/credits/preview", async (request, reply) => {
+    const owner = await requireOwner(request, reply);
+    if (!owner || !deps.pool) {
+      return;
+    }
+    const params = request.params as { invoiceId?: string };
+    if (!isClientUuid(params.invoiceId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "invoiceId", message: "An invoice UUID is required." }],
+      });
+    }
+    const parsed = parseCreditPreview(request.body ?? {});
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    try {
+      const frozen = await withApiRole(deps.pool, async (client) => {
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          owner.workspace_id,
+          owner.actor_id,
+        ]);
+        const invoice = await client.query<IssueRow>(
+          `select d.id, d.workspace_id, d.job_id, null::uuid as draft_id, d.kind, d.number, d.revision_no, d.lifecycle,
+                  d.issued_at, d.issue_date, d.due_date, d.currency, d.net_cents, d.tax_cents, d.total_cents,
+                  d.snapshot_json, d.schema_version, d.snapshot_sha256, 'preparing'::text as pdf_state
+           from commercial.documents d
+           where d.id = $1 and d.kind = 'invoice'`,
+          [params.invoiceId],
+        );
+        const row = invoice.rows[0];
+        if (!row || row.lifecycle !== "issued") {
+          return { kind: "missing" as const };
+        }
+        const dueDate = row.due_date
+          ? asDate(row.due_date)
+          : row.snapshot_json.kind === "invoice"
+            ? row.snapshot_json.due_date
+            : asDate(row.issue_date);
+        const ledger = await loadInvoiceLedgerState(
+          client,
+          owner.workspace_id,
+          row.id,
+          asCents(row.total_cents),
+          dueDate,
+        );
+        let calculated;
+        try {
+          calculated = calculateCredit(
+            ledger.credit_sources.map((source) => ({
+              invoice_line_id: source.invoice_line_id,
+              residual_net_cents: source.residual_net_cents,
+              residual_tax_cents: source.residual_tax_cents,
+              credited_net_cents: source.credited_net_cents,
+            })),
+            parsed.value.allocations,
+          );
+        } catch (error) {
+          return { kind: "domain" as const, error };
+        }
+        const snapshot = row.snapshot_json;
+        const issueDate = zonedCalendarDate(new Date(), snapshot.business.timezone);
+        const creditSnapshot = buildCreditSnapshot({
+          business: snapshot.business,
+          customer: snapshot.customer,
+          job: snapshot.job,
+          reason: parsed.value.reason,
+          issue_date: issueDate,
+          invoice_id: row.id,
+          invoice_number: row.number,
+          lines: calculated.allocations.map((allocation, index) => {
+            const source = ledger.credit_sources.find((item) => item.invoice_line_id === allocation.source_line_id);
+            return {
+              position: index + 1,
+              invoice_line_id: allocation.source_line_id,
+              description: source?.description ?? "Credit",
+              net_credit_cents: allocation.net_reduction_cents,
+              tax_credit_cents: allocation.tax_reduction_cents,
+              total_cents: allocation.total_reduction_cents,
+            };
+          }),
+          net_cents: calculated.net_cents,
+          tax_cents: calculated.tax_cents,
+          total_cents: calculated.total_cents,
+        });
+        const bytes = canonicalizeToBytes(creditSnapshot);
+        const hash = createHash("sha256").update(bytes).digest("hex");
+        const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS);
+        const stored = await client.query<{
+          id: string;
+          version: number;
+          preview_hash: string;
+          preview_expires_at: Date | string;
+          snapshot_json: CreditSnapshotV1;
+        }>(
+          `select id, version, preview_hash, preview_expires_at, snapshot_json
+           from commercial.freeze_credit_preview(
+             $1::uuid, $2::uuid, $3, $4::bytea, $5::jsonb, $6::timestamptz
+           )`,
+          [owner.actor_id, params.invoiceId, hash, Buffer.from(bytes), JSON.stringify(creditSnapshot), expiresAt.toISOString()],
+        );
+        return { kind: "ok" as const, row: stored.rows[0], snapshot: creditSnapshot, hash };
+      });
+      if (frozen.kind === "missing") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      if (frozen.kind === "domain") {
+        if (isDomainError(frozen.error) && frozen.error.code === "CREDIT_EXCEEDS_SOURCE") {
+          return sendFail(request, reply, API_ERROR_CODES.CREDIT_EXCEEDS_SOURCE, frozen.error.message, {
+            field_errors: frozen.error.field ? [{ field: frozen.error.field, message: frozen.error.message }] : [],
+          });
+        }
+        if (isDomainError(frozen.error)) {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, frozen.error.message, {
+            field_errors: frozen.error.field ? [{ field: frozen.error.field, message: frozen.error.message }] : [],
+          });
+        }
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "This credit cannot be issued.");
+      }
+      if (!frozen.row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      return success(request.id, {
+        draft_id: frozen.row.id,
+        invoice_id: params.invoiceId,
+        job_id: frozen.snapshot.job.id,
+        version: frozen.row.version,
+        preview_hash: frozen.hash,
+        preview_expires_at: asIso(frozen.row.preview_expires_at),
+        schema_version: frozen.snapshot.schema_version,
+        number_label: "Draft",
+        snapshot: frozen.snapshot,
+      });
+    } catch (error) {
+      const mapped = mapInvoiceError(request, reply, error);
+      if (mapped) {
+        return mapped;
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
+  app.post("/v1/invoices/:invoiceId/credits", async (request, reply) => {
+    const token = bearerToken(request.headers.authorization);
+    if (!token) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_REQUIRED, SIGN_IN_REQUIRED);
+    }
+    if (!deps.verifyJwt || !deps.pool) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    let access: VerifiedAccess;
+    try {
+      access = await deps.verifyJwt(token);
+    } catch {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const parsedEmail = parseOwnerEmail(access.email);
+    if (!parsedEmail.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+    }
+    const limited = options.limiterAllow(access.sub);
+    if (!limited.ok) {
+      const result = fail(request.id, API_ERROR_CODES.RATE_LIMITED, "Too many requests. Try again later.");
+      void reply.header("Retry-After", String(limited.retryAfterSec));
+      return reply.status(result.status).send(result.body);
+    }
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const params = request.params as { invoiceId?: string };
+    if (!isClientUuid(params.invoiceId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "invoiceId", message: "An invoice UUID is required." }],
+      });
+    }
+    const parsed = parseCreditIssue(request.body ?? {});
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    const secrets = resolveApprovalSecrets(deps.env ?? {});
+    if (!secrets) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    const hash = requestHash({ invoiceId: params.invoiceId, preview_hash: parsed.value.preview_hash });
+    const approvalToken = generateApprovalToken();
+    try {
+      let tokenHash: string;
+      let tokenKeyVersion: number;
+      let ciphertext: Buffer;
+      let nonce: Buffer;
+      let algorithm: string;
+      let deliveryKeyVersion: number;
+      let encryptedEmail: Buffer;
+      const issued = await withApiRole(deps.pool, async (client) => {
+        const owner = await client.query<ProvisionRow>(
+          `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
+           from identity.provision_owner($1::uuid, $2, $3)`,
+          [access.sub, parsedEmail.display, parsedEmail.normalized],
+        );
+        const provisioned = owner.rows[0];
+        if (!provisioned) {
+          return undefined;
+        }
+        if (provisioned.account_status === "suspended") {
+          return { kind: "suspended" as const };
+        }
+        if (provisioned.account_status !== "active") {
+          return { kind: "locked" as const };
+        }
+        if (!provisioned.setup_completed) {
+          return { kind: "setup" as const };
+        }
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          provisioned.workspace_id,
+          provisioned.actor_id,
+        ]);
+        const preview = await client.query<{ recipient: string | null }>(
+          `select recipient
+           from (
+             select 1 as rank, d.preview_snapshot_json#>>'{customer,email}' as recipient
+             from commercial.document_drafts d
+             where d.parent_document_id = $1 and d.kind = 'credit' and d.draft_state = 'editing'
+             union all
+             select 2, doc.snapshot_json#>>'{customer,email}'
+             from commercial.documents doc
+             where doc.id = $1 and doc.kind = 'invoice'
+           ) s
+           where nullif(btrim(recipient), '') is not null
+           order by rank
+           limit 1`,
+          [params.invoiceId],
+        );
+        const recipient = preview.rows[0]?.recipient;
+        if (!recipient) {
+          return { kind: "preview" as const };
+        }
+        const parsedRecipient = parseOwnerEmail(recipient);
+        if (!parsedRecipient.ok) {
+          return { kind: "preview" as const };
+        }
+        encodeFragmentToken(approvalToken);
+        const hashed = hashApprovalToken(approvalToken, secrets.hash);
+        tokenHash = hashed.hash;
+        tokenKeyVersion = hashed.keyVersion;
+        const encrypted = encryptDeliveryToken(approvalToken, secrets.delivery);
+        ciphertext = encrypted.ciphertext;
+        nonce = encrypted.nonce;
+        algorithm = encrypted.algorithm;
+        deliveryKeyVersion = encrypted.keyVersion;
+        const packedEmail = encryptRecipientEmail(parsedRecipient.display, secrets.delivery);
+        encryptedEmail = Buffer.concat([packedEmail.nonce, packedEmail.ciphertext]);
+        const accessUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+        const row = await client.query<IssueRow>(
+          `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date, due_date,
+                  currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
+                  request_id, delivery_state, replayed
+           from commercial.issue_credit(
+             $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6,
+             $7, $8::integer, $9::bytea, $10::bytea, $11::bytea, $12, $13::integer, $14::timestamptz
+           )`,
+          [
+            provisioned.actor_id,
+            key,
+            hash,
+            request.id,
+            params.invoiceId,
+            parsed.value.preview_hash,
+            tokenHash,
+            tokenKeyVersion,
+            encryptedEmail,
+            ciphertext,
+            nonce,
+            algorithm,
+            deliveryKeyVersion,
+            accessUntil.toISOString(),
+          ],
+        );
+        return { kind: "ok" as const, row: row.rows[0] };
+      });
+      if (!issued) {
+        return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
+      }
+      if (issued.kind === "suspended") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_SUSPENDED, "This account cannot make changes.");
+      }
+      if (issued.kind === "locked") {
+        return sendFail(request, reply, API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
+      }
+      if (issued.kind === "setup") {
+        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (issued.kind === "preview") {
+        return sendFail(
+          request,
+          reply,
+          API_ERROR_CODES.PREVIEW_CHANGED,
+          "This preview is out of date. Review the credit again before issuing.",
+        );
+      }
+      if (!issued.row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, INVOICE_NOT_FOUND);
+      }
+      return reply.status(202).send(success(request.id, presentIssuedCredit(issued.row)));
+    } catch (error) {
+      const mapped = mapInvoiceError(request, reply, error);
+      if (mapped) {
+        return mapped;
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    } finally {
+      approvalToken.fill(0);
+    }
+  });
 }

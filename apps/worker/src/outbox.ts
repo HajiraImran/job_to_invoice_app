@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import {
   originalPdfObjectKey,
+  renderCreditOriginalHtml,
   renderInvoiceOriginalHtml,
   renderQuoteOriginalHtml,
+  type CreditPdfDocument,
+  type CreditSnapshotV1,
   type InvoicePdfDocument,
   type InvoiceSnapshotV1,
   type QuotePdfDocument,
@@ -13,7 +16,7 @@ import { withWorkerRole, WORKER_CLAIM_TIMEOUT_MS, WORKER_STATEMENT_TIMEOUT_MS } 
 import type { DocumentsObjectStore } from "./documents-store.ts";
 import type { WorkerPdfStage } from "./worker-log.ts";
 
-export type PdfRenderer = (document: QuotePdfDocument | InvoicePdfDocument) => Promise<Buffer>;
+export type PdfRenderer = (document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument) => Promise<Buffer>;
 
 export class PermanentPdfError extends Error {
   readonly code: string;
@@ -41,7 +44,7 @@ type SourceRow = {
   created_by: string;
   number: string;
   revision_no: number;
-  snapshot_json: QuoteSnapshotV1 | InvoiceSnapshotV1;
+  snapshot_json: QuoteSnapshotV1 | InvoiceSnapshotV1 | CreditSnapshotV1;
   net_cents: string | number;
   tax_cents: string | number;
   total_cents: string | number;
@@ -56,14 +59,28 @@ function asCents(value: string | number): number {
   return parsed;
 }
 
-function isInvoicePdf(document: QuotePdfDocument | InvoicePdfDocument): document is InvoicePdfDocument {
+function isInvoicePdf(document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument): document is InvoicePdfDocument {
   return document.snapshot.kind === "invoice";
 }
 
-function asDocument(row: SourceRow): QuotePdfDocument | InvoicePdfDocument {
+function isCreditPdf(document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument): document is CreditPdfDocument {
+  return document.snapshot.kind === "credit";
+}
+
+function asDocument(row: SourceRow): QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument {
   const snapshot = row.snapshot_json;
-  if (!snapshot || (snapshot.kind !== "quote" && snapshot.kind !== "invoice")) {
-    throw new PermanentPdfError("VALIDATION_FAILED", "PDF source must be a published quote or invoice");
+  if (!snapshot || (snapshot.kind !== "quote" && snapshot.kind !== "invoice" && snapshot.kind !== "credit")) {
+    throw new PermanentPdfError("VALIDATION_FAILED", "PDF source must be a published quote, invoice, or credit");
+  }
+  if (snapshot.kind === "credit") {
+    return {
+      number: row.number,
+      revision_no: row.revision_no,
+      snapshot,
+      net_cents: asCents(row.net_cents),
+      tax_cents: asCents(row.tax_cents),
+      total_cents: asCents(row.total_cents),
+    };
   }
   const lines = Array.isArray(row.lines_json) ? row.lines_json : [];
   if (lines.length < 1) {
@@ -171,6 +188,8 @@ export async function processGenerateOriginalPdf(input: {
     const document = asDocument(source.row);
     if (isInvoicePdf(document)) {
       renderInvoiceOriginalHtml(document);
+    } else if (isCreditPdf(document)) {
+      renderCreditOriginalHtml(document);
     } else {
       renderQuoteOriginalHtml(document);
     }

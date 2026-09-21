@@ -136,6 +136,15 @@ export {
   type InvoicePreviewParseResult,
 } from "./invoice.ts";
 export {
+  CREDIT_REASON_MAX,
+  CREDIT_REASON_MIN,
+  parseCreditIssue,
+  parseCreditPreview,
+  type CreditAllocationInput,
+  type CreditIssueInput,
+  type CreditPreviewInput,
+} from "./credit.ts";
+export {
   LEDGER_METHODS,
   LEDGER_NOTE_MAX,
   LEDGER_REFERENCE_MAX,

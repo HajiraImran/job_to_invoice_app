@@ -10,7 +10,7 @@ import {
   canRecordRefund,
   type IssuedInvoiceRecord,
 } from "../../../../../src/invoices/presentation.ts";
-import { jobDetailPath, jobLedgerEntryPath } from "../../../../../src/jobs/routes.ts";
+import { jobCreditPath, jobDetailPath, jobLedgerEntryPath } from "../../../../../src/jobs/routes.ts";
 import { useAuth } from "../../../../../src/session/AuthProvider.tsx";
 import { colors, space, type } from "../../../../../src/theme.ts";
 
@@ -182,6 +182,15 @@ export default function InvoiceDetailScreen() {
                     <Text style={styles.secondaryLabel}>{copy.invoiceRecordRefund}</Text>
                   </Pressable>
                 ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={copy.invoiceCredit}
+                  disabled={auth.snapshot.status !== "authenticated"}
+                  onPress={() => router.push(jobCreditPath(jobId, invoiceId))}
+                  style={styles.secondary}
+                >
+                  <Text style={styles.secondaryLabel}>{copy.invoiceCredit}</Text>
+                </Pressable>
               </>
             )}
           </>

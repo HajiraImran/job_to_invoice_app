@@ -163,17 +163,17 @@ PDF/share, issued total, credits, received/refunded/balance, ledger. Record paym
 
 Derived states: issued_unpaid, partially_paid, settled, overdue, refund_due, voided flag (BIL08).
 
-Implemented route: `/(tabs)/jobs/[id]/invoice/[invoiceId]`. Status, totals, ledger list, Mark paid, Record payment, Record refund. No Credit/Void. Device 2026-09-21: preview/issue passed; PDF/share/EMAIL06/worker NOT VERIFIED. Do not retry INV-000001.
+Implemented route: `/(tabs)/jobs/[id]/invoice/[invoiceId]`. Status, totals, ledger list, Mark paid, Record payment, Record refund, Issue credit. No Void. Device 2026-09-21: preview/issue passed; PDF/share/EMAIL06/worker NOT VERIFIED. Do not retry INV-000001.
 
 ### S17 Payment or refund
 
 Amount, date, method, reference, confirmation. Overpayment warning. Refund maximum. Online only. NTF05 ledger warning.
 
-Implemented route: `/(tabs)/jobs/[id]/ledger/entry`. Integer-cent payment/refund, overpay confirm, refund blocked unless amount to refund > 0. Never queued in SYNC01 outbox. Credits/reverse later. Not VERIFIED on device.
+Implemented route: `/(tabs)/jobs/[id]/ledger/entry`. Integer-cent payment/refund, overpay confirm, refund blocked unless amount to refund > 0. Never queued in SYNC01 outbox. Reverse later. Not VERIFIED on device.
 
 ### S18 Credit note
 
-Select invoice lines, net credits, reason, preview/issue. Tax calculated. Cumulative caps. Irreversible issue warning.
+Implemented route: `/(tabs)/jobs/[id]/credit`. Select invoice lines, net credits, reason, preview/issue. Tax calculated. Cumulative caps. Irreversible issue warning and no-refund copy. Online only. Never queued in SYNC01 outbox. Not VERIFIED on device.
 
 ### S19 Customers
 
