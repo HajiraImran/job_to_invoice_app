@@ -18,19 +18,32 @@ import {
   requestStateLabel,
   type OwnerRequestRecord,
 } from "../../../../src/quotes/presentation.ts";
+import {
+  decideReplaceResume,
+  emitReplaceResumeDiagnostic,
+  type PendingReplaceIntent,
+} from "../../../../src/quotes/pending-replace.ts";
+import {
+  beginReplaceAttempt,
+  buildReplaceIntent,
+  endReplaceAttempt,
+  performReplaceLink,
+  replaceAttemptActive,
+} from "../../../../src/quotes/request-replace.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
+import { grantErrorIsAutoRetryable } from "../../../../src/session/step-up.ts";
 import { createSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
 import { colors, space, type } from "../../../../src/theme.ts";
 
-type Phase = "idle" | "withdraw_confirm" | "replace_confirm" | "replace_code";
+type Phase = "idle" | "withdraw_confirm" | "replace_confirm" | "replace_resume";
 
 export default function QuoteRequestScreen() {
   const auth = useAuth();
   const runOwnerRequest = auth.runOwnerRequest;
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ id?: string }>();
-  const jobId = typeof params.id === "string" ? params.id : "";
+  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const jobId = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? (params.id[0] ?? "") : "";
   const [request, setRequest] = useState<OwnerRequestRecord | undefined>();
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
@@ -41,6 +54,15 @@ export default function QuoteRequestScreen() {
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number } | undefined>();
   const inFlight = useRef(false);
   const mutateLock = useRef(false);
+  const attemptedKey = useRef<string | undefined>(undefined);
+  const grantBlocked = useRef(false);
+  const completeReplaceRef = useRef<
+    (
+      intent: PendingReplaceIntent | undefined,
+      source: "user" | "resume",
+      options?: { alreadyLocked?: boolean },
+    ) => Promise<void>
+  >(async () => undefined);
 
   const load = useCallback(async () => {
     if (!jobId || inFlight.current) {
@@ -67,6 +89,46 @@ export default function QuoteRequestScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const pending = auth.pendingReplace;
+    const decision = decideReplaceResume({
+      authStatus: auth.snapshot.status,
+      pending,
+      jobId,
+      requestId: request?.request_id,
+      requestLoaded: Boolean(request),
+      inFlight: replaceAttemptActive() || submitting,
+      attemptedKey: attemptedKey.current,
+      grantBlocked: grantBlocked.current,
+      ownerId: auth.bootstrap?.user.id,
+      nowMs: Date.now(),
+    });
+    if (decision.outcome !== "missing") {
+      emitReplaceResumeDiagnostic({ stage: decision.stage, outcome: decision.outcome });
+    }
+    if (decision.action === "wait" || decision.action === "skip") {
+      return;
+    }
+    if (decision.action === "reject") {
+      attemptedKey.current = undefined;
+      grantBlocked.current = false;
+      void auth.forgetPendingReplace();
+      setPhase("idle");
+      setBanner(undefined);
+      setError({
+        message: decision.outcome === "expired" ? copy.requestReplaceExpired : copy.requestReplaceInvalid,
+        retryable: false,
+        status: 409,
+      });
+      return;
+    }
+    if (!pending) {
+      return;
+    }
+    attemptedKey.current = pending.idempotencyKey;
+    void completeReplaceRef.current(pending, "resume");
+  }, [auth.bootstrap?.user.id, auth.forgetPendingReplace, auth.pendingReplace, auth.snapshot.status, jobId, request, submitting]);
 
   const view = presentDeliveryStatus({
     authStatus: auth.snapshot.status,
@@ -145,66 +207,111 @@ export default function QuoteRequestScreen() {
     });
   }
 
-  async function startReplace() {
-    if (!request || actions.replaceLink !== "ready") {
+  async function completeReplace(
+    intent: PendingReplaceIntent | undefined,
+    source: "user" | "resume",
+    options?: { alreadyLocked?: boolean },
+  ) {
+    if (!intent) {
       return;
     }
-    setPhase("replace_code");
-    setBanner(undefined);
-    setError(undefined);
-    const email = auth.emailDisplay || auth.snapshot.emailDisplay || "";
-    if (email) {
-      auth.setEmailDisplay(email);
-    }
-    auth.setCode("");
-    await auth.sendCode();
-  }
-
-  async function confirmReplace() {
-    if (!request || mutateLock.current) {
+    if (!options?.alreadyLocked && !beginReplaceAttempt()) {
+      emitReplaceResumeDiagnostic({ stage: "resume_waiting_for_auth", outcome: "in_flight" });
       return;
     }
     mutateLock.current = true;
     setSubmitting(true);
+    setBanner(undefined);
     setError(undefined);
-    await auth.verifyCode();
-    const grantResult = await runOwnerRequest<{ grant: string }>({
-      path: "/v1/account/action-grants",
-      method: "POST",
-      body: { action: "replace_link" },
-    });
-    if (!grantResult.ok) {
+    try {
+      const result = await performReplaceLink(runOwnerRequest, intent);
+      if (!result.ok && result.stepUp) {
+        if (source === "user") {
+          emitReplaceResumeDiagnostic({ stage: "step_up_started", outcome: "required" });
+          const email = auth.emailDisplay || auth.snapshot.emailDisplay || "";
+          if (email) {
+            auth.setEmailDisplay(email);
+          }
+          auth.setCode("");
+          await auth.sendCode();
+          return;
+        }
+        grantBlocked.current = true;
+        emitReplaceResumeDiagnostic({
+          stage: "retry_suppressed",
+          outcome: "action_grant_required",
+          status: 403,
+          code: "ACTION_GRANT_REQUIRED",
+        });
+        setPhase("replace_resume");
+        setError({
+          message: copy.requestReplaceFreshAuth,
+          retryable: false,
+          status: 403,
+        });
+        return;
+      }
+      if (!result.ok) {
+        const retryable = grantErrorIsAutoRetryable(result.error);
+        if (!retryable) {
+          grantBlocked.current = result.error.status === 403 || result.error.status === 401 || result.error.status === 422;
+        }
+        setPhase("replace_resume");
+        setError({
+          message: result.error.message || copy.requestMutationError,
+          retryable,
+          status: result.error.status,
+        });
+        return;
+      }
+      attemptedKey.current = undefined;
+      grantBlocked.current = false;
+      await auth.forgetPendingReplace();
+      setPhase("idle");
+      setBanner(copy.requestReplaceDone);
+      await load();
+    } finally {
       mutateLock.current = false;
       setSubmitting(false);
-      setError({
-        message: grantResult.error.message || copy.requestMutationError,
-        retryable: grantResult.error.retryable || grantResult.error.status === 0,
-        status: grantResult.error.status,
-      });
+      endReplaceAttempt();
+    }
+  }
+  completeReplaceRef.current = completeReplace;
+
+  async function startReplace() {
+    if (!request || auth.snapshot.status === "offline_cached") {
       return;
     }
-    const replaceResult = await runOwnerRequest({
-      path: `/v1/requests/${request.request_id}/replace-link`,
-      method: "POST",
-      body: {},
-      headers: {
-        "Idempotency-Key": createSetupIdempotencyKey(),
-        "X-Action-Grant": grantResult.data.grant,
-      },
+    const ownerId = auth.bootstrap?.user.id;
+    if (!ownerId) {
+      return;
+    }
+    const intent = buildReplaceIntent({
+      requestId: request.request_id,
+      jobId,
+      ownerId,
+      idempotencyKey: createSetupIdempotencyKey(),
+      nowMs: Date.now(),
     });
-    mutateLock.current = false;
-    setSubmitting(false);
-    if (!replaceResult.ok) {
-      setError({
-        message: replaceResult.error.message || copy.requestMutationError,
-        retryable: replaceResult.error.retryable || replaceResult.error.status === 0,
-        status: replaceResult.error.status,
-      });
+    if (!intent) {
       return;
     }
+    if (!beginReplaceAttempt()) {
+      emitReplaceResumeDiagnostic({ stage: "resume_waiting_for_auth", outcome: "in_flight" });
+      return;
+    }
+    attemptedKey.current = undefined;
+    grantBlocked.current = false;
+    await auth.rememberPendingReplace(intent);
+    await completeReplace(intent, "user", { alreadyLocked: true });
+  }
+
+  async function cancelReplace() {
+    attemptedKey.current = undefined;
+    grantBlocked.current = false;
+    await auth.forgetPendingReplace();
     setPhase("idle");
-    setBanner(copy.requestReplaceDone);
-    await load();
+    setError(undefined);
   }
 
   return (
@@ -217,6 +324,11 @@ export default function QuoteRequestScreen() {
         {view.kind === "offline" || view.kind === "error" ? (
           <Text accessibilityLiveRegion="polite" style={styles.error}>
             {view.label}
+          </Text>
+        ) : null}
+        {error && request ? (
+          <Text accessibilityLiveRegion="polite" style={styles.error}>
+            {error.message}
           </Text>
         ) : null}
         {banner ? (
@@ -313,24 +425,19 @@ export default function QuoteRequestScreen() {
         ) : null}
 
         {actions.replaceLink !== "hidden" ? (
-          phase === "replace_code" ? (
+          phase === "replace_resume" ? (
             <>
               <Text style={styles.section}>{copy.requestReplaceConfirm}</Text>
-              <Text style={styles.hint}>{copy.requestReplaceCode}</Text>
-              <TextInput
-                accessibilityLabel={copy.requestReplaceCode}
-                value={auth.code}
-                onChangeText={(value) => auth.setCode(value.replace(/\D/g, "").slice(0, 6))}
-                keyboardType="number-pad"
-                style={styles.input}
-                editable={!submitting}
-              />
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={copy.requestContinueReplace}
-                accessibilityState={{ disabled: submitting || auth.code.trim().length < 6 }}
-                disabled={submitting || auth.code.trim().length < 6}
-                onPress={() => void confirmReplace()}
+                accessibilityState={{ disabled: submitting }}
+                disabled={submitting}
+                onPress={() => {
+                  attemptedKey.current = undefined;
+                  grantBlocked.current = false;
+                  void completeReplace(auth.pendingReplace, "resume");
+                }}
                 style={styles.primary}
               >
                 <Text style={styles.primaryLabel}>
@@ -340,7 +447,7 @@ export default function QuoteRequestScreen() {
               <Pressable
                 accessibilityRole="button"
                 disabled={submitting}
-                onPress={() => setPhase("idle")}
+                onPress={() => void cancelReplace()}
                 style={styles.secondary}
               >
                 <Text style={styles.secondaryLabel}>{copy.back}</Text>

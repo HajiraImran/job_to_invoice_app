@@ -13,11 +13,15 @@ function Guard() {
   const segments = useSegments();
 
   useEffect(() => {
-    const decision = resolveOwnerGuard({ snapshot: auth.snapshot, segments: [...segments] });
+    const decision = resolveOwnerGuard({
+      snapshot: auth.snapshot,
+      segments: [...segments],
+      resumeHref: auth.pendingReplace?.returnRoute,
+    });
     if (decision.action === "replace") {
       router.replace(decision.href);
     }
-  }, [auth.snapshot, router, segments]);
+  }, [auth.pendingReplace?.returnRoute, auth.snapshot, router, segments]);
 
   const overlay = auth.snapshot.status === "restoring" || auth.snapshot.status === "authenticating";
 

@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { EMPTY_DRAFT_SYNC, signOutClears } from "@job-to-invoice/schemas";
 import { LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED } from "../drafts/sync.ts";
 import { copy } from "../i18n/en.ts";
-import { BOOTSTRAP_KEY, LAST_AUTH_KEY, SESSION_STORAGE_KEY, clearAuthMaterial, type SecureKv } from "./storage.ts";
+import {
+  BOOTSTRAP_KEY,
+  LAST_AUTH_KEY,
+  PENDING_REPLACE_KEY,
+  SESSION_STORAGE_KEY,
+  clearAuthMaterial,
+  type SecureKv,
+} from "./storage.ts";
 import {
   completeOwnerSignOut,
   signOutAlertSpec,
@@ -66,6 +73,7 @@ describe("sign-out draft-sync boundary", () => {
       [SESSION_STORAGE_KEY]: "session-json",
       [LAST_AUTH_KEY]: "2026-09-15T12:00:00.000Z",
       [BOOTSTRAP_KEY]: "{}",
+      [PENDING_REPLACE_KEY]: '{"action":"replace_link"}',
     });
     const order: string[] = [];
     const result = await completeOwnerSignOut({
@@ -89,6 +97,7 @@ describe("sign-out draft-sync boundary", () => {
     expect(await kv.getItem(SESSION_STORAGE_KEY)).toBeNull();
     expect(await kv.getItem(LAST_AUTH_KEY)).toBeNull();
     expect(await kv.getItem(BOOTSTRAP_KEY)).toBeNull();
+    expect(await kv.getItem(PENDING_REPLACE_KEY)).toBeNull();
     expect(signOutClears()).toEqual(
       expect.arrayContaining(["session", "access_token", "refresh_token", "bootstrap", "in_memory_auth"]),
     );

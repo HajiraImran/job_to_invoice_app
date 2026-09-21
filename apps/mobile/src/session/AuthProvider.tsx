@@ -22,11 +22,24 @@ import {
 } from "./bootstrap.ts";
 import { awaitingCodeSnapshot } from "./logic.ts";
 import {
+  ownerSignInOtpOptions,
+  ownerVerifyOtpParams,
+  verifiedSessionIsFreshInstall,
+} from "./step-up.ts";
+import {
   createBootstrapGenerationGate,
   decideBootstrapApply,
   outboxDrainEligibleAfterRecovery,
 } from "./recovery.ts";
 import { createOwnerAuthClient, secureKv } from "./supabase.ts";
+import {
+  clearPendingReplace,
+  emitReplaceResumeDiagnostic,
+  loadPendingReplace,
+  reconcilePendingReplace,
+  savePendingReplace,
+  type PendingReplaceIntent,
+} from "../quotes/pending-replace.ts";
 import { BOOTSTRAP_KEY, LAST_AUTH_KEY, clearAuthMaterial } from "./storage.ts";
 import { createOwnerSyncController, type OwnerSyncController } from "../sync/controller.ts";
 import { createExpoSqliteBridge, defaultEncryptedStorageCapability } from "../storage/index.ts";
@@ -52,6 +65,9 @@ type AuthContextValue = {
   refreshBootstrap: () => Promise<void>;
   runOwnerRequest: <T>(options: OwnerRequestOptions) => ReturnType<typeof ownerRequest<T>>;
   getSyncSessionDb: () => ReturnType<OwnerSyncController["getSession"]>;
+  pendingReplace?: PendingReplaceIntent;
+  rememberPendingReplace: (intent: PendingReplaceIntent) => Promise<void>;
+  forgetPendingReplace: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -70,6 +86,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [pendingReplace, setPendingReplace] = useState<PendingReplaceIntent | undefined>();
+  const pendingReplaceRef = useRef<PendingReplaceIntent | undefined>(undefined);
+  const sessionTokenRef = useRef<string | undefined>(undefined);
   const syncControllerRef = useRef<OwnerSyncController | null>(null);
   const bridgePromiseRef = useRef<ReturnType<typeof createExpoSqliteBridge> | null>(null);
   const bootstrapGateRef = useRef(createBootstrapGenerationGate());
@@ -180,7 +199,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!gate.canApplySuccess(gen)) {
           return;
         }
+        const stored = await loadPendingReplace(secureKv, Date.now(), decision.bootstrap.user.id);
+        if (!gate.canApplySuccess(gen)) {
+          return;
+        }
+        const nextPending = reconcilePendingReplace({ stored, memory: pendingReplaceRef.current });
+        pendingReplaceRef.current = nextPending;
         gate.markApplied(gen);
+        setPendingReplace(nextPending);
         setBootstrap(decision.bootstrap);
         setSnapshot(decision.snapshot);
         snapshotRef.current = decision.snapshot;
@@ -241,12 +267,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadMe = useCallback(
     async (session: Session, emailHint?: string) => {
-      if (bootstrapInFlightRef.current) {
-        await bootstrapInFlightRef.current;
-        if (snapshotRef.current.status === "authenticated") {
-          return;
-        }
-      }
+      sessionTokenRef.current = session.access_token;
       const run = (async () => {
         const generation = bootstrapGateRef.current.begin();
         const result = await fetchOwnerMeWithOneRefresh({
@@ -257,7 +278,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return undefined;
             }
             const refreshed = await client.auth.refreshSession();
-            return refreshed.data.session?.access_token;
+            const next = refreshed.data.session?.access_token;
+            if (next) {
+              sessionTokenRef.current = next;
+            }
+            return next;
           },
         });
         await applyMeResult(result, emailHint, generation);
@@ -354,7 +379,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { error: sendError } = await client.auth.signInWithOtp({
         email: emailDisplay.trim(),
-        options: { shouldCreateUser: true },
+        options: ownerSignInOtpOptions(),
       });
       if (sendError) {
         const kind = mapAuthError(sendError);
@@ -366,6 +391,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setError("Could not reach the network. Try again.");
           return;
         }
+      }
+      if (pendingReplaceRef.current) {
+        emitReplaceResumeDiagnostic({ stage: "step_up_started", outcome: "otp_sent" });
       }
       setSnapshot(awaitingCodeSnapshot(emailDisplay.trim(), Date.now()));
     } finally {
@@ -382,11 +410,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(undefined);
     setSnapshot((current) => ({ ...current, status: "authenticating" }));
     try {
-      const { data, error: verifyError } = await client.auth.verifyOtp({
-        email: emailDisplay.trim(),
-        token: code.trim(),
-        type: "email",
-      });
+      const previousAccessToken = sessionTokenRef.current;
+      const { data, error: verifyError } = await client.auth.verifyOtp(
+        ownerVerifyOtpParams(emailDisplay, code),
+      );
       if (verifyError || !data.session) {
         const kind = mapAuthError(verifyError ?? {});
         const failures = (snapshot.verifyFailures ?? 0) + 1;
@@ -408,6 +435,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       setCode("");
+      const verifiedAccessToken = data.session.access_token;
+      const install = verifiedSessionIsFreshInstall({
+        previousAccessToken,
+        verifiedAccessToken,
+      });
+      if (pendingReplaceRef.current) {
+        emitReplaceResumeDiagnostic({ stage: "step_up_verified", outcome: "ok" });
+        emitReplaceResumeDiagnostic({
+          stage: "fresh_session_ready",
+          outcome: install.ok ? "ok" : install.outcome,
+        });
+      }
+      sessionTokenRef.current = verifiedAccessToken;
+      try {
+        await client.auth.setSession({
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+        });
+      } catch {
+        // verifyOtp already persisted the session; continue with the verified token.
+      }
       try {
         await loadMe(data.session, emailDisplay.trim());
       } catch {
@@ -423,11 +471,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [client, code, emailDisplay, loadMe, snapshot.resendAvailableAt, snapshot.verifyFailures]);
 
+  const rememberPendingReplace = useCallback(async (intent: PendingReplaceIntent) => {
+    pendingReplaceRef.current = intent;
+    await savePendingReplace(secureKv, intent);
+    setPendingReplace(intent);
+  }, []);
+
+  const forgetPendingReplace = useCallback(async () => {
+    pendingReplaceRef.current = undefined;
+    await clearPendingReplace(secureKv);
+    setPendingReplace(undefined);
+  }, []);
+
   const changeEmail = useCallback(() => {
     setCode("");
     setError(undefined);
     setSnapshot({ status: "signed_out" });
-  }, []);
+    void forgetPendingReplace();
+  }, [forgetPendingReplace]);
 
   const runOwnerRequest = useCallback(
     async <T,>(options: OwnerRequestOptions) => {
@@ -444,7 +505,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return unavailable;
       }
       const existing = await client.auth.getSession();
-      const accessToken = existing.data.session?.access_token;
+      const accessToken = sessionTokenRef.current ?? existing.data.session?.access_token;
       if (!accessToken) {
         return {
           ok: false as const,
@@ -464,6 +525,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!next) {
         return first;
       }
+      sessionTokenRef.current = next;
       return ownerRequest<T>({
         ...options,
         apiBaseUrl: config.apiBaseUrl,
@@ -508,7 +570,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearMemory: () => {
           bindDraftSyncController(null);
           syncControllerRef.current = null;
+          sessionTokenRef.current = undefined;
+          pendingReplaceRef.current = undefined;
           setBootstrap(undefined);
+          setPendingReplace(undefined);
           setCode("");
           setEmailDisplay("");
           setError(undefined);
@@ -593,6 +658,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshBootstrap,
     runOwnerRequest,
     getSyncSessionDb: () => syncControllerRef.current?.getSession() ?? null,
+    pendingReplace,
+    rememberPendingReplace,
+    forgetPendingReplace,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

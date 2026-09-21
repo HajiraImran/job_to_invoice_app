@@ -13,6 +13,7 @@ export type JwtFixture = {
     expiresIn?: string;
     expired?: boolean;
     authTime?: number;
+    amr?: { method: string; timestamp: number }[];
   }) => Promise<string>;
 };
 
@@ -37,6 +38,9 @@ export async function createJwtFixture(): Promise<JwtFixture> {
       };
       if (input.authTime !== undefined) {
         claims.auth_time = input.authTime;
+      }
+      if (input.amr) {
+        claims.amr = input.amr;
       }
       const jwt = new SignJWT(claims);
       jwt.setProtectedHeader({ alg: "ES256", kid: "test-owner-key", typ: "JWT" });

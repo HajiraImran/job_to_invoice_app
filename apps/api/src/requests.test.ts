@@ -406,6 +406,31 @@ describe("S12 owner request controls", () => {
       payload: { action: "replace_link" },
     });
     expect(staleGrant.statusCode).toBe(403);
+    const amrFresh = await sign({
+      sub: ownerSub,
+      email,
+      amr: [{ method: "otp", timestamp: nowSec }],
+    });
+    const amrGrant = await api.inject({
+      method: "POST",
+      url: "/v1/account/action-grants",
+      headers: { authorization: `Bearer ${amrFresh}`, "content-type": "application/json" },
+      payload: { action: "replace_link" },
+    });
+    expect(amrGrant.statusCode).toBe(201);
+    const refreshOnly = await sign({
+      sub: ownerSub,
+      email,
+      amr: [{ method: "token_refresh", timestamp: nowSec }],
+    });
+    const refreshGrant = await api.inject({
+      method: "POST",
+      url: "/v1/account/action-grants",
+      headers: { authorization: `Bearer ${refreshOnly}`, "content-type": "application/json" },
+      payload: { action: "replace_link" },
+    });
+    expect(refreshGrant.statusCode).toBe(403);
+    expect(refreshGrant.json().error.code).toBe("ACTION_GRANT_REQUIRED");
     const fresh = await tokenFor(ownerSub, email);
     await api.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${fresh}` } });
     const grant = await api.inject({

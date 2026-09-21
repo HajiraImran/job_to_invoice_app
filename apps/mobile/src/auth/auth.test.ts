@@ -45,9 +45,11 @@ describe("sign-out cleanup", () => {
     await kv.setItem("jti.supabase.session", "session-json");
     await kv.setItem("jti.auth.last_success_at", "2026-09-14T00:00:00.000Z");
     await kv.setItem("jti.auth.bootstrap", "{}");
+    await kv.setItem("jti.pending.replace_link", '{"action":"replace_link"}');
     await clearAuthMaterial(kv);
     expect(await kv.getItem("jti.supabase.session")).toBeNull();
     expect(await kv.getItem("jti.auth.last_success_at")).toBeNull();
     expect(await kv.getItem("jti.auth.bootstrap")).toBeNull();
+    expect(await kv.getItem("jti.pending.replace_link")).toBeNull();
   });
 });

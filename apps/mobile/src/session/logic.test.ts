@@ -66,6 +66,23 @@ describe("protected route resolution while signed out", () => {
     ).toEqual({ action: "replace", href: SIGNED_OUT_WELCOME_HREF });
   });
 
+  it("returns a pending replace-link request after OTP without sending the owner to jobs index", () => {
+    const jobId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const resumeHref = `/(tabs)/jobs/${jobId}/request`;
+    const fromVerify = resolveOwnerGuard({
+      snapshot: { status: "authenticated", setupCompleted: true },
+      segments: ["(public)", "verify"],
+      resumeHref,
+    });
+    expect(fromVerify).toEqual({ action: "replace", href: resumeHref });
+    const alreadyThere = resolveOwnerGuard({
+      snapshot: { status: "authenticated", setupCompleted: true },
+      segments: ["(tabs)", "jobs", jobId, "request"],
+      resumeHref,
+    });
+    expect(alreadyThere).toEqual({ action: "stay" });
+  });
+
   it("does not invent a magic-link verify route for signed-out jobs", () => {
     const decision = resolveOwnerGuard({
       snapshot: { status: "signed_out" },

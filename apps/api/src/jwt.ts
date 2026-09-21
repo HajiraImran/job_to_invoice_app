@@ -32,12 +32,34 @@ function readEmail(payload: JWTPayload): string | undefined {
   return undefined;
 }
 
-function readAuthTime(payload: JWTPayload): number | undefined {
+const FRESH_OTP_AMR_METHODS = new Set(["otp", "magiclink", "email"]);
+
+/** Unix seconds. Hosted Supabase access tokens expose OTP time on `amr`, not `auth_time`. */
+export function readAccessAuthTime(payload: JWTPayload): number | undefined {
   const claims = payload as Record<string, unknown>;
+  const times: number[] = [];
   if (typeof claims.auth_time === "number" && Number.isFinite(claims.auth_time)) {
-    return Math.floor(claims.auth_time);
+    times.push(Math.floor(claims.auth_time));
   }
-  return undefined;
+  if (Array.isArray(claims.amr)) {
+    for (const entry of claims.amr) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      if (typeof record.method !== "string" || !FRESH_OTP_AMR_METHODS.has(record.method)) {
+        continue;
+      }
+      if (typeof record.timestamp !== "number" || !Number.isFinite(record.timestamp)) {
+        continue;
+      }
+      times.push(Math.floor(record.timestamp));
+    }
+  }
+  if (times.length === 0) {
+    return undefined;
+  }
+  return Math.max(...times);
 }
 
 function asAccess(payload: JWTPayload): VerifiedAccess {
@@ -52,7 +74,7 @@ function asAccess(payload: JWTPayload): VerifiedAccess {
   if (!email) {
     throw new JwtVerificationError();
   }
-  const authTime = readAuthTime(payload);
+  const authTime = readAccessAuthTime(payload);
   return { sub: payload.sub, email, role, authTime };
 }
 

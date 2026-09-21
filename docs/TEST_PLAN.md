@@ -79,11 +79,11 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA14 | Reset customer/site of published job | Blocked; new job required | API |
 | QA15 | Edit catalogue price and business address | Issued docs unchanged | Integration |
 | QA16 | Publish replacement while old pending | Old superseded; one pending index | Concurrency |
-| QA17 | Old recipient follows replaced link | Cannot decide; correct message. Revoke-after-approve leaves `approval_decisions` intact (TX06). | Portal | Local: apps/api/src/requests.test.ts + openapi/v1.json replace-link. Live portal device unverified. |
+| QA17 | Old recipient follows replaced link | Cannot decide; correct message. Revoke-after-approve leaves `approval_decisions` intact (TX06). | Portal | Local: `apps/api/src/requests.test.ts` + `openapi/v1.json` replace-link. Physical Android development build 2026-09-21: previous link rejected after replace-link; newest link opened the correct quote. TX06 revoke-after-approve, iOS/TestFlight, and production SPF/DKIM unverified. |
 | QA18 | Link forwarded to unrelated person | No scope without bound-email code | Portal |
 | QA19 | OTP brute force and resends | Limits; no raw codes logged | Isolation |
 | QA20 | Approve twice concurrently | One decision and one scope apply | Concurrency |
-| QA21 | Approve and withdraw race | One terminal outcome; loser conflict | Concurrency | Local: withdraw FOR UPDATE + terminal state in apps/api/src/requests.test.ts; openapi withdraw 409. Parallel harness later. |
+| QA21 | Approve and withdraw race | One terminal outcome; loser conflict | Concurrency | Local: withdraw FOR UPDATE + terminal state in `apps/api/src/requests.test.ts`; openapi withdraw 409. Physical Android 2026-09-21 sequential withdraw succeeded (not a parallel race). Full QA21 parallel race/stress harness later. iOS/TestFlight unverified. |
 | QA22 | Approve 1 ms after expiry | Rejected despite worker lag | Concurrency |
 | QA23 | Opened before expiry, approved after | Rejected; no cached authority | Portal |
 | QA24 | Consent unticked or hash altered | Rejected | Portal |
@@ -294,6 +294,39 @@ Deferred / not yet recorded on device (do not invent evidence):
 - Optional ADB normal-SQLite plaintext inspection
 
 External note: intermittent Supabase Session Pooler `ETIMEDOUT` on port 5432 (`sslmode=require`) is a network-routing issue and is not SYNC01 verification evidence. Do not change pooler port or timeout architecture for this slice.
+
+## S12 owner request controls — Android development build (2026-09-21)
+
+Physical evidence on a development-build Android operator client. Status remains **IMPLEMENTED**, not **VERIFIED**. Do not treat this as iOS/TestFlight, production SPF/DKIM, or full QA21 parallel-race evidence.
+
+| Check | Result |
+| --- | --- |
+| Resend: replacement email received | PASS |
+| Resend: new link opened the correct quote | PASS |
+| Immediate second resend blocked | PASS |
+| Resend: no worker database error | PASS |
+| Replace-link: returned to the same request after one OTP | PASS |
+| Replace-link: success message displayed | PASS |
+| Replace-link: replacement email received | PASS |
+| Replace-link: previous link rejected | PASS |
+| Replace-link: newest link opened the correct quote | PASS |
+| Replace-link: `replace_succeeded` observed | PASS |
+| Replace-link: repeated 403 loop stopped | PASS |
+| Withdraw: confirmation displayed | PASS |
+| Withdraw: status changed to Withdrawn | PASS |
+| Withdraw: portal displayed “This review link is no longer available” | PASS |
+| Withdraw: withdrawal email received | PASS |
+| After withdraw: Resend unavailable | PASS |
+| After withdraw: Replace link unavailable | PASS |
+| Withdraw: no worker database error | PASS |
+
+Still unverified after this pass:
+
+- Full QA21 parallel race/stress testing
+- Production SPF/DKIM verification
+- iOS / TestFlight evidence
+- TX06 revoke-after-approve
+- Any scenario not physically executed above
 
 ## Setup slice commands
 

@@ -8,6 +8,7 @@ import {
   type RouteGroup,
 } from "@job-to-invoice/schemas";
 import type { OwnerBootstrap } from "../api/client.ts";
+import { isSafeReplaceResumeHref, segmentsMatchReplaceResume } from "../quotes/pending-replace.ts";
 
 export function snapshotFromBootstrap(
   bootstrap: OwnerBootstrap,
@@ -63,22 +64,23 @@ export const VERIFY_HREF = "/(public)/verify";
 export const ONBOARDING_HREF = "/(onboarding)/setup";
 export const APP_JOBS_HREF = "/(tabs)/jobs";
 
+export type OwnerGuardHref =
+  | typeof SIGNED_OUT_WELCOME_HREF
+  | typeof SIGNED_OUT_SIGN_IN_HREF
+  | typeof VERIFY_HREF
+  | typeof ONBOARDING_HREF
+  | typeof APP_JOBS_HREF
+  | `/(tabs)/jobs/${string}/request`;
+
 export type OwnerGuardDecision =
   | { action: "hold" }
   | { action: "stay" }
-  | {
-      action: "replace";
-      href:
-        | typeof SIGNED_OUT_WELCOME_HREF
-        | typeof SIGNED_OUT_SIGN_IN_HREF
-        | typeof VERIFY_HREF
-        | typeof ONBOARDING_HREF
-        | typeof APP_JOBS_HREF;
-    };
+  | { action: "replace"; href: OwnerGuardHref };
 
 export function resolveOwnerGuard(input: {
   snapshot: AuthSnapshot;
   segments: readonly string[];
+  resumeHref?: string;
 }): OwnerGuardDecision {
   if (input.snapshot.status === "restoring" || input.snapshot.status === "authenticating") {
     return { action: "hold" };
@@ -98,8 +100,13 @@ export function resolveOwnerGuard(input: {
   if (group === "onboarding" && root !== "(onboarding)") {
     return { action: "replace", href: ONBOARDING_HREF };
   }
-  if (group === "app" && root !== "(tabs)") {
-    return { action: "replace", href: APP_JOBS_HREF };
+  if (group === "app") {
+    if (isSafeReplaceResumeHref(input.resumeHref) && !segmentsMatchReplaceResume(input.segments, input.resumeHref)) {
+      return { action: "replace", href: input.resumeHref as OwnerGuardHref };
+    }
+    if (root !== "(tabs)") {
+      return { action: "replace", href: APP_JOBS_HREF };
+    }
   }
   return { action: "stay" };
 }
