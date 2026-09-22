@@ -54,6 +54,19 @@ export type JobDetail = JobSummary & {
     total_cents: number;
     due_date: string | null;
   } | null;
+  change_draft: {
+    id: string;
+    version: number;
+    reason: string;
+  } | null;
+  latest_change: {
+    id: string;
+    number: string;
+    revision_no: number;
+    lifecycle: string;
+    total_cents: number;
+    request_state: string | null;
+  } | null;
 };
 
 export type JobsListKind = "loading" | "empty" | "loaded" | "error" | "offline" | "access_expired";

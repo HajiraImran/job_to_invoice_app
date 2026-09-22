@@ -34,6 +34,15 @@ if (!spec.paths?.["/v1/jobs/{jobId}"]?.get) {
 if (!spec.paths?.["/v1/jobs/{jobId}/quote"]?.post) {
   errors.push("POST /v1/jobs/{jobId}/quote is required");
 }
+if (!spec.paths?.["/v1/jobs/{jobId}/changes"]?.post) {
+  errors.push("POST /v1/jobs/{jobId}/changes is required");
+}
+if (
+  spec.paths?.["/v1/jobs/{jobId}/changes"]?.post &&
+  !spec.paths["/v1/jobs/{jobId}/changes"].post.parameters?.some((item) => item.name === "Idempotency-Key")
+) {
+  errors.push("POST /v1/jobs/{jobId}/changes requires Idempotency-Key");
+}
 if (!spec.paths?.["/v1/jobs/{jobId}/invoice-preview"]?.post) {
   errors.push("POST /v1/jobs/{jobId}/invoice-preview is required");
 }

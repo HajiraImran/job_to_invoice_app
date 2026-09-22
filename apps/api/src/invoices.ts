@@ -637,17 +637,24 @@ export function registerInvoiceRoutes(
           return { kind: "ineligible" as const };
         }
         const residuals = await client.query<ResidualLineRow>(
-          `select dl.id as source_line_id, dl.position, dl.description, dl.quantity, dl.unit,
+          `select dl.id as source_line_id,
+                  row_number() over (order by min(origin.scope_version), dl.position, dl.id)::int as position,
+                  dl.description, dl.quantity, dl.unit,
                   dl.unit_price_cents, dl.discount_cents, dl.tax_bp,
                   coalesce(sum(se.net_delta_cents), 0) as residual_net_cents,
                   coalesce(sum(se.tax_delta_cents), 0) as residual_tax_cents
            from commercial.document_lines dl
+           join commercial.scope_entries origin
+             on origin.workspace_id = dl.workspace_id
+            and origin.source_line_id = dl.id
+            and origin.event_kind = 'add'
+            and origin.job_id = $2
            left join commercial.scope_entries se
              on se.workspace_id = dl.workspace_id and se.source_line_id = dl.id
-           where dl.workspace_id = $1 and dl.document_id = $2
+           where dl.workspace_id = $1
            group by dl.id
-           order by dl.position, dl.id`,
-          [owner.workspace_id, ctx.quote_id],
+           order by min(origin.scope_version), dl.position, dl.id`,
+          [owner.workspace_id, params.jobId],
         );
         if (residuals.rows.length < 1) {
           return { kind: "ineligible" as const };

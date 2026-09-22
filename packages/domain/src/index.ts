@@ -54,12 +54,16 @@ export {
   CREDIT_SNAPSHOT_SCHEMA_VERSION,
   INVOICE_SNAPSHOT_SCHEMA_VERSION,
   PREVIEW_TTL_MS,
+  CHANGE_SNAPSHOT_SCHEMA_VERSION,
   QUOTE_SNAPSHOT_SCHEMA_VERSION,
   buildCreditSnapshot,
   buildInvoiceSnapshot,
   buildQuoteSnapshot,
   formatDocumentNumber,
   lineCountBucket,
+  type ChangeSnapshotAddition,
+  type ChangeSnapshotReduction,
+  type ChangeSnapshotV1,
   type CreditSnapshotLine,
   type CreditSnapshotV1,
   type InvoiceSnapshotLine,
@@ -69,6 +73,11 @@ export {
   type QuoteSnapshotLine,
   type QuoteSnapshotV1,
 } from "./snapshot.ts";
+export {
+  CHANGE_PDF_TEMPLATE_VERSION,
+  renderChangeOriginalHtml,
+  type ChangePdfDocument,
+} from "./change-html.ts";
 export { FINANCIAL_FIXTURES } from "./fixtures.ts";
 export {
   QUOTE_PDF_TEMPLATE_VERSION,

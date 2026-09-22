@@ -180,6 +180,9 @@ function mapPortalSql(
   if (code === "P0034") {
     return sendFail(request, reply, API_ERROR_CODES.SCOPE_CHANGED, "A newer version is available. This version cannot be approved.");
   }
+  if (code === "P0051") {
+    return sendFail(request, reply, API_ERROR_CODES.CREDIT_EXCEEDS_SOURCE, "That reduction is more than the remaining amount on the source line.");
+  }
   if (code === "22023") {
     return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
   }
@@ -804,6 +807,11 @@ export function registerPortalRoutes(app: FastifyInstance, deps: AppDeps): void 
         if (!emails) {
           throw Object.assign(new Error("unavailable"), { code: "P0020" });
         }
+        const portalDoc = await client.query<{ consent_text: string }>(
+          `select consent_text from commercial.get_portal_document($1)`,
+          [session.sessionHash],
+        );
+        const consentText = portalDoc.rows[0]?.consent_text || CONSENT_TEXT;
         const email04 = packedEmail(session.secrets.delivery, emails.recipient_email);
         const email05 = packedEmail(session.secrets.delivery, emails.owner_email);
         const decided = await client.query<{
@@ -827,7 +835,7 @@ export function registerPortalRoutes(app: FastifyInstance, deps: AppDeps): void 
             body.decision,
             signerName,
             CONSENT_VERSION,
-            CONSENT_TEXT,
+            consentText,
             body.consent_accepted === true,
             body.snapshot_sha256,
             comment,

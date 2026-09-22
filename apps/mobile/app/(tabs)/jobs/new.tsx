@@ -103,6 +103,8 @@ export default function CreateJobScreen() {
           current_quote: null,
           active_invoice: null,
           latest_invoice: null,
+          change_draft: null,
+          latest_change: null,
         };
         await upsertCachedJob(session.db, {
           jobId: pendingJob.id,

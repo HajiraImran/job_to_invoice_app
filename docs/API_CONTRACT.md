@@ -59,7 +59,7 @@ Owner business snapshot is applied at publish from the reviewed preview. Default
 
 ## Example request (unchanged from PRD)
 
-`POST /v1/jobs/{job_id}/changes` with Idempotency-Key creates a draft. It does not publish, email or approve.
+`POST /v1/jobs/{job_id}/changes` with Idempotency-Key creates or reuses the editing change-order draft. It does not publish, email or approve. Line items, reason, and expected scope version are saved with `PATCH /v1/drafts/{id}` and If-Match. Preview and publish use the existing `/v1/drafts/{id}/preview` and `/v1/drafts/{id}/publish` routes and dispatch on `kind=change`.
 
 ```json
 {
@@ -146,7 +146,7 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /jobs/{id}/finish | Owner | Settlement/credit check |
 | DELETE /jobs/{id} | Owner | Draft-only |
 | POST /jobs/{id}/quote | Owner | Draft or next revision |
-| POST /jobs/{id}/changes | Owner | Additions/reductions; draft |
+| POST /jobs/{id}/changes | Owner | Create/reuse editing change draft. **Implemented.** Eligible after accepted quote and before any invoice. Integer-cent lines are saved via PATCH `/drafts/{id}`. |
 | GET /drafts/{id} | Owner | Payload and version |
 | PATCH /drafts/{id} | Owner | Full payload; If-Match |
 | POST /drafts/{id}/discard | Owner | Discarded; audit kept |

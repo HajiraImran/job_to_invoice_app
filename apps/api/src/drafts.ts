@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { calculateDraftDocument, isDomainError } from "@job-to-invoice/domain";
+import { calculateChangeOrder, calculateDraftDocument, isDomainError } from "@job-to-invoice/domain";
 import {
   isClientUuid,
+  parseChangeDraft,
   parseDraftPayload,
   parseOwnerEmail,
   type DraftLineInput,
   type DraftPayloadInput,
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
+import { loadAcceptedScopeSources, mapChangeError, presentChangeDraft } from "./changes.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { API_ERROR_CODES, fail, success } from "./envelope.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
@@ -441,15 +443,26 @@ export function registerDraftRoutes(
            from commercial.document_drafts d
            join commercial.workspaces w on w.workspace_id = d.workspace_id
            where d.id = $1
-             and d.kind = 'quote'`,
+             and d.kind in ('quote', 'change')`,
           [params.draftId],
         );
-        return result.rows[0];
+        const found = result.rows[0];
+        if (!found) {
+          return undefined;
+        }
+        if (found.kind === "change") {
+          const sources = await loadAcceptedScopeSources(client, owner.workspace_id, found.job_id);
+          return { row: found, sources };
+        }
+        return { row: found, sources: [] };
       });
       if (!row) {
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, DRAFT_NOT_FOUND);
       }
-      return success(request.id, presentQuoteDraft(row));
+      if (row.row.kind === "change") {
+        return success(request.id, presentChangeDraft(row.row, row.sources));
+      }
+      return success(request.id, presentQuoteDraft(row.row));
     } catch {
       return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
     }
@@ -498,29 +511,6 @@ export function registerDraftRoutes(
       return reply.status(result.status).send(result.body);
     }
     const body = request.body === undefined || request.body === null ? {} : request.body;
-    const parsed = parseDraftPayload(body);
-    if (!parsed.ok) {
-      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
-        field_errors: parsed.field_errors,
-      });
-    }
-    try {
-      calculateDraftDocument(parsed.value.lines);
-    } catch (error) {
-      if (isDomainError(error)) {
-        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, error.message, {
-          field_errors: error.field ? [{ field: error.field, message: error.message }] : [],
-        });
-      }
-      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
-    }
-    const stored = {
-      notes: parsed.value.notes,
-      terms: parsed.value.terms,
-      expiry_days: parsed.value.expiry_days,
-      lines: parsed.value.lines,
-    };
-    const hash = requestHash({ body: stored, expectedVersion });
     try {
       const row = await withApiRole(deps.pool, async (client) => {
         const owner = await client.query<ProvisionRow>(
@@ -541,6 +531,88 @@ export function registerDraftRoutes(
         if (!provisioned.setup_completed) {
           return { kind: "setup" as const };
         }
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          provisioned.workspace_id,
+          provisioned.actor_id,
+        ]);
+        const existing = await client.query<{ kind: string; job_id: string }>(
+          "select kind, job_id from commercial.document_drafts where id = $1",
+          [params.draftId],
+        );
+        const current = existing.rows[0];
+        if (!current) {
+          return { kind: "missing" as const };
+        }
+        if (current.kind === "change") {
+          const parsed = parseChangeDraft(body);
+          if (!parsed.ok) {
+            return { kind: "invalid" as const, field_errors: parsed.field_errors };
+          }
+          const sources = await loadAcceptedScopeSources(client, provisioned.workspace_id, current.job_id);
+          if (parsed.value.additions.length + parsed.value.reductions.length > 0) {
+            try {
+              calculateChangeOrder({
+                previous_total_cents: sources.reduce(
+                  (sum, source) => sum + Number(source.remaining_net_cents) + Number(source.remaining_tax_cents),
+                  0,
+                ),
+                additions: parsed.value.additions,
+                reductions: parsed.value.reductions,
+                sources: sources.map((source) => ({
+                  source_line_id: source.source_line_id,
+                  original_net_cents: Number(source.original_net_cents),
+                  original_tax_cents: Number(source.original_tax_cents),
+                  accepted_net_reductions_cents:
+                    Number(source.original_net_cents) - Number(source.remaining_net_cents),
+                })),
+                reason: parsed.value.reason || null,
+              });
+            } catch (error) {
+              return { kind: "domain" as const, error };
+            }
+          }
+          const stored = {
+            reason: parsed.value.reason,
+            expected_scope_version: parsed.value.expected_scope_version,
+            expiry_days: parsed.value.expiry_days,
+            additions: parsed.value.additions,
+            reductions: parsed.value.reductions,
+          };
+          const hash = requestHash({ body: stored, expectedVersion });
+          const saved = await client.query<DraftRow>(
+            `select id, workspace_id, job_id, kind, draft_state, schema_version, payload_json,
+                    version, created_at, updated_at, default_tax_bp, replayed
+             from commercial.save_change_draft(
+               $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7::jsonb
+             )`,
+            [
+              provisioned.actor_id,
+              key,
+              hash,
+              request.id,
+              params.draftId,
+              expectedVersion,
+              JSON.stringify(stored),
+            ],
+          );
+          return { kind: "ok" as const, row: saved.rows[0], sources };
+        }
+        const parsed = parseDraftPayload(body);
+        if (!parsed.ok) {
+          return { kind: "invalid" as const, field_errors: parsed.field_errors };
+        }
+        try {
+          calculateDraftDocument(parsed.value.lines);
+        } catch (error) {
+          return { kind: "domain" as const, error };
+        }
+        const stored = {
+          notes: parsed.value.notes,
+          terms: parsed.value.terms,
+          expiry_days: parsed.value.expiry_days,
+          lines: parsed.value.lines,
+        };
+        const hash = requestHash({ body: stored, expectedVersion });
         const saved = await client.query<DraftRow>(
           `select id, workspace_id, job_id, kind, draft_state, schema_version, payload_json,
                   version, created_at, updated_at, default_tax_bp, replayed
@@ -557,7 +629,7 @@ export function registerDraftRoutes(
             JSON.stringify(stored),
           ],
         );
-        return { kind: "ok" as const, row: saved.rows[0] };
+        return { kind: "ok" as const, row: saved.rows[0], sources: [] };
       });
       if (!row) {
         return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
@@ -571,12 +643,33 @@ export function registerDraftRoutes(
       if (row.kind === "setup") {
         return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
       }
+      if (row.kind === "missing") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, DRAFT_NOT_FOUND);
+      }
+      if (row.kind === "invalid") {
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+          field_errors: row.field_errors,
+        });
+      }
+      if (row.kind === "domain") {
+        if (isDomainError(row.error)) {
+          return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, row.error.message, {
+            field_errors: row.error.field ? [{ field: row.error.field, message: row.error.message }] : [],
+          });
+        }
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
+      }
       if (!row.row) {
         return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
       }
+      if (row.row.kind === "change") {
+        return success(request.id, presentChangeDraft(row.row, row.sources));
+      }
       return success(request.id, presentQuoteDraft(row.row));
     } catch (error) {
-      const mapped = mapDraftWriteError(request, reply, error, DRAFT_NOT_FOUND);
+      const mapped =
+        mapChangeError(request, reply, error, DRAFT_NOT_FOUND) ??
+        mapDraftWriteError(request, reply, error, DRAFT_NOT_FOUND);
       if (mapped) {
         return mapped;
       }

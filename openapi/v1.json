@@ -209,11 +209,39 @@
           }
         ],
         "responses": {
-          "200": { "description": "Job overview with current quote, optional active invoice, and permitted_actions; no ledger" },
+          "200": { "description": "Job overview with current quote, optional change order, optional active invoice, and permitted_actions; no ledger" },
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant job" },
           "422": { "description": "Invalid job id" }
+        }
+      }
+    },
+    "/v1/jobs/{jobId}/changes": {
+      "post": {
+        "summary": "Create or return the current editing change-order draft for an eligible pre-invoice job",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Editing change draft with server-calculated previous, change, and new totals" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, setup incomplete, or entitlement required" },
+          "404": { "description": "Unknown or cross-tenant job" },
+          "409": { "description": "Idempotency mismatch, pending approval, or accepted scope changed" },
+          "422": { "description": "Job not eligible, extra body fields, or invalid job id" }
         }
       }
     },

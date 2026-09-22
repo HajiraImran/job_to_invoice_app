@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderEmail01, renderEmail03, renderEmail04, renderEmail05, renderEmail06, renderEmail07, renderEmail08, reviewHref, sendResendEmail } from "./email.ts";
+import { renderEmail01, renderEmail02, renderEmail03, renderEmail04, renderEmail05, renderEmail06, renderEmail07, renderEmail08, reviewHref, sendResendEmail } from "./email.ts";
 
 describe("EMAIL01 template", () => {
   it("renders a fragment href without a token query parameter or PDF attachment", () => {
@@ -19,6 +19,29 @@ describe("EMAIL01 template", () => {
     expect(rendered.text).toContain("does not include a PDF");
     expect(rendered.html.toLowerCase()).not.toContain("attachment");
     expect(rendered.html).not.toContain("?token=");
+  });
+});
+
+describe("EMAIL02 template", () => {
+  it("renders previous, change, and new totals with a fragment review link", () => {
+    const rendered = renderEmail02({
+      appName: "Job to Invoice",
+      businessName: "Quote Co",
+      number: "CO-000001",
+      revisionNo: 1,
+      previousTotalCents: 25980,
+      changeIncludingTaxCents: 10825,
+      newAgreedTotalCents: 36805,
+      href: "https://portal.example.test/review#tokenvalue",
+    });
+    expect(rendered.subject).toBe("Review a change to your job with Quote Co");
+    expect(rendered.text).toContain("Previously agreed total: $259.80");
+    expect(rendered.text).toContain("Change including tax: $108.25");
+    expect(rendered.text).toContain("New agreed total: $368.05");
+    expect(rendered.html).toContain("Review change");
+    expect(rendered.html).toContain('href="https://portal.example.test/review#tokenvalue"');
+    expect(rendered.html).not.toContain("?token=");
+    expect(rendered.text).toContain("does not include a PDF");
   });
 });
 

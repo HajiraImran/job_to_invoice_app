@@ -55,9 +55,12 @@ describe("portal fragment and states", () => {
     expect(document).toContain("createIdempotencyKey()");
     expect(document).toContain("PortalIdentifierError");
     expect(document).toContain("portalCopy.invoiceReady");
+    expect(document).toContain("portalCopy.changeReady");
+    expect(document).toContain("previous_total_cents");
     expect(document).toContain("viewOnly");
     expect(document).not.toContain("crypto.randomUUID");
     expect(document).not.toContain("Math.random");
+    expect(portalCopy.changeReady).toBe("Review this change order");
     expect(portalCopy.identifierError).toBe("Could not start this request. Try again.");
     expect(portalCopy.identifierError).not.toBe(portalCopy.networkError);
     const helper = readFileSync(join(root, "./idempotency.ts"), "utf8");

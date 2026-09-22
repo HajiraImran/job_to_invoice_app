@@ -64,6 +64,15 @@ type JobRow = {
   latest_invoice_lifecycle?: string | null;
   latest_invoice_total?: string | number | null;
   latest_invoice_due?: Date | string | null;
+  change_draft_id?: string | null;
+  change_draft_version?: number | null;
+  change_draft_payload?: unknown;
+  latest_change_id?: string | null;
+  latest_change_number?: string | null;
+  latest_change_revision?: number | null;
+  latest_change_lifecycle?: string | null;
+  latest_change_total?: string | number | null;
+  latest_change_request_state?: string | null;
   replayed?: boolean;
 };
 
@@ -172,6 +181,13 @@ function jobDetail(row: JobRow) {
   const canViewInvoice = Boolean(row.active_invoice_id || row.latest_invoice_id);
   const canReplaceInvoice =
     row.lifecycle === "invoiced" && !row.active_invoice_id && row.latest_invoice_lifecycle === "voided";
+  const canCreateChange =
+    row.mode === "quote" &&
+    row.lifecycle === "active" &&
+    row.current_quote_lifecycle === "accepted" &&
+    !row.active_invoice_id &&
+    !row.latest_invoice_id;
+  const canViewChange = Boolean(row.latest_change_id);
   return {
     id: row.id,
     customer_id: row.customer_id,
@@ -189,6 +205,8 @@ function jobDetail(row: JobRow) {
       ...(canCreateInvoice ? ["create_invoice"] : []),
       ...(canViewInvoice ? ["view_invoice"] : []),
       ...(canReplaceInvoice ? ["create_replacement"] : []),
+      ...(canCreateChange ? ["create_change"] : []),
+      ...(canViewChange ? ["view_change"] : []),
     ],
     quote_draft:
       row.quote_draft_id && row.quote_draft_version
@@ -238,6 +256,34 @@ function jobDetail(row: JobRow) {
                 ? row.latest_invoice_due.toISOString().slice(0, 10)
                 : String(row.latest_invoice_due).slice(0, 10)
               : null,
+          }
+        : null,
+    change_draft:
+      row.change_draft_id && row.change_draft_version
+        ? {
+            id: row.change_draft_id,
+            version: row.change_draft_version,
+            reason:
+              row.change_draft_payload &&
+              typeof row.change_draft_payload === "object" &&
+              !Array.isArray(row.change_draft_payload) &&
+              typeof (row.change_draft_payload as { reason?: unknown }).reason === "string"
+                ? (row.change_draft_payload as { reason: string }).reason
+                : "",
+          }
+        : null,
+    latest_change:
+      row.latest_change_id && row.latest_change_number && row.latest_change_revision && row.latest_change_lifecycle
+        ? {
+            id: row.latest_change_id,
+            number: row.latest_change_number,
+            revision_no: row.latest_change_revision,
+            lifecycle: row.latest_change_lifecycle,
+            total_cents:
+              typeof row.latest_change_total === "number"
+                ? row.latest_change_total
+                : Number(row.latest_change_total ?? 0),
+            request_state: row.latest_change_request_state ?? null,
           }
         : null,
   };
@@ -563,7 +609,11 @@ export function registerJobRoutes(
                   inv.lifecycle as active_invoice_lifecycle, inv.total_cents as active_invoice_total, inv.due_date as active_invoice_due,
                   latest_inv.id as latest_invoice_id, latest_inv.number as latest_invoice_number,
                   latest_inv.revision_no as latest_invoice_revision, latest_inv.lifecycle as latest_invoice_lifecycle,
-                  latest_inv.total_cents as latest_invoice_total, latest_inv.due_date as latest_invoice_due
+                  latest_inv.total_cents as latest_invoice_total, latest_inv.due_date as latest_invoice_due,
+                  cd.id as change_draft_id, cd.version as change_draft_version, cd.payload_json as change_draft_payload,
+                  latest_chg.id as latest_change_id, latest_chg.number as latest_change_number,
+                  latest_chg.revision_no as latest_change_revision, latest_chg.lifecycle as latest_change_lifecycle,
+                  latest_chg.total_cents as latest_change_total, latest_chg.request_state as latest_change_request_state
            from commercial.jobs j
            join commercial.customers c
              on c.workspace_id = j.workspace_id and c.id = j.customer_id
@@ -585,6 +635,24 @@ export function registerJobRoutes(
              order by d2.issued_at desc, d2.id desc
              limit 1
            ) latest_inv on true
+           left join commercial.document_drafts cd
+             on cd.workspace_id = j.workspace_id
+            and cd.job_id = j.id
+            and cd.kind = 'change'
+            and cd.draft_state = 'editing'
+           left join lateral (
+             select d3.id, d3.number, d3.revision_no, d3.lifecycle, d3.total_cents,
+                    case
+                      when d3.lifecycle = 'issued' then 'pending'
+                      when d3.lifecycle = 'accepted' then 'approved'
+                      when d3.lifecycle = 'declined' then 'declined'
+                      else d3.lifecycle
+                    end as request_state
+             from commercial.documents d3
+             where d3.workspace_id = j.workspace_id and d3.job_id = j.id and d3.kind = 'change'
+             order by d3.issued_at desc, d3.id desc
+             limit 1
+           ) latest_chg on true
            where j.id = $1`,
           [params.jobId],
         );

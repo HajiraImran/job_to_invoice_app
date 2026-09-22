@@ -126,6 +126,15 @@ export {
   type DraftPayloadParseResult,
   type LineUnit,
 } from "./draft.ts";
+export {
+  CHANGE_REASON_MAX,
+  CHANGE_REASON_MIN,
+  emptyChangeDraft,
+  parseChangeDraft,
+  type ChangeDraftInput,
+  type ChangeDraftParseResult,
+  type ChangeReductionInput,
+} from "./change.ts";
 export { parseQuotePublish, type QuotePublishInput, type QuotePublishParseResult } from "./quote.ts";
 export {
   parseInvoiceIssue,

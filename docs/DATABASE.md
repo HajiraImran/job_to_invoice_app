@@ -304,6 +304,7 @@ Also:
 - `api_app` / `worker_app` have no arbitrary writes to financial tables
 - Ledger reversal function: reference must belong to the same invoice/workspace and must not already be reversed
 - Invoice void (`commercial.void_invoice` in `0017_invoice_void_replacement.sql`): issued invoice only; no effective payment/refund/issued credit; lifecycle `issued`→`voided` with `void_reason`; clear `jobs.active_invoice_id`; retain number and snapshot; revoke view_only sessions; queue EMAIL08 without a new link
+- Change orders (`0018_change_orders.sql`): `open_change_draft` / `save_change_draft` / `freeze_change_preview` / `publish_change_draft` for kind=change; CO-000001; EMAIL02 effect; `decide_portal_quote` inserts add or reduce scope_entries and rechecks remaining caps (P0051). Hosted APPLY_0018 is not applied from this slice.
 - Replacement (`freeze_replacement_preview` + `issue_replacement`): voided source; overlay customer/due/instructions only; new INV number; `prior_document_id` = voided invoice; one active non-voided invoice
 - Authorization tests must exercise database access paths
 

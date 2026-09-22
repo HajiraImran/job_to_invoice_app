@@ -14,6 +14,14 @@ export function jobQuotePath(jobId: string): string {
   return `/(tabs)/jobs/${jobId}/quote`;
 }
 
+export function jobChangePath(jobId: string): string {
+  return `/(tabs)/jobs/${jobId}/change`;
+}
+
+export function jobReducePath(jobId: string): string {
+  return `/(tabs)/jobs/${jobId}/reduce`;
+}
+
 export function jobPublishPath(jobId: string): string {
   return `/(tabs)/jobs/${jobId}/publish`;
 }

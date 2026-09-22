@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import {
   originalPdfObjectKey,
+  renderChangeOriginalHtml,
   renderCreditOriginalHtml,
   renderInvoiceOriginalHtml,
   renderQuoteOriginalHtml,
+  type ChangePdfDocument,
+  type ChangeSnapshotV1,
   type CreditPdfDocument,
   type CreditSnapshotV1,
   type InvoicePdfDocument,
@@ -16,7 +19,9 @@ import { withWorkerRole, WORKER_CLAIM_TIMEOUT_MS, WORKER_STATEMENT_TIMEOUT_MS } 
 import type { DocumentsObjectStore } from "./documents-store.ts";
 import type { WorkerPdfStage } from "./worker-log.ts";
 
-export type PdfRenderer = (document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument) => Promise<Buffer>;
+export type PdfRenderer = (
+  document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument | ChangePdfDocument,
+) => Promise<Buffer>;
 
 export class PermanentPdfError extends Error {
   readonly code: string;
@@ -44,7 +49,7 @@ type SourceRow = {
   created_by: string;
   number: string;
   revision_no: number;
-  snapshot_json: QuoteSnapshotV1 | InvoiceSnapshotV1 | CreditSnapshotV1;
+  snapshot_json: QuoteSnapshotV1 | InvoiceSnapshotV1 | CreditSnapshotV1 | ChangeSnapshotV1;
   net_cents: string | number;
   tax_cents: string | number;
   total_cents: string | number;
@@ -59,18 +64,41 @@ function asCents(value: string | number): number {
   return parsed;
 }
 
-function isInvoicePdf(document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument): document is InvoicePdfDocument {
+function isInvoicePdf(
+  document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument | ChangePdfDocument,
+): document is InvoicePdfDocument {
   return document.snapshot.kind === "invoice";
 }
 
-function isCreditPdf(document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument): document is CreditPdfDocument {
+function isCreditPdf(
+  document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument | ChangePdfDocument,
+): document is CreditPdfDocument {
   return document.snapshot.kind === "credit";
 }
 
-function asDocument(row: SourceRow): QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument {
+function isChangePdf(
+  document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument | ChangePdfDocument,
+): document is ChangePdfDocument {
+  return document.snapshot.kind === "change";
+}
+
+function asDocument(row: SourceRow): QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument | ChangePdfDocument {
   const snapshot = row.snapshot_json;
-  if (!snapshot || (snapshot.kind !== "quote" && snapshot.kind !== "invoice" && snapshot.kind !== "credit")) {
-    throw new PermanentPdfError("VALIDATION_FAILED", "PDF source must be a published quote, invoice, or credit");
+  if (
+    !snapshot ||
+    (snapshot.kind !== "quote" && snapshot.kind !== "invoice" && snapshot.kind !== "credit" && snapshot.kind !== "change")
+  ) {
+    throw new PermanentPdfError("VALIDATION_FAILED", "PDF source must be a published quote, change, invoice, or credit");
+  }
+  if (snapshot.kind === "change") {
+    return {
+      number: row.number,
+      revision_no: row.revision_no,
+      snapshot,
+      net_cents: asCents(row.net_cents),
+      tax_cents: asCents(row.tax_cents),
+      total_cents: asCents(row.total_cents),
+    };
   }
   if (snapshot.kind === "credit") {
     return {
@@ -190,6 +218,8 @@ export async function processGenerateOriginalPdf(input: {
       renderInvoiceOriginalHtml(document);
     } else if (isCreditPdf(document)) {
       renderCreditOriginalHtml(document);
+    } else if (isChangePdf(document)) {
+      renderChangeOriginalHtml(document);
     } else {
       renderQuoteOriginalHtml(document);
     }

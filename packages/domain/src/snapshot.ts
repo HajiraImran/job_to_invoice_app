@@ -218,6 +218,54 @@ export type QuoteDraftLineSnapshotInput = LineInput & {
   custom_unit_label: string | null;
 };
 
+export const CHANGE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+
+export type ChangeSnapshotAddition = QuoteSnapshotLine;
+
+export type ChangeSnapshotReduction = {
+  position: number;
+  source_line_id: string;
+  description: string;
+  net_credit_cents: number;
+  net_reduction_cents: number;
+  tax_reduction_cents: number;
+  total_reduction_cents: number;
+};
+
+export type ChangeSnapshotV1 = {
+  schema_version: typeof CHANGE_SNAPSHOT_SCHEMA_VERSION;
+  kind: "change";
+  currency: "USD";
+  business: QuoteSnapshotV1["business"];
+  customer: QuoteSnapshotV1["customer"];
+  job: QuoteSnapshotV1["job"];
+  reason: string;
+  notes: string;
+  terms: string;
+  expiry_days: number;
+  expiry_local_date: string;
+  expiry_timezone: string;
+  expires_at: string;
+  issue_date: string;
+  expected_scope_version: number;
+  previous_net_cents: number;
+  previous_tax_cents: number;
+  previous_total_cents: number;
+  addition_net_cents: number;
+  addition_tax_cents: number;
+  addition_total_cents: number;
+  reduction_net_cents: number;
+  reduction_tax_cents: number;
+  reduction_total_cents: number;
+  change_including_tax_cents: number;
+  new_agreed_total_cents: number;
+  additions: ChangeSnapshotAddition[];
+  reductions: ChangeSnapshotReduction[];
+  net_cents: number;
+  tax_cents: number;
+  total_cents: number;
+};
+
 export function formatDocumentNumber(kind: "quote" | "change" | "invoice" | "credit", value: number): string {
   if (!Number.isInteger(value) || value < 1) {
     throw new Error("Document numbers start at 1");

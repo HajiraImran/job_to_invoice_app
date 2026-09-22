@@ -12,6 +12,7 @@ import {
   buildQuoteSnapshot,
   canonicalizeToBytes,
   isDomainError,
+  type ChangeSnapshotV1,
   type QuoteSnapshotAddress,
   type QuoteSnapshotV1,
 } from "@job-to-invoice/domain";
@@ -21,6 +22,7 @@ import {
   endOfLocalDateUtc,
   isClientUuid,
   maskEmail,
+  parseChangeDraft,
   parseDraftPayload,
   parseOwnerEmail,
   parseQuotePublish,
@@ -29,6 +31,7 @@ import {
   type DraftPayloadInput,
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
+import { buildChangeSnapshot, loadAcceptedScopeSources, mapChangeError } from "./changes.ts";
 import { payloadFromJson } from "./drafts.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { fail, success } from "./envelope.ts";
@@ -63,9 +66,11 @@ type ProvisionRow = {
 type PreviewContext = {
   draft_id: string;
   job_id: string;
+  kind: string;
   version: number;
   payload_json: unknown;
   default_tax_bp: number;
+  default_terms: string;
   timezone: string;
   business_name: string;
   legal_name: string;
@@ -535,7 +540,7 @@ export function registerQuotePublishRoutes(
           owner.actor_id,
         ]);
         const loaded = await client.query<PreviewContext>(
-          `select d.id as draft_id, d.job_id, d.version, d.payload_json, w.default_tax_bp, w.timezone,
+          `select d.id as draft_id, d.job_id, d.kind, d.version, d.payload_json, w.default_tax_bp, w.default_terms, w.timezone,
                   w.business_name, w.legal_name, w.contact_name, w.contact_email, w.contact_phone, w.address_json,
                   c.name as customer_name, c.email as customer_email, c.phone as customer_phone, c.billing_address_json,
                   j.title, j.site_address_json, j.no_site
@@ -543,12 +548,83 @@ export function registerQuotePublishRoutes(
            join commercial.jobs j on j.workspace_id = d.workspace_id and j.id = d.job_id
            join commercial.customers c on c.workspace_id = j.workspace_id and c.id = j.customer_id
            join commercial.workspaces w on w.workspace_id = d.workspace_id
-           where d.id = $1 and d.kind = 'quote'`,
+           where d.id = $1 and d.kind in ('quote', 'change')`,
           [params.draftId],
         );
         const ctx = loaded.rows[0];
         if (!ctx) {
           return { kind: "missing" as const };
+        }
+        if (ctx.kind === "change") {
+          const parsed = parseChangeDraft(ctx.payload_json);
+          if (!parsed.ok) {
+            return { kind: "invalid" as const, field_errors: parsed.field_errors };
+          }
+          const sources = await loadAcceptedScopeSources(client, owner.workspace_id, ctx.job_id);
+          const issue_date = zonedCalendarDate(new Date(), ctx.timezone);
+          const expiry_local_date = addCalendarDays(issue_date, parsed.value.expiry_days);
+          const expires_at = endOfLocalDateUtc(expiry_local_date, ctx.timezone).toISOString();
+          let snapshot: ChangeSnapshotV1;
+          try {
+            snapshot = buildChangeSnapshot({
+              business: {
+                business_name: ctx.business_name,
+                legal_name: ctx.legal_name,
+                contact_name: ctx.contact_name,
+                contact_email: ctx.contact_email,
+                contact_phone: ctx.contact_phone,
+                address: snapshotAddress(ctx.address_json),
+                timezone: ctx.timezone,
+                default_tax_bp: ctx.default_tax_bp,
+              },
+              customer: {
+                name: ctx.customer_name,
+                email: ctx.customer_email,
+                phone: ctx.customer_phone,
+                billing_address: snapshotAddress(ctx.billing_address_json),
+              },
+              job: {
+                id: ctx.job_id,
+                title: ctx.title,
+                site_address: snapshotAddress(ctx.site_address_json),
+                no_site: ctx.no_site,
+              },
+              terms: ctx.default_terms,
+              payload: parsed.value,
+              sources,
+              issueDate: issue_date,
+              expiryLocalDate: expiry_local_date,
+              expiryTimezone: ctx.timezone,
+              expiresAt: expires_at,
+            });
+          } catch (error) {
+            return { kind: "domain" as const, error };
+          }
+          const bytes = canonicalizeToBytes(snapshot);
+          const hash = createHash("sha256").update(bytes).digest("hex");
+          const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS);
+          const stored = await client.query<{
+            id: string;
+            version: number;
+            preview_hash: string;
+            preview_expires_at: Date | string;
+            snapshot_json: ChangeSnapshotV1;
+          }>(
+            `select id, version, preview_hash, preview_expires_at, snapshot_json
+             from commercial.freeze_change_preview(
+               $1::uuid, $2::uuid, $3::integer, $4, $5::bytea, $6::jsonb, $7::timestamptz
+             )`,
+            [
+              owner.actor_id,
+              params.draftId,
+              expectedVersion,
+              hash,
+              Buffer.from(bytes),
+              JSON.stringify(snapshot),
+              expiresAt.toISOString(),
+            ],
+          );
+          return { kind: "ok" as const, row: stored.rows[0], snapshot, hash };
         }
         const payload = payloadFromJson(ctx.payload_json);
         const parsed = parseDraftPayload(payload);
@@ -617,7 +693,9 @@ export function registerQuotePublishRoutes(
         snapshot: frozen.snapshot,
       });
     } catch (error) {
-      const mapped = mapPublishError(request, reply, error, DRAFT_NOT_FOUND);
+      const mapped =
+        mapChangeError(request, reply, error, DRAFT_NOT_FOUND) ??
+        mapPublishError(request, reply, error, DRAFT_NOT_FOUND);
       if (mapped) {
         return mapped;
       }
@@ -762,37 +840,77 @@ export function registerQuotePublishRoutes(
           if (!provisioned.setup_completed) {
             return { kind: "setup" as const };
           }
+          await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+            provisioned.workspace_id,
+            provisioned.actor_id,
+          ]);
           const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
-          const published = await client.query<PublishRow>(
-            `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date,
-                    currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
-                    request_id, delivery_state, replayed
-             from commercial.publish_quote_draft(
-               $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7,
-               $8, $9, $10, $11::integer, $12::bytea, $13::bytea, $14::bytea, $15, $16::integer, $17::timestamptz, $18::timestamptz, $19::uuid
-             )`,
-            [
-              provisioned.actor_id,
-              key,
-              hash,
-              request.id,
-              params.draftId,
-              expectedVersion,
-              parsed.value.preview_hash,
-              recipient.display,
-              null,
-              tokenHash,
-              tokenKeyVersion,
-              encryptedEmail,
-              ciphertext,
-              nonce,
-              algorithm,
-              deliveryKeyVersion,
-              expiresAt.toISOString(),
-              expiresAt.toISOString(),
-              parsed.value.replace_pending_request_id ?? null,
-            ],
+          const kindRow = await client.query<{ kind: string }>(
+            "select kind from commercial.document_drafts where id = $1",
+            [params.draftId],
           );
+          const draftKind = kindRow.rows[0]?.kind;
+          const published =
+            draftKind === "change"
+              ? await client.query<PublishRow>(
+                  `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date,
+                          currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
+                          request_id, delivery_state, replayed
+                   from commercial.publish_change_draft(
+                     $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7,
+                     $8, $9, $10, $11::integer, $12::bytea, $13::bytea, $14::bytea, $15, $16::integer, $17::timestamptz, $18::timestamptz
+                   )`,
+                  [
+                    provisioned.actor_id,
+                    key,
+                    hash,
+                    request.id,
+                    params.draftId,
+                    expectedVersion,
+                    parsed.value.preview_hash,
+                    recipient.display,
+                    null,
+                    tokenHash,
+                    tokenKeyVersion,
+                    encryptedEmail,
+                    ciphertext,
+                    nonce,
+                    algorithm,
+                    deliveryKeyVersion,
+                    expiresAt.toISOString(),
+                    expiresAt.toISOString(),
+                  ],
+                )
+              : await client.query<PublishRow>(
+                  `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date,
+                          currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
+                          request_id, delivery_state, replayed
+                   from commercial.publish_quote_draft(
+                     $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7,
+                     $8, $9, $10, $11::integer, $12::bytea, $13::bytea, $14::bytea, $15, $16::integer, $17::timestamptz, $18::timestamptz, $19::uuid
+                   )`,
+                  [
+                    provisioned.actor_id,
+                    key,
+                    hash,
+                    request.id,
+                    params.draftId,
+                    expectedVersion,
+                    parsed.value.preview_hash,
+                    recipient.display,
+                    null,
+                    tokenHash,
+                    tokenKeyVersion,
+                    encryptedEmail,
+                    ciphertext,
+                    nonce,
+                    algorithm,
+                    deliveryKeyVersion,
+                    expiresAt.toISOString(),
+                    expiresAt.toISOString(),
+                    parsed.value.replace_pending_request_id ?? null,
+                  ],
+                );
           return { kind: "ok" as const, row: published.rows[0] };
         });
         if (!row) {
@@ -813,7 +931,9 @@ export function registerQuotePublishRoutes(
         emit(202, "response_sent");
         return reply.status(202).send(success(request.id, presentPublishedQuote(row.row)));
       } catch (error) {
-        const mapped = mapPublishError(request, reply, error, DRAFT_NOT_FOUND);
+        const mapped =
+          mapChangeError(request, reply, error, DRAFT_NOT_FOUND) ??
+          mapPublishError(request, reply, error, DRAFT_NOT_FOUND);
         if (mapped) {
           emit(reply.statusCode, "response_sent");
           return mapped;
@@ -851,7 +971,7 @@ export function registerQuotePublishRoutes(
              on dr.workspace_id = d.workspace_id and dr.parent_document_id = d.id and dr.kind = d.kind
            left join lateral commercial.original_pdf_download($2::uuid, d.id) p on true
            left join lateral commercial.document_delivery_status($2::uuid, d.id) da on true
-           where d.id = $1 and d.kind in ('quote', 'invoice')`,
+           where d.id = $1 and d.kind in ('quote', 'invoice', 'change')`,
           [params.documentId, owner.workspace_id],
         );
         const row = result.rows[0];

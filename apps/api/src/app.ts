@@ -18,6 +18,7 @@ import {
   type OwnerMeStage,
 } from "./me-log.ts";
 import type { QuotePublishSafeEvent } from "./publish-log.ts";
+import { registerChangeRoutes } from "./changes.ts";
 import { registerDraftRoutes } from "./drafts.ts";
 import { registerJobRoutes } from "./jobs.ts";
 import { registerQuotePublishRoutes } from "./quotes.ts";
@@ -423,6 +424,9 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerDraftRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerChangeRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerQuotePublishRoutes(app, deps, {

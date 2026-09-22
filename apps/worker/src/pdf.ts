@@ -2,9 +2,11 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { chromium } from "playwright";
 import {
+  renderChangeOriginalHtml,
   renderCreditOriginalHtml,
   renderInvoiceOriginalHtml,
   renderQuoteOriginalHtml,
+  type ChangePdfDocument,
   type CreditPdfDocument,
   type InvoicePdfDocument,
   type QuotePdfDocument,
@@ -27,14 +29,16 @@ export function embedInterFonts(html: string): string {
 }
 
 export async function renderQuoteOriginalPdf(
-  document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument,
+  document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument | ChangePdfDocument,
 ): Promise<Buffer> {
   const html = embedInterFonts(
     document.snapshot.kind === "invoice"
       ? renderInvoiceOriginalHtml(document as InvoicePdfDocument)
       : document.snapshot.kind === "credit"
         ? renderCreditOriginalHtml(document as CreditPdfDocument)
-        : renderQuoteOriginalHtml(document as QuotePdfDocument),
+        : document.snapshot.kind === "change"
+          ? renderChangeOriginalHtml(document as ChangePdfDocument)
+          : renderQuoteOriginalHtml(document as QuotePdfDocument),
   );
   const browser = await chromium.launch({
     headless: true,

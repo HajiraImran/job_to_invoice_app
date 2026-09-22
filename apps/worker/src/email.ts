@@ -21,6 +21,43 @@ export type Email01Input = {
   href: string;
 };
 
+export type Email02Input = {
+  appName: string;
+  businessName: string;
+  number: string;
+  revisionNo: number;
+  previousTotalCents: number;
+  changeIncludingTaxCents: number;
+  newAgreedTotalCents: number;
+  href: string;
+};
+
+export function renderEmail02(input: Email02Input): { subject: string; text: string; html: string } {
+  const subject = `Review a change to your job with ${input.businessName}`;
+  const previous = formatUsdCents(input.previousTotalCents);
+  const change = formatUsdCents(input.changeIncludingTaxCents);
+  const next = formatUsdCents(input.newAgreedTotalCents);
+  const text = [
+    `${input.appName}`,
+    `${input.businessName} sent change order ${input.number} R${input.revisionNo} for your review.`,
+    `Previously agreed total: ${previous}.`,
+    `Change including tax: ${change}.`,
+    `New agreed total: ${next}.`,
+    "This message does not include a PDF attachment.",
+    `Review change: ${input.href}`,
+  ].join("\n");
+  const html = `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>${escapeHtml(input.businessName)} sent change order ${escapeHtml(input.number)} R${input.revisionNo} for your review.</p>
+<p>Previously agreed total: ${escapeHtml(previous)}.</p>
+<p>Change including tax: ${escapeHtml(change)}.</p>
+<p>New agreed total: ${escapeHtml(next)}.</p>
+<p>Open the review link, then request a verification code at the bound email address. This message does not include a PDF.</p>
+<p><a href="${escapeAttribute(input.href)}">Review change</a></p>
+</body></html>`;
+  return { subject, text, html };
+}
+
 export function renderEmail01(input: Email01Input): { subject: string; text: string; html: string } {
   const subject = `Review quote ${input.number} from ${input.businessName}`;
   const text = [
@@ -394,6 +431,54 @@ export async function processSendEmail(input: {
         businessName: claimed.business_name,
         number: claimed.number,
         revisionNo: Number(claimed.revision_no),
+        href: reviewHref(input.portalOrigin, encodeFragmentToken(raw)),
+      });
+      raw.fill(0);
+    } else if (claimed.template_id === "EMAIL02") {
+      const raw = decryptDeliveryToken(payload, secret);
+      const facts = await withWorkerRole(input.pool, async (client) => {
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          claimed.workspace_id,
+          claimed.created_by,
+        ]);
+        const result = await client.query<{
+          previous_total_cents: string | number;
+          change_including_tax_cents: string | number;
+          new_agreed_total_cents: string | number;
+        }>(
+          "select previous_total_cents, change_including_tax_cents, new_agreed_total_cents from commercial.change_email_facts($1::uuid)",
+          [claimed.document_id],
+        );
+        return result.rows[0];
+      });
+      if (!facts) {
+        raw.fill(0);
+        await withWorkerRole(input.pool, async (client) => {
+          await client.query("select commercial.fail_send_email($1::uuid, $2, $3)", [
+            claimed.id,
+            "VALIDATION_FAILED",
+            true,
+          ]);
+        });
+        return "dead";
+      }
+      rendered = renderEmail02({
+        appName: input.appName,
+        businessName: claimed.business_name,
+        number: claimed.number,
+        revisionNo: Number(claimed.revision_no),
+        previousTotalCents:
+          typeof facts.previous_total_cents === "number"
+            ? facts.previous_total_cents
+            : Number(facts.previous_total_cents),
+        changeIncludingTaxCents:
+          typeof facts.change_including_tax_cents === "number"
+            ? facts.change_including_tax_cents
+            : Number(facts.change_including_tax_cents),
+        newAgreedTotalCents:
+          typeof facts.new_agreed_total_cents === "number"
+            ? facts.new_agreed_total_cents
+            : Number(facts.new_agreed_total_cents),
         href: reviewHref(input.portalOrigin, encodeFragmentToken(raw)),
       });
       raw.fill(0);

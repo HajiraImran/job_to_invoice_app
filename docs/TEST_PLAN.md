@@ -89,12 +89,12 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA24 | Consent unticked or hash altered | Rejected | Portal |
 | QA25 | Declined quote revised and resent | New revision; old decision kept | E2E |
 | QA26 | Accepted quote edited directly | Immutable write rejected API and DB, including `document_lines` and original PDF artifact | Integration; apps/api/src/invoices.test.ts quote snapshot bytes unchanged after invoice issue |
-| QA27 | Addition then approved reduction | Ledger accurate; sources visible | Integration |
-| QA28 | Two reductions exceed remaining | Later invalid rejected atomically | Concurrency |
+| QA27 | Addition then approved reduction | Ledger accurate; sources visible | Integration; apps/api/src/changes.test.ts. Approved extras appear once in invoice residual. Not VERIFIED on device |
+| QA28 | Two reductions exceed remaining | Later invalid rejected atomically | Concurrency; domain F06 + TX02 P0051. Concurrent portal decision covered in changes.test.ts. Not VERIFIED on device |
 | QA29 | F05 and F06 | Exact tax and cap | Domain |
 | QA30 | F01–F12 mobile/server/PDF | Exact matching cents | Domain + PDF |
-| QA31 | Invoice with pending or draft change | Block with resolution | API; apps/api/src/invoices.test.ts UNRESOLVED_CHANGES. Not VERIFIED on device |
-| QA32 | Invoice raced with change publish | No inconsistent scope/invoice | Concurrency |
+| QA31 | Invoice with pending or draft change | Block with resolution | API; apps/api/src/invoices.test.ts UNRESOLVED_CHANGES; apps/api/src/changes.test.ts pending change blocks invoice preview. Not VERIFIED on device |
+| QA32 | Invoice raced with change publish | No inconsistent scope/invoice | Concurrency; invoice issue after invoice remains blocked for new change drafts. Full publish-vs-issue race not device-verified |
 | QA33 | PDF worker crashes after invoice commit | Invoice issued; one artifact; no dup number | Worker; generate_original_pdf queued after commit. Crash/retry same artifact still local-only, not VERIFIED |
 | QA34 | Email timeout after acceptance | Reconcile before retry | Worker; EMAIL06 claim waits for ready original PDF and does not blind-resend. Hosted Resend timeout unverified |
 | QA35 | Permanent bounce | Not delivered; suppression path | Integration |

@@ -10,12 +10,31 @@ function createIdempotencyKey(): string {
   return createPortalIdempotencyKey();
 }
 
+function formatPortalCents(value: number | undefined): string {
+  if (value === undefined || !Number.isInteger(value)) {
+    return "—";
+  }
+  const abs = Math.abs(value);
+  const dollars = Math.trunc(abs / 100);
+  const cents = String(abs % 100).padStart(2, "0");
+  return `${value < 0 ? "-" : ""}$${dollars}.${cents}`;
+}
+
 type DocumentData = {
   access_state: string;
   business_name: string;
   number: string;
   revision_label: string;
-  snapshot: { total_cents?: number; currency?: string; customer?: { name?: string } };
+  snapshot: {
+    kind?: string;
+    total_cents?: number;
+    currency?: string;
+    customer?: { name?: string };
+    reason?: string;
+    previous_total_cents?: number;
+    change_including_tax_cents?: number;
+    new_agreed_total_cents?: number;
+  };
   snapshot_sha256: string;
   pdf_state: string;
   consent_text: string;
@@ -120,11 +139,12 @@ export default function ReviewDocumentPage() {
 
   const pdfReady = doc?.pdf_state === "ready";
   const viewOnly = Boolean(doc && !doc.allowed_actions.includes("approve"));
+  const isChange = doc?.snapshot.kind === "change";
   const approveEnabled = canApprove(kind === "confirm_accept" ? "quote_ready" : kind, consent, Boolean(pdfReady)) && name.trim().length > 0;
 
   return (
     <main className="portal">
-      <h1>{viewOnly ? portalCopy.invoiceReady : portalCopy.quoteReady}</h1>
+      <h1>{viewOnly ? portalCopy.invoiceReady : isChange ? portalCopy.changeReady : portalCopy.quoteReady}</h1>
       {kind === "loading" || kind === "submitting" ? <p role="status">{kind === "submitting" ? portalCopy.submitting : portalCopy.loading}</p> : null}
       {kind === "expired_quote" ||
       kind === "superseded" ||
@@ -140,6 +160,20 @@ export default function ReviewDocumentPage() {
             {doc.number} {doc.revision_label}
           </p>
           <p>{doc.snapshot.customer?.name}</p>
+          {isChange ? (
+            <>
+              {doc.snapshot.reason ? <p>{doc.snapshot.reason}</p> : null}
+              <p>
+                {portalCopy.previousTotal}: {formatPortalCents(doc.snapshot.previous_total_cents)}
+              </p>
+              <p>
+                {portalCopy.changeTotal}: {formatPortalCents(doc.snapshot.change_including_tax_cents)}
+              </p>
+              <p>
+                {portalCopy.newAgreedTotal}: {formatPortalCents(doc.snapshot.new_agreed_total_cents)}
+              </p>
+            </>
+          ) : null}
           {kind === "pdf_loading" ? <p role="status">{portalCopy.pdfLoading}</p> : null}
           {kind === "pdf_failure" ? <p role="alert">{portalCopy.pdfFailure}</p> : null}
           {pdfReady ? <PortalPdfDownloadAction /> : null}
@@ -163,7 +197,7 @@ export default function ReviewDocumentPage() {
           ) : null}
           {kind === "confirm_accept" ? (
             <>
-              <p>{portalCopy.confirmAccept}</p>
+              <p>{isChange ? portalCopy.confirmChangeAccept : portalCopy.confirmAccept}</p>
               <button type="button" disabled={busy || !approveEnabled} onClick={() => void decide("approve")}>
                 {portalCopy.approve}
               </button>
@@ -171,7 +205,7 @@ export default function ReviewDocumentPage() {
           ) : null}
           {kind === "confirm_reject" ? (
             <>
-              <p>{portalCopy.confirmReject}</p>
+              <p>{isChange ? portalCopy.confirmChangeReject : portalCopy.confirmReject}</p>
               <button type="button" disabled={busy} onClick={() => void decide("decline")}>
                 {portalCopy.decline}
               </button>

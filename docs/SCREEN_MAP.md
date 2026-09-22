@@ -145,11 +145,15 @@ Implemented route: `/(tabs)/jobs/[id]/request`. Delivery status plus owner Resen
 
 ### S13 Extra work editor
 
-Only after accepted quote and before invoice. Reason, added lines, photos, old/change/new total.
+Only after accepted quote and before invoice. Reason, added lines, old/change/new total.
+
+Implemented route: `/(tabs)/jobs/[id]/change`. Online-only server draft via `POST /v1/jobs/{id}/changes` and `PATCH /v1/drafts/{id}`. Preview/publish stay on existing draft routes. Photos/DOC03 excluded. Publishing is never queued in SYNC01 outbox. Not VERIFIED on device.
 
 ### S14 Reduction editor
 
 Eligible source line, net reduction, reason, tax/new total. Bound max. Block all-zero unless meaningful scope replacement with reason (CHG02).
+
+Implemented route: `/(tabs)/jobs/[id]/reduce`. Same change draft as S13. Remaining source caps shown. Not VERIFIED on device.
 
 ### S15 Invoice preview
 
@@ -205,7 +209,7 @@ Implemented route: `/review` (`#token` only; never `?token=`). Email and share l
 
 ### S26 Customer review
 
-Implemented route: `/review/document`. Full snapshot, prices, consent/name, approve/decline. Requires ready original PDF. Unticked acknowledgement (APR04). States: loading, read-only decided, superseded, expired, revoked. view_only: no approve controls (API05).
+Implemented route: `/review/document`. Full snapshot, prices, consent/name, approve/decline. Change orders show previous/change/new totals and APR04 change consent. Requires ready original PDF. Unticked acknowledgement (APR04). States: loading, read-only decided, superseded, expired, revoked. view_only: no approve controls (API05).
 
 ### S27 Customer receipt
 

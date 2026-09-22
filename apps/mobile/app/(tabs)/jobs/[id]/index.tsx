@@ -4,8 +4,9 @@ import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
+import { changeStatusLabel } from "../../../../src/changes/presentation.ts";
 import { nextActionCopy, presentJobDetail, quoteLifecycleLabel, type JobDetail } from "../../../../src/jobs/presentation.ts";
-import { jobQuotePath, jobPublishPath, jobRequestPath, jobInvoicePath, jobInvoiceDetailPath, jobInvoiceReplacePath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
+import { jobQuotePath, jobPublishPath, jobRequestPath, jobInvoicePath, jobInvoiceDetailPath, jobInvoiceReplacePath, jobChangePath, jobReducePath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
 import { quoteActionLabel } from "../../../../src/quotes/presentation.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
@@ -181,6 +182,34 @@ export default function JobDetailScreen() {
                         : copy.createQuote}
                 </Text>
               </Pressable>
+            ) : null}
+            {next === "invoice" && view.job?.permitted_actions.includes("create_change") ? (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={copy.extraWork}
+                  onPress={() => router.push(jobChangePath(jobId))}
+                  style={styles.secondary}
+                >
+                  <Text style={styles.secondaryLabel}>{copy.extraWork}</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={copy.reduceScope}
+                  onPress={() => router.push(jobReducePath(jobId))}
+                  style={styles.secondary}
+                >
+                  <Text style={styles.secondaryLabel}>{copy.reduceScope}</Text>
+                </Pressable>
+              </>
+            ) : null}
+            {view.job?.latest_change ? (
+              <>
+                <Text style={styles.section}>{view.job.latest_change.number}</Text>
+                <Text style={styles.body}>
+                  {changeStatusLabel(view.job.latest_change.lifecycle, view.job.latest_change.request_state)}
+                </Text>
+              </>
             ) : null}
             {next === "invoice" ? (
               <Pressable
