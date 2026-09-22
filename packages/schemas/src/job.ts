@@ -85,6 +85,12 @@ export type JobListQueryParseResult =
   | { ok: true; value: JobListQuery }
   | { ok: false; field_errors: FieldError[] };
 
+export type JobArchiveInput = { archived: boolean };
+
+export type JobArchiveParseResult =
+  | { ok: true; value: JobArchiveInput }
+  | { ok: false; field_errors: FieldError[] };
+
 function messageFor(code: "required" | "too_short" | "too_long" | "invalid"): string {
   if (code === "required") {
     return "This field is required.";
@@ -293,4 +299,24 @@ export function parseJobListQuery(input: unknown): JobListQueryParseResult {
 
 export function analyticsModeForJob(mode: JobMode): "quote" | "direct" {
   return mode === "direct_invoice" ? "direct" : "quote";
+}
+
+export function parseJobArchive(input: unknown): JobArchiveParseResult {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { ok: false, field_errors: [{ field: "body", message: "Invalid request." }] };
+  }
+  const record = input as Record<string, unknown>;
+  const field_errors: FieldError[] = [];
+  for (const key of Object.keys(record)) {
+    if (key !== "archived") {
+      field_errors.push({ field: key, message: "Unknown fields are not allowed." });
+    }
+  }
+  if (typeof record.archived !== "boolean") {
+    field_errors.push({ field: "archived", message: "Choose archive or restore." });
+  }
+  if (field_errors.length > 0 || typeof record.archived !== "boolean") {
+    return { ok: false, field_errors };
+  }
+  return { ok: true, value: { archived: record.archived } };
 }

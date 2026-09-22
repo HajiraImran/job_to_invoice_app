@@ -4,6 +4,7 @@ import { encryptRecipientEmail, encryptUtf8, parseVersionedSecret } from "@job-t
 import {
   isClientUuid,
   parseEmptyObjectBody,
+  parseJobArchive,
   parseJobCreate,
   parseJobListQuery,
   parseOwnerEmail,
@@ -45,6 +46,7 @@ type JobRow = {
   mode: string;
   internal_notes: string;
   related_job_id?: string | null;
+  archived_from_state?: string | null;
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
@@ -199,6 +201,13 @@ function jobDetail(row: JobRow) {
   const canDeleteJob = row.lifecycle === "draft";
   const canCancelJob = row.lifecycle === "active" || row.lifecycle === "invoiced";
   const canCreateLinkedJob = row.lifecycle === "canceled";
+  const canArchiveJob =
+    row.lifecycle === "active" ||
+    row.lifecycle === "invoiced" ||
+    row.lifecycle === "finished" ||
+    row.lifecycle === "canceled";
+  const canRestoreJob = row.lifecycle === "archived";
+  const canFinishJob = row.lifecycle === "invoiced" && Boolean(row.active_invoice_id);
   return {
     id: row.id,
     customer_id: row.customer_id,
@@ -210,6 +219,7 @@ function jobDetail(row: JobRow) {
     mode: row.mode,
     internal_notes: row.internal_notes,
     related_job_id: row.related_job_id ?? null,
+    archived_from_state: row.archived_from_state ?? null,
     version: row.version,
     created_at: asIso(row.created_at),
     updated_at: asIso(row.updated_at),
@@ -222,6 +232,9 @@ function jobDetail(row: JobRow) {
       ...(canDeleteJob ? ["delete_job"] : []),
       ...(canCancelJob ? ["cancel_job"] : []),
       ...(canCreateLinkedJob ? ["create_linked_job"] : []),
+      ...(canArchiveJob ? ["archive_job"] : []),
+      ...(canRestoreJob ? ["restore_job"] : []),
+      ...(canFinishJob ? ["finish_job"] : []),
     ],
     quote_draft:
       row.quote_draft_id && row.quote_draft_version
@@ -352,7 +365,7 @@ function loadDeliverySecret(env?: Record<string, unknown>) {
 }
 
 const JOB_DETAIL_SQL = `select j.id, j.workspace_id, j.customer_id, c.name as customer_name, j.title, j.site_address_json,
-                  j.no_site, j.lifecycle, j.mode, j.internal_notes, j.related_job_id, j.version, j.created_at, j.updated_at,
+                  j.no_site, j.lifecycle, j.mode, j.internal_notes, j.related_job_id, j.archived_from_state, j.version, j.created_at, j.updated_at,
                   d.id as quote_draft_id, d.version as quote_draft_version, d.payload_json as quote_draft_payload,
                   idr.id as invoice_draft_id, idr.version as invoice_draft_version, idr.payload_json as invoice_draft_payload,
                   q.id as current_quote_id, q.number as current_quote_number, q.revision_no as current_quote_revision,
@@ -868,6 +881,152 @@ export function registerJobRoutes(
       }
       if (code === "P0053") {
         return sendFail(request, reply, API_ERROR_CODES.JOB_NOT_CANCELABLE, "This job cannot be canceled.");
+      }
+      if (code === "22023") {
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
+  app.post("/v1/jobs/:jobId/archive", async (request, reply) => {
+    const owner = await requireOwner(request, reply);
+    if (!owner || !deps.pool) {
+      return;
+    }
+    const params = request.params as { jobId?: string };
+    if (!isClientUuid(params.jobId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "jobId", message: "A job UUID is required." }],
+      });
+    }
+    const parsed = parseJobArchive(request.body);
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const hash = requestHash({ job_id: params.jobId, action: "archive", archived: parsed.value.archived });
+    try {
+      const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
+        const archived = await client.query<{
+          id: string;
+          lifecycle: string;
+          archived_from_state: string | null;
+          version: number;
+          replayed: boolean;
+        }>(
+          `select id, lifecycle, archived_from_state, version, replayed
+           from commercial.archive_job($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::boolean)`,
+          [owner.actor_id, key, hash, request.id, params.jobId, parsed.value.archived],
+        );
+        const result = archived.rows[0];
+        if (!result) {
+          return undefined;
+        }
+        const detail = await client.query<JobRow>(JOB_DETAIL_SQL, [result.id]);
+        if (!detail.rows[0]) {
+          return undefined;
+        }
+        return { ...detail.rows[0], replayed: result.replayed };
+      });
+      if (!row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
+      }
+      return success(request.id, jobDetail(row));
+    } catch (error) {
+      const code = pgCode(error);
+      if (code === "P0005") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
+      }
+      if (code === "P0004") {
+        return sendFail(request, reply, API_ERROR_CODES.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with a different body.");
+      }
+      if (code === "P0003") {
+        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (code === "P0012") {
+        return sendFail(request, reply, API_ERROR_CODES.APPROVAL_PENDING, "Withdraw or wait for the pending approval before archiving.");
+      }
+      if (code === "P0055") {
+        return sendFail(request, reply, API_ERROR_CODES.JOB_NOT_ARCHIVABLE, "This job cannot be archived or restored.");
+      }
+      if (code === "22023") {
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
+  app.post("/v1/jobs/:jobId/finish", async (request, reply) => {
+    const owner = await requireOwner(request, reply);
+    if (!owner || !deps.pool) {
+      return;
+    }
+    const params = request.params as { jobId?: string };
+    if (!isClientUuid(params.jobId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "jobId", message: "A job UUID is required." }],
+      });
+    }
+    const parsed = parseEmptyObjectBody(request.body);
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const hash = requestHash({ job_id: params.jobId, action: "finish" });
+    try {
+      const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
+        const finished = await client.query<{ id: string; lifecycle: string; version: number; replayed: boolean }>(
+          `select id, lifecycle, version, replayed
+           from commercial.finish_job($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid)`,
+          [owner.actor_id, key, hash, request.id, params.jobId],
+        );
+        const result = finished.rows[0];
+        if (!result) {
+          return undefined;
+        }
+        const detail = await client.query<JobRow>(JOB_DETAIL_SQL, [result.id]);
+        if (!detail.rows[0]) {
+          return undefined;
+        }
+        return { ...detail.rows[0], replayed: result.replayed };
+      });
+      if (!row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
+      }
+      return success(request.id, jobDetail(row));
+    } catch (error) {
+      const code = pgCode(error);
+      if (code === "P0005") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
+      }
+      if (code === "P0004") {
+        return sendFail(request, reply, API_ERROR_CODES.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with a different body.");
+      }
+      if (code === "P0003") {
+        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (code === "P0056") {
+        return sendFail(
+          request,
+          reply,
+          API_ERROR_CODES.JOB_NOT_FINISHABLE,
+          "Finish is allowed after the invoice is settled or waived by credits.",
+        );
       }
       if (code === "22023") {
         return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");

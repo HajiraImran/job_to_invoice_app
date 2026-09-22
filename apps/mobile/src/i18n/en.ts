@@ -413,6 +413,18 @@ export const copy = {
   createLinkedJob: "Create linked job",
   linkedJobHint: "Reopening a canceled job is unavailable. Create a linked new job instead.",
   canceledReceivable: "This canceled job still has an amount to collect.",
+  archiveJob: "Archive job",
+  archiveJobTitle: "Archive this job?",
+  archiveJobConfirm:
+    "Archive hides this job from Active. It does not change invoices, balances, or records.",
+  restoreJob: "Restore job",
+  restoreJobTitle: "Restore this job?",
+  restoreJobConfirm: "Restore returns this job to its previous working list.",
+  finishJob: "Finish job",
+  finishJobTitle: "Finish this job?",
+  finishJobConfirm: "Finishing closes the working view after the invoice is settled. Records are kept.",
+  archiveJobOffline: "Reconnect to archive or restore this job. This is not saved to an offline queue.",
+  finishJobOffline: "Reconnect to finish this job. Finishing is not saved to an offline queue.",
   jobLifecycleActionError: "Could not update this job. Try again.",
   jobWorking: "Working",
 } as const;

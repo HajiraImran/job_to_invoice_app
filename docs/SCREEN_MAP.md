@@ -117,7 +117,7 @@ Customer/site, scope total, current step, documents, activity. Next action varie
 
 Canceled jobs that retain a receivable must show it.
 
-Implemented route: `/(tabs)/jobs/[id]`. Quote-mode drafts show Create/Open quote. After publish, S08 shows quote lifecycle (`issued` / `accepted` / `declined` / `expired` / `superseded` / `withdrawn`) from GET `/v1/jobs/{id}` on focus refresh. Declined/expired/superseded quotes can open a revision. After an unpaid void, S08 offers view of the voided invoice and Create replacement. Direct-invoice drafts show Create invoice and do not enter the quote editor. Draft jobs can be deleted. Active and invoiced jobs can be canceled with a reason; pending approvals are withdrawn. Canceled jobs offer Create linked job and show a remaining receivable. No fake ledger totals. Archive/finish remain later.
+Implemented route: `/(tabs)/jobs/[id]`. Quote-mode drafts show Create/Open quote. After publish, S08 shows quote lifecycle (`issued` / `accepted` / `declined` / `expired` / `superseded` / `withdrawn`) from GET `/v1/jobs/{id}` on focus refresh. Declined/expired/superseded quotes can open a revision. After an unpaid void, S08 offers view of the voided invoice and Create replacement. Direct-invoice drafts show Create invoice and do not enter the quote editor. Draft jobs can be deleted. Active and invoiced jobs can be canceled with a reason; pending approvals are withdrawn. Canceled jobs offer Create linked job and show a remaining receivable. Invoiced jobs with a settled invoice can be finished. Non-draft jobs can be archived when no approval is pending, and archived jobs can be restored. No fake ledger totals.
 
 ### S09 Quote editor
 
@@ -235,6 +235,8 @@ Case lookup, bounded metadata, allowed operational actions. Staff MFA, reason re
 | ALREADY_DECIDED | S27 |
 | UNRESOLVED_CHANGES | S15 / S08 |
 | DOCUMENT_IMMUTABLE | S08 permitted path |
+| JOB_NOT_ARCHIVABLE | S08 archive/restore |
+| JOB_NOT_FINISHABLE | S08 finish after settlement |
 | CREDIT_EXCEEDS_SOURCE | S14 / S18 remaining amount |
 | REFUND_EXCEEDS_BALANCE | S17 |
 | ENTRY_ALREADY_REVERSED | S16 |

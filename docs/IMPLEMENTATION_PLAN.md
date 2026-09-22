@@ -86,7 +86,8 @@ Do not implement all screens, then the backend, then connect them.
 - Seed five zero-price catalogue examples (CAT01)
 - Tests: customer duplicate warning, archive vs delete, isolation QA03–QA04
 - Catalogue (S20 / CAT01): implemented in `0020_catalogue_items.sql`; hosted APPLY_0020 and device evidence remain open. Customers remain teammate-owned.
-- JOB02 draft delete / cancel / linked new job: implemented in `0021_job_cancel_delete.sql`. Hosted APPLY_0021 and device evidence remain open. Archive/finish remain later.
+- JOB02 draft delete / cancel / linked new job: implemented in `0021_job_cancel_delete.sql`. Hosted APPLY_0021 and device evidence remain open.
+- JOB01 archive / restore / finish: implemented in `0022_job_archive_finish.sql`. Hosted remains APPLY_0021 until 0021 is applied; 0022 is local-only. Device evidence remains open.
 
 **Vertical slice C — Local persistence and conflict**
 

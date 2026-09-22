@@ -474,6 +474,88 @@
         }
       }
     },
+    "/v1/jobs/{jobId}/archive": {
+      "post": {
+        "summary": "Archive or restore a non-draft job",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["archived"],
+                "properties": {
+                  "archived": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Job archived or restored; financial status unchanged" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant job" },
+          "409": { "description": "Draft, pending approval, already in the requested visibility, or idempotency mismatch" },
+          "422": { "description": "Invalid job id, archived flag, or Idempotency-Key" }
+        }
+      }
+    },
+    "/v1/jobs/{jobId}/finish": {
+      "post": {
+        "summary": "Finish an invoiced job after settlement or credit waiver",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Job finished; records retained" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant job" },
+          "409": { "description": "Invoice not settled, job not invoiced, or idempotency mismatch" },
+          "422": { "description": "Invalid job id or Idempotency-Key" }
+        }
+      }
+    },
     "/v1/jobs/{jobId}/changes": {
       "post": {
         "summary": "Create or return the current editing change-order draft for an eligible pre-invoice job",

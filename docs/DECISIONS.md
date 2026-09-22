@@ -555,3 +555,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | `0021_job_cancel_delete.sql`; hosted confirmation `APPLY_0021` |
 | Reversible | Additive functions and optional create field |
 | Escalation category | none |
+
+### D-028 — JOB01 finish is invoiced-only; archive is visibility-only
+
+| Field | Value |
+| --- | --- |
+| ID | D-028 |
+| Date | 2026-09-22 |
+| Status | Resolved |
+| Decision | `POST /v1/jobs/{id}/finish` is allowed only from `lifecycle=invoiced` when the active issued invoice has derived ledger balance zero (payments, issued credits, mixed, or a zero-total invoice). Canceled jobs are not finished; JOB02 already forbids reopen, and a canceled receivable stays canceled until archived. `POST /v1/jobs/{id}/archive` with `{ archived: boolean }` archives any non-draft state when no `purpose=approval` request is pending, stores `archived_from_state`, and restores that state. Archive does not withdraw requests, change invoices, or emit email. No analytics events exist for archive or finish. Both commands are online-only and are not queued in SYNC01. Hosted confirmation remains `APPLY_0021` because repository/workflow history still targets `0021_job_cancel_delete.sql`; `0022` is local-only until 0021 is applied. |
+| Reason | JOB01 defines finish as a settlement/credit close of the working view and archive as visibility with `archived_from_state`. Inventing unfinish, finish-from-canceled, EMAIL12, or analytics events would exceed the PRD. |
+| Evidence | `supabase/migrations/0022_job_archive_finish.sql`; `apps/api/src/jobs.ts`; `apps/mobile/app/(tabs)/jobs/[id]/index.tsx` |
+| Owner | Engineering lead |
+| PRD implication | JOB01 leftover archive/restore/finish on S08. |
+| Impacted requirement IDs | JOB01, S05, S08 |
+| Impacted test IDs | `apps/api/src/jobs.lifecycle.test.ts`; `packages/schemas/src/job.test.ts`; `apps/mobile/src/jobs/form.test.ts`; `supabase/tests/0023_job_archive_finish.sql` |
+| Migration implications | `0022_job_archive_finish.sql`. Do not modify 0001–0021. Do not change hosted confirmation from `APPLY_0021` until 0021 is applied. |
+| Reversible | Additive functions only |
+| Escalation category | none |

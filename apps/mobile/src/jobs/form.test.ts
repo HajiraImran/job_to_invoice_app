@@ -154,6 +154,26 @@ describe("jobs list and detail states", () => {
     expect(canceled.canCreateLinked).toBe(true);
     expect(canceled.showReceivable).toBe(true);
     expect(canceled.canDelete).toBe(false);
+    expect(canceled.canArchive).toBe(false);
+    expect(canceled.canFinish).toBe(false);
+    const finished = jobLifecycleActions({
+      lifecycle: "finished",
+      permitted_actions: ["archive_job", "view_invoice"],
+      active_invoice: {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        number: "INV-000001",
+        revision_no: 1,
+        lifecycle: "issued",
+        total_cents: 1000,
+        due_date: null,
+      },
+      latest_invoice: null,
+    });
+    expect(finished.canArchive).toBe(true);
+    expect(finished.canFinish).toBe(false);
+    expect(finished.canRestore).toBe(false);
+    expect(nextActionCopy("quote", "finished", "accepted", true)).toBe("view_invoice");
+    expect(nextActionCopy("quote", "archived", "accepted", true)).toBe("view_invoice");
   });
 });
 

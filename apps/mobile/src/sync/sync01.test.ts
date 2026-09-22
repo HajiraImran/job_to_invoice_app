@@ -67,6 +67,8 @@ describe("SYNC01 outbox rules and retry", () => {
   it("forbids irreversible money commands and allows draft/job writes", () => {
     expect(isForbiddenOutboxPath("/v1/drafts/x/publish")).toBe(true);
     expect(isForbiddenOutboxPath("/v1/jobs/x/cancel")).toBe(true);
+    expect(isForbiddenOutboxPath("/v1/jobs/x/archive")).toBe(true);
+    expect(isForbiddenOutboxPath("/v1/jobs/x/finish")).toBe(true);
     expect(isForbiddenOutboxPath("/v1/jobs/x/quote")).toBe(false);
     expect(() =>
       assertOutboxOperationAllowed({ method: "POST", path: "/v1/jobs", resourceKind: "job" }),

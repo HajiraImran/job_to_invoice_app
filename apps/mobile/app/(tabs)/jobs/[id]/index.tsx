@@ -158,6 +158,68 @@ export default function JobDetailScreen() {
     });
   }
 
+  async function archiveJob(archived: boolean) {
+    if (!jobId || lifecycleDisabled) {
+      return;
+    }
+    if (auth.snapshot.status === "offline_cached") {
+      setError({ message: copy.archiveJobOffline, retryable: false, status: 0 });
+      return;
+    }
+    setMutating(true);
+    mutateKey.current = retainOrCreateSetupIdempotencyKey(mutateKey.current);
+    const result = await runOwnerRequest<JobDetail>({
+      path: `/v1/jobs/${jobId}/archive`,
+      method: "POST",
+      body: { archived },
+      idempotencyKey: mutateKey.current,
+    });
+    setMutating(false);
+    if (result.ok) {
+      setJob(result.data);
+      return;
+    }
+    if (result.error.code === "IDEMPOTENCY_MISMATCH") {
+      mutateKey.current = retainOrCreateSetupIdempotencyKey(undefined);
+    }
+    setError({
+      message: result.error.message || copy.jobLifecycleActionError,
+      retryable: result.error.retryable || result.error.status === 0,
+      status: result.error.status,
+    });
+  }
+
+  async function finishJob() {
+    if (!jobId || lifecycleDisabled) {
+      return;
+    }
+    if (auth.snapshot.status === "offline_cached") {
+      setError({ message: copy.finishJobOffline, retryable: false, status: 0 });
+      return;
+    }
+    setMutating(true);
+    mutateKey.current = retainOrCreateSetupIdempotencyKey(mutateKey.current);
+    const result = await runOwnerRequest<JobDetail>({
+      path: `/v1/jobs/${jobId}/finish`,
+      method: "POST",
+      body: {},
+      idempotencyKey: mutateKey.current,
+    });
+    setMutating(false);
+    if (result.ok) {
+      setJob(result.data);
+      return;
+    }
+    if (result.error.code === "IDEMPOTENCY_MISMATCH") {
+      mutateKey.current = retainOrCreateSetupIdempotencyKey(undefined);
+    }
+    setError({
+      message: result.error.message || copy.jobLifecycleActionError,
+      retryable: result.error.retryable || result.error.status === 0,
+      status: result.error.status,
+    });
+  }
+
   return (
     <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -389,6 +451,66 @@ export default function JobDetailScreen() {
                 style={styles.primary}
               >
                 <Text style={styles.primaryLabel}>{copy.createLinkedJob}</Text>
+              </Pressable>
+            ) : null}
+            {actions?.canFinish ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: lifecycleDisabled }}
+                disabled={lifecycleDisabled}
+                onPress={() => {
+                  if (auth.snapshot.status === "offline_cached") {
+                    setError({ message: copy.finishJobOffline, retryable: false, status: 0 });
+                    return;
+                  }
+                  Alert.alert(copy.finishJobTitle, copy.finishJobConfirm, [
+                    { text: copy.keepJob, style: "cancel" },
+                    { text: copy.finishJob, onPress: () => void finishJob() },
+                  ]);
+                }}
+                style={styles.primary}
+              >
+                <Text style={styles.primaryLabel}>{mutating ? copy.jobWorking : copy.finishJob}</Text>
+              </Pressable>
+            ) : null}
+            {actions?.canArchive ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: lifecycleDisabled }}
+                disabled={lifecycleDisabled}
+                onPress={() => {
+                  if (auth.snapshot.status === "offline_cached") {
+                    setError({ message: copy.archiveJobOffline, retryable: false, status: 0 });
+                    return;
+                  }
+                  Alert.alert(copy.archiveJobTitle, copy.archiveJobConfirm, [
+                    { text: copy.keepJob, style: "cancel" },
+                    { text: copy.archiveJob, onPress: () => void archiveJob(true) },
+                  ]);
+                }}
+                style={styles.secondary}
+              >
+                <Text style={styles.secondaryLabel}>{mutating ? copy.jobWorking : copy.archiveJob}</Text>
+              </Pressable>
+            ) : null}
+            {actions?.canRestore ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: lifecycleDisabled }}
+                disabled={lifecycleDisabled}
+                onPress={() => {
+                  if (auth.snapshot.status === "offline_cached") {
+                    setError({ message: copy.archiveJobOffline, retryable: false, status: 0 });
+                    return;
+                  }
+                  Alert.alert(copy.restoreJobTitle, copy.restoreJobConfirm, [
+                    { text: copy.keepJob, style: "cancel" },
+                    { text: copy.restoreJob, onPress: () => void archiveJob(false) },
+                  ]);
+                }}
+                style={styles.primary}
+              >
+                <Text style={styles.primaryLabel}>{mutating ? copy.jobWorking : copy.restoreJob}</Text>
               </Pressable>
             ) : null}
             {view.job?.current_quote ? (

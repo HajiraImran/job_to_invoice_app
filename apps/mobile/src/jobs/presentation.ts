@@ -23,6 +23,7 @@ export type JobDetail = JobSummary & {
   } | null;
   internal_notes: string;
   related_job_id?: string | null;
+  archived_from_state?: string | null;
   permitted_actions: string[];
   quote_draft: {
     id: string;
@@ -204,7 +205,7 @@ export function nextActionCopy(
   if (hasInvoice) {
     return "view_invoice";
   }
-  if (lifecycle === "canceled") {
+  if (lifecycle === "canceled" || lifecycle === "finished" || lifecycle === "archived") {
     return hasInvoice ? "view_invoice" : "none";
   }
   if (lifecycle === "invoiced") {
@@ -232,12 +233,18 @@ export function jobLifecycleActions(job: Pick<JobDetail, "permitted_actions" | "
   canDelete: boolean;
   canCancel: boolean;
   canCreateLinked: boolean;
+  canArchive: boolean;
+  canRestore: boolean;
+  canFinish: boolean;
   showReceivable: boolean;
 } {
   return {
     canDelete: job.permitted_actions.includes("delete_job"),
     canCancel: job.permitted_actions.includes("cancel_job"),
     canCreateLinked: job.permitted_actions.includes("create_linked_job"),
+    canArchive: job.permitted_actions.includes("archive_job"),
+    canRestore: job.permitted_actions.includes("restore_job"),
+    canFinish: job.permitted_actions.includes("finish_job"),
     showReceivable: job.lifecycle === "canceled" && Boolean(job.active_invoice || job.latest_invoice),
   };
 }

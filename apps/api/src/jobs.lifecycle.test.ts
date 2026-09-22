@@ -384,3 +384,371 @@ describe("JOB02 job cancel, delete, and linked create", () => {
     expect(issuedStill.rows[0]?.n).toBe(1);
   });
 });
+
+describe("JOB01 archive, restore, and finish", () => {
+  let stop: (() => Promise<void>) | undefined;
+  let pool: Pool | undefined;
+  let app: ReturnType<typeof buildApp> | undefined;
+  let sign: Awaited<ReturnType<typeof createJwtFixture>>["sign"];
+  let admin: Client | undefined;
+
+  const AUTH_C = "19191919-1919-4191-8191-191919191919";
+  const AUTH_D = "1a1a1a1a-1a1a-41a1-81a1-1a1a1a1a1a1a";
+  const JOB_F = "1b1b1b1b-1b1b-41b1-81b1-1b1b1b1b1b1b";
+  const JOB_P = "1c1c1c1c-1c1c-41c1-81c1-1c1c1c1c1c1c";
+  const JOB_D = "1d1d1d1d-1d1d-41d1-81d1-1d1d1d1d1d1d";
+
+  beforeAll(async () => {
+    const resolved = await resolveMigrationsUrl();
+    stop = resolved.stop;
+    admin = new Client({ connectionString: resolved.url });
+    await admin.connect();
+    await applyCleanMigrations(admin, repoRoot);
+    await admin.query("grant api_app to current_user");
+    pool = new Pool({ connectionString: resolved.url, max: 4 });
+    const fixture = await createJwtFixture();
+    sign = fixture.sign;
+    const env = loadEnv({
+      APP_ENV: "development",
+      PORTAL_ORIGIN: "http://localhost:3000",
+      APPROVAL_TOKEN_HASH_KEY: "token-key-material-ok",
+      APPROVAL_DELIVERY_ENCRYPTION_KEY: "delivery-key-material-ok",
+    });
+    app = buildApp({
+      env,
+      pool,
+      logOwnerMe: () => undefined,
+      verifyJwt: createJwtVerifier({
+        issuer: fixture.issuer,
+        audience: fixture.audience,
+        jwks: fixture.jwks,
+      }),
+    });
+  }, 60_000);
+
+  afterAll(async () => {
+    await app?.close();
+    await pool?.end();
+    await admin?.end();
+    await stop?.();
+  });
+
+  function running() {
+    if (!app || !admin) {
+      throw new Error("API test app did not start");
+    }
+    return { app, admin };
+  }
+
+  async function completeSetup(token: string, email: string) {
+    await running().app.inject({ method: "GET", url: "/v1/me", headers: { authorization: `Bearer ${token}` } });
+    return running().app.inject({
+      method: "POST",
+      url: "/v1/workspace",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+        "if-match": "1",
+      },
+      payload: { ...setupBody(), contact_email: email },
+    });
+  }
+
+  async function issueDirectInvoice(token: string, jobId: string) {
+    const created = await running().app.inject({
+      method: "POST",
+      url: "/v1/jobs",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        id: jobId,
+        customer_name: "Sam Patel",
+        title: "Deck repair",
+        no_site: true,
+        mode: "direct_invoice",
+      },
+    });
+    expect(created.statusCode).toBe(200);
+    const draftId = created.json().data.invoice_draft.id as string;
+    const saved = await running().app.inject({
+      method: "PATCH",
+      url: `/v1/drafts/${draftId}`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+        "if-match": String(created.json().data.invoice_draft.version),
+      },
+      payload: {
+        direct_invoice: true,
+        issue_acknowledgement: true,
+        due_date: "2026-10-05",
+        payment_instructions: "Due on receipt.",
+        notes: "",
+        customer_email: null,
+        lines: [quoteLine()],
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    const previewed = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${draftId}/preview`,
+      headers: { authorization: `Bearer ${token}`, "if-match": String(saved.json().data.version) },
+    });
+    expect(previewed.statusCode).toBe(200);
+    const issued = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${jobId}/issue-invoice`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: { preview_hash: previewed.json().data.preview_hash },
+    });
+    expect(issued.statusCode).toBe(202);
+    return issued.json().data as { id: string; number: string; total_cents: number };
+  }
+
+  it("finishes a settled invoice, archives the finished job, and restores it", async () => {
+    const token = await sign({ sub: AUTH_C, email: "owner.finish@example.com" });
+    const setup = await completeSetup(token, "owner.finish@example.com");
+    expect(setup.statusCode).toBe(200);
+    const invoice = await issueDirectInvoice(token, JOB_F);
+    const unfinished = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_F}/finish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: {},
+    });
+    expect(unfinished.statusCode).toBe(409);
+    expect(unfinished.json().error.code).toBe("JOB_NOT_FINISHABLE");
+    const paid = await running().app.inject({
+      method: "POST",
+      url: `/v1/invoices/${invoice.id}/payments`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: { amount_cents: invoice.total_cents, effective_date: "2026-09-21", method: "cash" },
+    });
+    expect(paid.statusCode).toBe(200);
+    expect(paid.json().data.payment_status).toBe("settled");
+    const finishKey = randomUUID();
+    const finished = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_F}/finish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": finishKey,
+      },
+      payload: {},
+    });
+    expect(finished.statusCode).toBe(200);
+    expect(finished.json().data.lifecycle).toBe("finished");
+    expect(finished.json().data.permitted_actions).toContain("archive_job");
+    expect(finished.json().data.permitted_actions).not.toContain("finish_job");
+    expect(finished.json().data.permitted_actions).not.toContain("cancel_job");
+    expect(finished.json().data.active_invoice.number).toMatch(/^INV-/);
+    const replay = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_F}/finish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": finishKey,
+      },
+      payload: {},
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data.lifecycle).toBe("finished");
+    const again = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_F}/finish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: {},
+    });
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error.code).toBe("JOB_NOT_FINISHABLE");
+    const finishedList = await running().app.inject({
+      method: "GET",
+      url: "/v1/jobs?state=finished",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(finishedList.statusCode).toBe(200);
+    expect(finishedList.json().data.items.some((item: { id: string }) => item.id === JOB_F)).toBe(true);
+    const archiveKey = randomUUID();
+    const archived = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_F}/archive`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": archiveKey,
+      },
+      payload: { archived: true },
+    });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json().data.lifecycle).toBe("archived");
+    expect(archived.json().data.archived_from_state).toBe("finished");
+    expect(archived.json().data.permitted_actions).toContain("restore_job");
+    expect(archived.json().data.permitted_actions).not.toContain("archive_job");
+    const archiveReplay = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_F}/archive`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": archiveKey,
+      },
+      payload: { archived: true },
+    });
+    expect(archiveReplay.statusCode).toBe(200);
+    expect(archiveReplay.json().data.lifecycle).toBe("archived");
+    const archivedList = await running().app.inject({
+      method: "GET",
+      url: "/v1/jobs?state=archived",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(archivedList.json().data.items.some((item: { id: string }) => item.id === JOB_F)).toBe(true);
+    const restored = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_F}/archive`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: { archived: false },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().data.lifecycle).toBe("finished");
+    expect(restored.json().data.archived_from_state).toBeNull();
+    const other = await sign({ sub: AUTH_D, email: "owner.other2@example.com" });
+    await completeSetup(other, "owner.other2@example.com");
+    const leak = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_F}/archive`,
+      headers: {
+        authorization: `Bearer ${other}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: { archived: true },
+    });
+    expect(leak.statusCode).toBe(404);
+    expect(JSON.stringify(leak.json())).not.toMatch(/Sam|deck/i);
+  });
+
+  it("refuses draft archive and pending-approval archive", async () => {
+    const token = await sign({ sub: AUTH_C, email: "owner.finish@example.com" });
+    const draft = await running().app.inject({
+      method: "POST",
+      url: "/v1/jobs",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        id: JOB_D,
+        customer_name: "Draft Customer",
+        title: "Unused draft",
+        no_site: true,
+        mode: "quote",
+      },
+    });
+    expect(draft.statusCode).toBe(200);
+    const draftArchive = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_D}/archive`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: { archived: true },
+    });
+    expect(draftArchive.statusCode).toBe(409);
+    expect(draftArchive.json().error.code).toBe("JOB_NOT_ARCHIVABLE");
+    const created = await running().app.inject({
+      method: "POST",
+      url: "/v1/jobs",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        id: JOB_P,
+        customer_name: "Riley Chen",
+        title: "Kitchen faucet",
+        no_site: true,
+        mode: "quote",
+      },
+    });
+    expect(created.statusCode).toBe(200);
+    const opened = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_P}/quote`,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": randomUUID() },
+    });
+    expect(opened.statusCode).toBe(200);
+    const saved = await running().app.inject({
+      method: "PATCH",
+      url: `/v1/drafts/${opened.json().data.id}`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+        "if-match": String(opened.json().data.version),
+      },
+      payload: { notes: "Replace cartridge.", terms: "Net 14.", expiry_days: 14, lines: [quoteLine()] },
+    });
+    expect(saved.statusCode).toBe(200);
+    const previewed = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${saved.json().data.id}/preview`,
+      headers: { authorization: `Bearer ${token}`, "if-match": String(saved.json().data.version) },
+    });
+    expect(previewed.statusCode).toBe(200);
+    const published = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${saved.json().data.id}/publish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+        "if-match": String(saved.json().data.version),
+      },
+      payload: { preview_hash: previewed.json().data.preview_hash, recipient_email: "customer@example.com" },
+    });
+    expect(published.statusCode).toBe(202);
+    const pendingArchive = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_P}/archive`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+      },
+      payload: { archived: true },
+    });
+    expect(pendingArchive.statusCode).toBe(409);
+    expect(pendingArchive.json().error.code).toBe("APPROVAL_PENDING");
+  });
+});

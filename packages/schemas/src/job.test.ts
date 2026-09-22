@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseJobArchive,
   parseJobCreate,
   parseJobListQuery,
   analyticsModeForJob,
@@ -105,6 +106,13 @@ describe("job list query", () => {
       ok: true,
       value: { cursor: null, limit: JOB_LIST_DEFAULT_LIMIT, search: null, state: "open" },
     });
+  });
+
+  it("accepts archive or restore and rejects unknown fields", () => {
+    expect(parseJobArchive({ archived: true }).ok).toBe(true);
+    expect(parseJobArchive({ archived: false }).ok).toBe(true);
+    expect(parseJobArchive({ archived: true, extra: true }).ok).toBe(false);
+    expect(parseJobArchive({}).ok).toBe(false);
   });
 
   it("rejects unknown filters and oversized limits", () => {
