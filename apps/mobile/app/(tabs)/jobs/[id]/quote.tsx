@@ -27,6 +27,8 @@ import {
   type QuoteLineForm,
 } from "../../../../src/quotes/form.ts";
 import { presentQuoteEditor, presentQuoteSaveLabel, type QuoteSaveStatus } from "../../../../src/quotes/presentation.ts";
+import { lineFromCatalogueItem } from "../../../../src/items/form.ts";
+import { CatalogueItemPicker } from "../../../../src/items/picker.tsx";
 import { persistDraftLocally, drainOutbox } from "../../../../src/drafts/persist.ts";
 import { getLocalDraftByJob } from "../../../../src/drafts/repository.ts";
 import { reconcileServerDraftWithLocal } from "../../../../src/drafts/reconcile.ts";
@@ -69,6 +71,7 @@ export default function QuoteEditorScreen() {
   const [saveStatus, setSaveStatus] = useState<QuoteSaveStatus>("idle");
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number; code?: string } | undefined>();
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [pickerOpen, setPickerOpen] = useState(false);
   const openKey = useRef<string | undefined>(undefined);
   const saveKey = useRef<string | undefined>(undefined);
   const versionRef = useRef(1);
@@ -624,6 +627,23 @@ export default function QuoteEditorScreen() {
             >
               <Text style={styles.secondaryLabel}>{copy.quoteAddLine}</Text>
             </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setPickerOpen(true)}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryLabel}>{copy.quoteUseSavedItem}</Text>
+            </Pressable>
+            <CatalogueItemPicker
+              visible={pickerOpen}
+              onClose={() => setPickerOpen(false)}
+              onPick={(item) =>
+                updateForm({
+                  ...values,
+                  lines: [...values.lines, lineFromCatalogueItem(item, secureRandomUUID())],
+                })
+              }
+            />
 
             <Text style={styles.label}>{copy.quoteNotes}</Text>
             <TextInput

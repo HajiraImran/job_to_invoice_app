@@ -24,6 +24,8 @@ import {
   type QuoteDraftRecord,
   type QuoteFormValues,
 } from "../quotes/form.ts";
+import { lineFromCatalogueItem } from "../items/form.ts";
+import { CatalogueItemPicker } from "../items/picker.tsx";
 import { retainOrCreateSetupIdempotencyKey } from "../setup/idempotency.ts";
 import { useAuth } from "../session/AuthProvider.tsx";
 import { colors, space, type } from "../theme.ts";
@@ -74,6 +76,7 @@ export function DirectInvoiceScreen({ jobId }: { jobId: string }) {
   const [issuing, setIssuing] = useState(false);
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number; code?: string } | undefined>();
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [pickerOpen, setPickerOpen] = useState(false);
   const saveKey = useRef<string | undefined>(undefined);
   const issueKey = useRef<string | undefined>(undefined);
   const versionRef = useRef(1);
@@ -386,6 +389,24 @@ export function DirectInvoiceScreen({ jobId }: { jobId: string }) {
             >
               <Text style={styles.secondaryLabel}>{copy.quoteAddLine}</Text>
             </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setPickerOpen(true)}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryLabel}>{copy.quoteUseSavedItem}</Text>
+            </Pressable>
+            <CatalogueItemPicker
+              visible={pickerOpen}
+              onClose={() => setPickerOpen(false)}
+              onPick={(item) => {
+                dirtyRef.current = true;
+                setValues((current) => ({
+                  ...current,
+                  lines: [...current.lines, lineFromCatalogueItem(item, secureRandomUUID())],
+                }));
+              }}
+            />
             <Text style={styles.section}>{copy.quoteTotal}</Text>
             <Text style={styles.body}>{totals.ok ? formatUsdCents(totals.totals.total_cents) : copy.invoiceEmpty}</Text>
             <Text style={styles.section}>{copy.invoiceDueDate}</Text>

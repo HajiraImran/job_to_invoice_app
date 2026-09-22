@@ -133,10 +133,11 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | PATCH /customers/{id} | Owner | Mutable contacts, If-Match |
 | POST /customers/{id}/archive | Owner | archived boolean |
 | DELETE /customers/{id} | Owner | Unreferenced only; else 409 |
-| GET /items | Owner | Catalogue search/page |
-| POST /items | Owner | Catalogue fields |
-| PATCH /items/{id} | Owner | Versioned defaults |
-| POST /items/{id}/archive | Owner | archived boolean |
+| GET /items | Owner | Catalogue search/page. **Implemented.** Blank query lists most recently updated active items. |
+| POST /items | Owner | Catalogue fields. **Implemented.** Idempotency-Key; integer cents; client UUID. |
+| GET /items/{id} | Owner | Member read for S20 edit. **Implemented.** Cross-tenant 404. |
+| PATCH /items/{id} | Owner | Versioned defaults. **Implemented.** If-Match. |
+| POST /items/{id}/archive | Owner | archived boolean. **Implemented.** If-Match. |
 | GET /jobs | Owner | Search, state, archive, page |
 | POST /jobs | Owner | Client UUID, customer, title, site, mode; draft |
 | GET /jobs/{id} | Owner | Overview, permitted_actions, scope, ledger summary |

@@ -77,7 +77,7 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA12 | Trial expires during pending approval | Customer can approve; owner can finish | Integration |
 | QA13 | Paid owner downgrades with jobs | Completion/export; new-job gate | E2E |
 | QA14 | Reset customer/site of published job | Blocked; new job required | API |
-| QA15 | Edit catalogue price and business address | Issued docs unchanged | Integration |
+| QA15 | Edit catalogue price and business address | Issued docs unchanged | Integration; apps/api/src/items.test.ts catalogue price edit leaves canonical bytes and issued line price unchanged. Business-address half remains S22. Not VERIFIED on device. Hosted APPLY_0020 not applied. |
 | QA16 | Publish replacement while old pending | Old superseded; one pending index | Concurrency |
 | QA17 | Old recipient follows replaced link | Cannot decide; correct message. Revoke-after-approve leaves `approval_decisions` intact (TX06). | Portal | Local: `apps/api/src/requests.test.ts` + `openapi/v1.json` replace-link. Physical Android development build 2026-09-21: previous link rejected after replace-link; newest link opened the correct quote. TX06 revoke-after-approve, iOS/TestFlight, and production SPF/DKIM unverified. |
 | QA18 | Link forwarded to unrelated person | No scope without bound-email code | Portal |

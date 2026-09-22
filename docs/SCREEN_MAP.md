@@ -131,7 +131,7 @@ Implemented route: `/(tabs)/jobs/[id]/quote`. Server-persisted editing draft; 50
 
 Description, quantity, unit, unit price, fixed discount, tax rate. Live subtotal/net/tax. Optional saved-item picker (copy, never live-link).
 
-Line fields are edited on the S09 cards in this slice. Catalogue copy-on-use is not in this slice.
+Line fields are edited on the S09 cards. Use saved item copies catalogue defaults into a new line and never stores a live catalogue id.
 
 ### S11 Preview and publish
 
@@ -186,6 +186,8 @@ Search/list, create, detail with jobs. Archive not destructive when referenced.
 ### S20 Items
 
 Search/list, defaults, add/edit/archive. Changes never alter existing documents.
+
+Implemented route: `/(tabs)/items`. Workspace setup seeds five zero-price examples. Add: `/(tabs)/items/new`. Edit/archive: `/(tabs)/items/[id]`. Online-only mutations; never queued in SYNC01 outbox. Not VERIFIED on device.
 
 ### S21 Subscription
 

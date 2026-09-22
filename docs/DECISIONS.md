@@ -519,3 +519,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | Additive functions only; quote issue path unchanged |
 | Escalation category | architecture |
 
+
+### D-026 — Catalogue most-recently-used uses updated_at; GET /items/{id} is a member read
+
+| Field | Value |
+| --- | --- |
+| ID | D-026 |
+| Date | 2026-09-22 |
+| Status | Resolved |
+| Decision | CAT01 "most recently used" lists catalogue items by `updated_at desc, id desc` because the PRD `catalogue_items` table has no `last_used_at`. Copy-on-use is a client field copy into a new draft line and never stores a live catalogue FK. `GET /v1/items/{id}` is the member read for S20 edit; it is not a new command. Mutations are online-only and are not queued in SYNC01. QA15 in this slice covers catalogue price edits only; business-address updates remain S22. |
+| Reason | The PRD API inventory lists GET/POST/PATCH/archive. A use endpoint would invent a route. `updated_at` already moves on create, edit, and restore. |
+| Evidence | `supabase/migrations/0020_catalogue_items.sql`; `apps/api/src/items.ts`; `apps/mobile/src/items/form.ts` |
+| Owner | Engineering lead |
+| PRD implication | CAT01 / S20 / QA15 catalogue half. |
+| Impacted requirement IDs | CAT01, S20, S10, QA15 |
+| Impacted test IDs | `apps/api/src/items.test.ts`; `packages/schemas/src/item.test.ts`; `apps/mobile/src/items/form.test.ts`; `supabase/tests/0021_catalogue_items.sql` |
+| Migration implications | `0020_catalogue_items.sql`; hosted confirmation `APPLY_0020` |
+| Reversible | Additive table and functions |
+| Escalation category | none |
