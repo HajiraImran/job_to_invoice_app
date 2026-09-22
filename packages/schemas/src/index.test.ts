@@ -105,6 +105,8 @@ describe("redaction", () => {
     expect(API_ERROR_CODES.AUTHENTICATION_REQUIRED).toBe("AUTHENTICATION_REQUIRED");
     expect(API_ERROR_CODES.ENTRY_ALREADY_REVERSED).toBe("ENTRY_ALREADY_REVERSED");
     expect(API_ERROR_CODES.LEDGER_BLOCKS_VOID).toBe("LEDGER_BLOCKS_VOID");
+    expect(API_ERROR_CODES.JOB_NOT_DELETABLE).toBe("JOB_NOT_DELETABLE");
+    expect(API_ERROR_CODES.JOB_NOT_CANCELABLE).toBe("JOB_NOT_CANCELABLE");
   });
 
   it("redacts nested sensitive keys and rejects unsafe analytics properties", () => {

@@ -1,5 +1,5 @@
 import { US_STATES } from "@job-to-invoice/schemas";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
@@ -31,6 +31,9 @@ export default function CreateJobScreen() {
   const [values, setValues] = useState<JobFormValues>(emptyJobForm);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | undefined>();
+  const params = useLocalSearchParams<{ relatedJobId?: string | string[] }>();
+  const relatedJobId =
+    typeof params.relatedJobId === "string" ? params.relatedJobId : Array.isArray(params.relatedJobId) ? (params.relatedJobId[0] ?? "") : "";
   const [submitting, setSubmitting] = useState(false);
   const jobId = useRef<string | undefined>(undefined);
   jobId.current = retainOrCreateSetupIdempotencyKey(jobId.current);
@@ -42,7 +45,10 @@ export default function CreateJobScreen() {
     setValues((current) => ({ ...current, [key]: value }));
   }, []);
 
-  const parsed = useMemo(() => jobRequestFromForm(values, jobId.current ?? ""), [values]);
+  const parsed = useMemo(
+    () => jobRequestFromForm(values, jobId.current ?? "", relatedJobId || undefined),
+    [relatedJobId, values],
+  );
 
   function focusField(field?: string) {
     if (!field) {
@@ -180,8 +186,9 @@ export default function CreateJobScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Text accessibilityRole="header" style={styles.title}>
-          {copy.createJob}
+          {relatedJobId ? copy.createLinkedJob : copy.createJob}
         </Text>
+        {relatedJobId ? <Text style={styles.banner}>{copy.linkedJobHint}</Text> : null}
         {auth.snapshot.status === "offline_cached" ? (
           <Text accessibilityLiveRegion="polite" style={styles.banner}>
             {copy.offlineCached}

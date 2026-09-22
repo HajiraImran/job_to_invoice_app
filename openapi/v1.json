@@ -403,6 +403,75 @@
           "404": { "description": "Unknown or cross-tenant job" },
           "422": { "description": "Invalid job id" }
         }
+      },
+      "delete": {
+        "summary": "Delete a draft job that has no published document",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Draft deleted" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant job" },
+          "409": { "description": "Published or otherwise non-deletable job, or idempotency mismatch" },
+          "422": { "description": "Invalid job id or Idempotency-Key" }
+        }
+      }
+    },
+    "/v1/jobs/{jobId}/cancel": {
+      "post": {
+        "summary": "Cancel an active or invoiced job with a required reason",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["reason"],
+                "properties": {
+                  "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Job canceled; pending approvals withdrawn" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant job" },
+          "409": { "description": "Job not cancelable, already canceled, or idempotency mismatch" },
+          "422": { "description": "Missing reason or invalid job id" }
+        }
       }
     },
     "/v1/jobs/{jobId}/changes": {
@@ -1390,7 +1459,8 @@
           "no_site": { "type": "boolean" },
           "site_address": { "type": ["object", "null"], "additionalProperties": false },
           "internal_notes": { "type": ["string", "null"], "maxLength": 4000 },
-          "mode": { "type": "string", "enum": ["quote", "direct_invoice"] }
+          "mode": { "type": "string", "enum": ["quote", "direct_invoice"] },
+          "related_job_id": { "type": ["string", "null"], "format": "uuid" }
         }
       },
       "QuoteDraftPayload": {

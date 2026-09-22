@@ -117,7 +117,7 @@ Customer/site, scope total, current step, documents, activity. Next action varie
 
 Canceled jobs that retain a receivable must show it.
 
-Implemented route: `/(tabs)/jobs/[id]`. Quote-mode drafts show Create/Open quote. After publish, S08 shows quote lifecycle (`issued` / `accepted` / `declined` / `expired` / `superseded` / `withdrawn`) from GET `/v1/jobs/{id}` on focus refresh. Declined/expired/superseded quotes can open a revision. After an unpaid void, S08 offers view of the voided invoice and Create replacement. Direct-invoice drafts show Create invoice and do not enter the quote editor. No fake ledger totals.
+Implemented route: `/(tabs)/jobs/[id]`. Quote-mode drafts show Create/Open quote. After publish, S08 shows quote lifecycle (`issued` / `accepted` / `declined` / `expired` / `superseded` / `withdrawn`) from GET `/v1/jobs/{id}` on focus refresh. Declined/expired/superseded quotes can open a revision. After an unpaid void, S08 offers view of the voided invoice and Create replacement. Direct-invoice drafts show Create invoice and do not enter the quote editor. Draft jobs can be deleted. Active and invoiced jobs can be canceled with a reason; pending approvals are withdrawn. Canceled jobs offer Create linked job and show a remaining receivable. No fake ledger totals. Archive/finish remain later.
 
 ### S09 Quote editor
 

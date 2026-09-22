@@ -65,6 +65,22 @@ describe("job create contract", () => {
     expect(parseJobCreate(validJob({ completion_right: true })).ok).toBe(false);
   });
 
+  it("accepts an optional related_job_id for a linked new job", () => {
+    const parsed = parseJobCreate(
+      validJob({ related_job_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.related_job_id).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    }
+    expect(parseJobCreate(validJob({ related_job_id: "not-a-uuid" })).ok).toBe(false);
+    const omitted = parseJobCreate(validJob());
+    expect(omitted.ok).toBe(true);
+    if (omitted.ok) {
+      expect(omitted.value.related_job_id).toBeNull();
+    }
+  });
+
   it("maps direct invoice mode for analytics without customer text", () => {
     expect(analyticsModeForJob("direct_invoice")).toBe("direct");
     expect(analyticsModeForJob("quote")).toBe("quote");

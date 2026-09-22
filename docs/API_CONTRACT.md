@@ -139,13 +139,13 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | PATCH /items/{id} | Owner | Versioned defaults. **Implemented.** If-Match. |
 | POST /items/{id}/archive | Owner | archived boolean. **Implemented.** If-Match. |
 | GET /jobs | Owner | Search, state, archive, page |
-| POST /jobs | Owner | Client UUID, customer, title, site, mode; draft |
+| POST /jobs | Owner | Client UUID, customer, title, site, mode; draft. Optional `related_job_id` when the source job is canceled (JOB02). **Implemented.** |
 | GET /jobs/{id} | Owner | Overview, permitted_actions, scope, ledger summary |
 | PATCH /jobs/{id} | Owner | Title/notes; customer/site only before publication |
 | POST /jobs/{id}/archive | Owner | Archive/restore; no pending request |
-| POST /jobs/{id}/cancel | Owner | Reason; withdraw pending; retain receivable |
+| POST /jobs/{id}/cancel | Owner | Reason; withdraw pending; retain receivable. **Implemented:** `POST /v1/jobs/{jobId}/cancel`; Idempotency-Key; EMAIL08 on pending approval withdraw only. |
 | POST /jobs/{id}/finish | Owner | Settlement/credit check |
-| DELETE /jobs/{id} | Owner | Draft-only |
+| DELETE /jobs/{id} | Owner | Draft-only. **Implemented:** `DELETE /v1/jobs/{jobId}`; Idempotency-Key; published jobs 409 JOB_NOT_DELETABLE. |
 | POST /jobs/{id}/quote | Owner | Draft or next revision |
 | POST /jobs/{id}/changes | Owner | Create/reuse editing change draft. **Implemented.** Eligible after accepted quote and before any invoice. Integer-cent lines are saved via PATCH `/drafts/{id}`. |
 | GET /drafts/{id} | Owner | Payload and version |

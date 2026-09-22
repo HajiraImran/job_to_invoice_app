@@ -1,10 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { encryptRecipientEmail, encryptUtf8, parseVersionedSecret } from "@job-to-invoice/config";
 import {
   isClientUuid,
+  parseEmptyObjectBody,
   parseJobCreate,
   parseJobListQuery,
   parseOwnerEmail,
+  parseWithdrawBody,
   type JobListState,
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
@@ -41,6 +44,7 @@ type JobRow = {
   lifecycle: string;
   mode: string;
   internal_notes: string;
+  related_job_id?: string | null;
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
@@ -192,6 +196,9 @@ function jobDetail(row: JobRow) {
     !row.active_invoice_id &&
     !row.latest_invoice_id;
   const canViewChange = Boolean(row.latest_change_id);
+  const canDeleteJob = row.lifecycle === "draft";
+  const canCancelJob = row.lifecycle === "active" || row.lifecycle === "invoiced";
+  const canCreateLinkedJob = row.lifecycle === "canceled";
   return {
     id: row.id,
     customer_id: row.customer_id,
@@ -202,6 +209,7 @@ function jobDetail(row: JobRow) {
     lifecycle: row.lifecycle,
     mode: row.mode,
     internal_notes: row.internal_notes,
+    related_job_id: row.related_job_id ?? null,
     version: row.version,
     created_at: asIso(row.created_at),
     updated_at: asIso(row.updated_at),
@@ -211,6 +219,9 @@ function jobDetail(row: JobRow) {
       ...(canReplaceInvoice ? ["create_replacement"] : []),
       ...(canCreateChange ? ["create_change"] : []),
       ...(canViewChange ? ["view_change"] : []),
+      ...(canDeleteJob ? ["delete_job"] : []),
+      ...(canCancelJob ? ["cancel_job"] : []),
+      ...(canCreateLinkedJob ? ["create_linked_job"] : []),
     ],
     quote_draft:
       row.quote_draft_id && row.quote_draft_version
@@ -328,9 +339,82 @@ function accountGate(row: ProvisionRow): "ok" | "suspended" | "locked" | "setup"
   return "ok";
 }
 
+function loadDeliverySecret(env?: Record<string, unknown>) {
+  const raw = typeof env?.APPROVAL_DELIVERY_ENCRYPTION_KEY === "string" ? env.APPROVAL_DELIVERY_ENCRYPTION_KEY : undefined;
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return parseVersionedSecret("APPROVAL_DELIVERY_ENCRYPTION_KEY", raw);
+  } catch {
+    return undefined;
+  }
+}
+
+const JOB_DETAIL_SQL = `select j.id, j.workspace_id, j.customer_id, c.name as customer_name, j.title, j.site_address_json,
+                  j.no_site, j.lifecycle, j.mode, j.internal_notes, j.related_job_id, j.version, j.created_at, j.updated_at,
+                  d.id as quote_draft_id, d.version as quote_draft_version, d.payload_json as quote_draft_payload,
+                  idr.id as invoice_draft_id, idr.version as invoice_draft_version, idr.payload_json as invoice_draft_payload,
+                  q.id as current_quote_id, q.number as current_quote_number, q.revision_no as current_quote_revision,
+                  q.lifecycle as current_quote_lifecycle, q.total_cents as current_quote_total,
+                  inv.id as active_invoice_id, inv.number as active_invoice_number, inv.revision_no as active_invoice_revision,
+                  inv.lifecycle as active_invoice_lifecycle, inv.total_cents as active_invoice_total, inv.due_date as active_invoice_due,
+                  latest_inv.id as latest_invoice_id, latest_inv.number as latest_invoice_number,
+                  latest_inv.revision_no as latest_invoice_revision, latest_inv.lifecycle as latest_invoice_lifecycle,
+                  latest_inv.total_cents as latest_invoice_total, latest_inv.due_date as latest_invoice_due,
+                  cd.id as change_draft_id, cd.version as change_draft_version, cd.payload_json as change_draft_payload,
+                  latest_chg.id as latest_change_id, latest_chg.number as latest_change_number,
+                  latest_chg.revision_no as latest_change_revision, latest_chg.lifecycle as latest_change_lifecycle,
+                  latest_chg.total_cents as latest_change_total, latest_chg.request_state as latest_change_request_state
+           from commercial.jobs j
+           join commercial.customers c
+             on c.workspace_id = j.workspace_id and c.id = j.customer_id
+           left join commercial.document_drafts d
+             on d.workspace_id = j.workspace_id
+            and d.job_id = j.id
+            and d.kind = 'quote'
+            and d.draft_state = 'editing'
+           left join commercial.document_drafts idr
+             on idr.workspace_id = j.workspace_id
+            and idr.job_id = j.id
+            and idr.kind = 'invoice'
+            and idr.draft_state = 'editing'
+           left join commercial.documents q
+             on q.workspace_id = j.workspace_id
+            and q.id = j.current_quote_id
+           left join commercial.documents inv
+             on inv.workspace_id = j.workspace_id
+            and inv.id = j.active_invoice_id
+           left join lateral (
+             select d2.id, d2.number, d2.revision_no, d2.lifecycle, d2.total_cents, d2.due_date
+             from commercial.documents d2
+             where d2.workspace_id = j.workspace_id and d2.job_id = j.id and d2.kind = 'invoice'
+             order by d2.issued_at desc, d2.id desc
+             limit 1
+           ) latest_inv on true
+           left join commercial.document_drafts cd
+             on cd.workspace_id = j.workspace_id
+            and cd.job_id = j.id
+            and cd.kind = 'change'
+            and cd.draft_state = 'editing'
+           left join lateral (
+             select d3.id, d3.number, d3.revision_no, d3.lifecycle, d3.total_cents,
+                    case
+                      when d3.lifecycle = 'issued' then 'pending'
+                      when d3.lifecycle = 'accepted' then 'approved'
+                      when d3.lifecycle = 'declined' then 'declined'
+                      else d3.lifecycle
+                    end as request_state
+             from commercial.documents d3
+             where d3.workspace_id = j.workspace_id and d3.job_id = j.id and d3.kind = 'change'
+             order by d3.issued_at desc, d3.id desc
+             limit 1
+           ) latest_chg on true
+           where j.id = $1`;
+
 export function registerJobRoutes(
   app: FastifyInstance,
-  deps: { verifyJwt?: JwtVerifier; pool?: Pool },
+  deps: { verifyJwt?: JwtVerifier; pool?: Pool; env?: Record<string, unknown> },
   options: { limiterAllow: (key: string) => { ok: true } | { ok: false; retryAfterSec: number } },
 ): void {
   async function requireOwner(
@@ -533,10 +617,10 @@ export function registerJobRoutes(
         }
         const created = await client.query<JobRow>(
           `select id, workspace_id, customer_id, customer_name, title, site_address_json, no_site,
-                  lifecycle, mode, internal_notes, version, created_at, updated_at, replayed
+                  lifecycle, mode, internal_notes, related_job_id, version, created_at, updated_at, replayed
            from commercial.create_job(
              $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid,
-             $6, $7, $8::jsonb, $9::boolean, $10, $11
+             $6, $7, $8::jsonb, $9::boolean, $10, $11, $12::uuid
            )`,
           [
             provisioned.actor_id,
@@ -550,6 +634,7 @@ export function registerJobRoutes(
             parsed.value.no_site,
             parsed.value.internal_notes,
             parsed.value.mode,
+            parsed.value.related_job_id,
           ],
         );
         const job = created.rows[0];
@@ -607,6 +692,9 @@ export function registerJobRoutes(
       if (code === "P0044") {
         return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "This job cannot be invoiced yet.");
       }
+      if (code === "P0054") {
+        return sendFail(request, reply, API_ERROR_CODES.RELATED_JOB_UNAVAILABLE, "Create a linked new job from a canceled job.");
+      }
       if (code === "23514" || code === "22023") {
         return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
       }
@@ -631,69 +719,7 @@ export function registerJobRoutes(
           owner.workspace_id,
           params.jobId,
         ]);
-        const result = await client.query<JobRow>(
-          `select j.id, j.workspace_id, j.customer_id, c.name as customer_name, j.title, j.site_address_json,
-                  j.no_site, j.lifecycle, j.mode, j.internal_notes, j.version, j.created_at, j.updated_at,
-                  d.id as quote_draft_id, d.version as quote_draft_version, d.payload_json as quote_draft_payload,
-                  idr.id as invoice_draft_id, idr.version as invoice_draft_version, idr.payload_json as invoice_draft_payload,
-                  q.id as current_quote_id, q.number as current_quote_number, q.revision_no as current_quote_revision,
-                  q.lifecycle as current_quote_lifecycle, q.total_cents as current_quote_total,
-                  inv.id as active_invoice_id, inv.number as active_invoice_number, inv.revision_no as active_invoice_revision,
-                  inv.lifecycle as active_invoice_lifecycle, inv.total_cents as active_invoice_total, inv.due_date as active_invoice_due,
-                  latest_inv.id as latest_invoice_id, latest_inv.number as latest_invoice_number,
-                  latest_inv.revision_no as latest_invoice_revision, latest_inv.lifecycle as latest_invoice_lifecycle,
-                  latest_inv.total_cents as latest_invoice_total, latest_inv.due_date as latest_invoice_due,
-                  cd.id as change_draft_id, cd.version as change_draft_version, cd.payload_json as change_draft_payload,
-                  latest_chg.id as latest_change_id, latest_chg.number as latest_change_number,
-                  latest_chg.revision_no as latest_change_revision, latest_chg.lifecycle as latest_change_lifecycle,
-                  latest_chg.total_cents as latest_change_total, latest_chg.request_state as latest_change_request_state
-           from commercial.jobs j
-           join commercial.customers c
-             on c.workspace_id = j.workspace_id and c.id = j.customer_id
-           left join commercial.document_drafts d
-             on d.workspace_id = j.workspace_id
-            and d.job_id = j.id
-            and d.kind = 'quote'
-            and d.draft_state = 'editing'
-           left join commercial.document_drafts idr
-             on idr.workspace_id = j.workspace_id
-            and idr.job_id = j.id
-            and idr.kind = 'invoice'
-            and idr.draft_state = 'editing'
-           left join commercial.documents q
-             on q.workspace_id = j.workspace_id
-            and q.id = j.current_quote_id
-           left join commercial.documents inv
-             on inv.workspace_id = j.workspace_id
-            and inv.id = j.active_invoice_id
-           left join lateral (
-             select d2.id, d2.number, d2.revision_no, d2.lifecycle, d2.total_cents, d2.due_date
-             from commercial.documents d2
-             where d2.workspace_id = j.workspace_id and d2.job_id = j.id and d2.kind = 'invoice'
-             order by d2.issued_at desc, d2.id desc
-             limit 1
-           ) latest_inv on true
-           left join commercial.document_drafts cd
-             on cd.workspace_id = j.workspace_id
-            and cd.job_id = j.id
-            and cd.kind = 'change'
-            and cd.draft_state = 'editing'
-           left join lateral (
-             select d3.id, d3.number, d3.revision_no, d3.lifecycle, d3.total_cents,
-                    case
-                      when d3.lifecycle = 'issued' then 'pending'
-                      when d3.lifecycle = 'accepted' then 'approved'
-                      when d3.lifecycle = 'declined' then 'declined'
-                      else d3.lifecycle
-                    end as request_state
-             from commercial.documents d3
-             where d3.workspace_id = j.workspace_id and d3.job_id = j.id and d3.kind = 'change'
-             order by d3.issued_at desc, d3.id desc
-             limit 1
-           ) latest_chg on true
-           where j.id = $1`,
-          [params.jobId],
-        );
+        const result = await client.query<JobRow>(JOB_DETAIL_SQL, [params.jobId]);
         return result.rows[0];
       });
       if (!row) {
@@ -701,6 +727,151 @@ export function registerJobRoutes(
       }
       return success(request.id, jobDetail(row));
     } catch {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
+  app.delete("/v1/jobs/:jobId", async (request, reply) => {
+    const owner = await requireOwner(request, reply);
+    if (!owner || !deps.pool) {
+      return;
+    }
+    const params = request.params as { jobId?: string };
+    if (!isClientUuid(params.jobId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "jobId", message: "A job UUID is required." }],
+      });
+    }
+    const empty = parseEmptyObjectBody(request.body);
+    if (!empty.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: empty.field_errors,
+      });
+    }
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const hash = requestHash({ job_id: params.jobId, action: "delete" });
+    try {
+      const row = await withApiRole(deps.pool, async (client) => {
+        const result = await client.query<{ id: string; deleted: boolean; replayed: boolean }>(
+          `select id, deleted, replayed
+           from commercial.delete_draft_job($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid)`,
+          [owner.actor_id, key, hash, request.id, params.jobId],
+        );
+        return result.rows[0];
+      });
+      if (!row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
+      }
+      return success(request.id, { id: row.id, deleted: row.deleted, replayed: row.replayed });
+    } catch (error) {
+      const code = pgCode(error);
+      if (code === "P0005") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
+      }
+      if (code === "P0004") {
+        return sendFail(request, reply, API_ERROR_CODES.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with a different body.");
+      }
+      if (code === "P0003") {
+        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (code === "P0052") {
+        return sendFail(request, reply, API_ERROR_CODES.JOB_NOT_DELETABLE, "Published jobs cannot be deleted.");
+      }
+      if (code === "22023") {
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
+      }
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+  });
+
+  app.post("/v1/jobs/:jobId/cancel", async (request, reply) => {
+    const owner = await requireOwner(request, reply);
+    if (!owner || !deps.pool) {
+      return;
+    }
+    const params = request.params as { jobId?: string };
+    if (!isClientUuid(params.jobId)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: [{ field: "jobId", message: "A job UUID is required." }],
+      });
+    }
+    const parsed = parseWithdrawBody(request.body);
+    if (!parsed.ok) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
+        field_errors: parsed.field_errors,
+      });
+    }
+    const key = idempotencyKey(request);
+    if (!key || !UUID.test(key)) {
+      return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Idempotency-Key UUID is required.", {
+        field_errors: [{ field: "Idempotency-Key", message: "UUID required" }],
+      });
+    }
+    const delivery = loadDeliverySecret(deps.env);
+    if (!delivery) {
+      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
+    }
+    const hash = requestHash({ job_id: params.jobId, action: "cancel", reason: parsed.value.reason });
+    const payload = encryptUtf8(JSON.stringify({ kind: "withdrawn" }), delivery);
+    const packedEmail = encryptRecipientEmail("placeholder@invalid.example", delivery);
+    try {
+      const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
+        const canceled = await client.query<{ id: string; lifecycle: string; version: number; replayed: boolean }>(
+          `select id, lifecycle, version, replayed
+           from commercial.cancel_job(
+             $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6,
+             $7::bytea, $8, $9::integer, $10::bytea, $11::bytea
+           )`,
+          [
+            owner.actor_id,
+            key,
+            hash,
+            request.id,
+            params.jobId,
+            parsed.value.reason,
+            Buffer.concat([packedEmail.nonce, packedEmail.ciphertext]),
+            payload.algorithm,
+            payload.keyVersion,
+            payload.nonce,
+            payload.ciphertext,
+          ],
+        );
+        const result = canceled.rows[0];
+        if (!result) {
+          return undefined;
+        }
+        const detail = await client.query<JobRow>(JOB_DETAIL_SQL, [result.id]);
+        if (!detail.rows[0]) {
+          return undefined;
+        }
+        return { ...detail.rows[0], replayed: result.replayed };
+      });
+      if (!row) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
+      }
+      return success(request.id, jobDetail(row));
+    } catch (error) {
+      const code = pgCode(error);
+      if (code === "P0005") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
+      }
+      if (code === "P0004") {
+        return sendFail(request, reply, API_ERROR_CODES.IDEMPOTENCY_MISMATCH, "Idempotency key was reused with a different body.");
+      }
+      if (code === "P0003") {
+        return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (code === "P0053") {
+        return sendFail(request, reply, API_ERROR_CODES.JOB_NOT_CANCELABLE, "This job cannot be canceled.");
+      }
+      if (code === "22023") {
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
+      }
       return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
     }
   });

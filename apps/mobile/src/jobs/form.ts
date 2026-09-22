@@ -29,7 +29,11 @@ export function emptyJobForm(): JobFormValues {
   };
 }
 
-export function jobRequestFromForm(values: JobFormValues, id: string): ReturnType<typeof parseJobCreate> {
+export function jobRequestFromForm(
+  values: JobFormValues,
+  id: string,
+  relatedJobId?: string,
+): ReturnType<typeof parseJobCreate> {
   const body: Record<string, unknown> = {
     id,
     customer_name: values.customer_name,
@@ -38,6 +42,9 @@ export function jobRequestFromForm(values: JobFormValues, id: string): ReturnTyp
     internal_notes: values.internal_notes,
     mode: values.mode,
   };
+  if (relatedJobId) {
+    body.related_job_id = relatedJobId;
+  }
   if (!values.no_site) {
     body.site_address = {
       line1: values.line1,

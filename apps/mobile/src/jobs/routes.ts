@@ -6,6 +6,10 @@ export function createJobPath(): string {
   return "/(tabs)/jobs/new";
 }
 
+export function createLinkedJobPath(relatedJobId: string): string {
+  return `/(tabs)/jobs/new?relatedJobId=${encodeURIComponent(relatedJobId)}`;
+}
+
 export function jobDetailPath(jobId: string): string {
   return `/(tabs)/jobs/${jobId}`;
 }

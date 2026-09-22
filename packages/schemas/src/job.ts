@@ -35,6 +35,7 @@ export const JOB_CREATE_FIELDS = [
   "site_address",
   "internal_notes",
   "mode",
+  "related_job_id",
 ] as const;
 
 export const FORBIDDEN_JOB_FIELDS = [
@@ -51,7 +52,6 @@ export const FORBIDDEN_JOB_FIELDS = [
   "entitlement_origin",
   "first_published_at",
   "archived_from_state",
-  "related_job_id",
   "owner_user_id",
 ] as const;
 
@@ -67,6 +67,7 @@ export type JobCreateInput = {
   site_address: UsAddress | null;
   internal_notes: string;
   mode: JobMode;
+  related_job_id: string | null;
 };
 
 export type JobCreateParseResult =
@@ -158,6 +159,15 @@ export function parseJobCreate(input: unknown): JobCreateParseResult {
     field_errors.push({ field: "mode", message: "Choose Quote or Direct invoice." });
   }
 
+  let relatedJobId: string | null = null;
+  if (record.related_job_id !== undefined && record.related_job_id !== null && record.related_job_id !== "") {
+    if (!isClientUuid(record.related_job_id)) {
+      field_errors.push({ field: "related_job_id", message: "A job UUID is required." });
+    } else {
+      relatedJobId = record.related_job_id;
+    }
+  }
+
   let site: UsAddress | null = null;
   if (record.no_site === true) {
     if (record.site_address !== undefined && record.site_address !== null) {
@@ -202,6 +212,7 @@ export function parseJobCreate(input: unknown): JobCreateParseResult {
       site_address: record.no_site ? null : site,
       internal_notes: notes.value ?? "",
       mode: modeRaw,
+      related_job_id: relatedJobId,
     },
   };
 }

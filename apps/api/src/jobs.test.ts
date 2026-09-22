@@ -84,7 +84,12 @@ describe("jobs API", () => {
     pool = new Pool({ connectionString: resolved.url, max: 4 });
     const fixture = await createJwtFixture();
     sign = fixture.sign;
-    const env = loadEnv({ APP_ENV: "development", PORTAL_ORIGIN: "http://localhost:3000" });
+    const env = loadEnv({
+      APP_ENV: "development",
+      PORTAL_ORIGIN: "http://localhost:3000",
+      APPROVAL_TOKEN_HASH_KEY: "token-key-material-ok",
+      APPROVAL_DELIVERY_ENCRYPTION_KEY: "delivery-key-material-ok",
+    });
     app = buildApp({
       env,
       pool,
@@ -199,7 +204,7 @@ describe("jobs API", () => {
     expect(data.lifecycle).toBe("draft");
     expect(data.mode).toBe("quote");
     expect(data.customer_name).toBe("Riley Chen");
-    expect(data.permitted_actions).toEqual([]);
+    expect(data.permitted_actions).toEqual(["delete_job"]);
     expect(data.quote_draft).toBeNull();
     expect(data.scope_total).toBeUndefined();
     expect(data.ledger).toBeUndefined();
@@ -336,6 +341,61 @@ describe("jobs API", () => {
     });
     expect(listF.json().data.items).toHaveLength(1);
     expect(listF.json().data.items[0].id).toBe(JOB_3);
+    const foreignDelete = await running().app.inject({
+      method: "DELETE",
+      url: `/v1/jobs/${JOB_3}`,
+      headers: { authorization: `Bearer ${tokenE}`, "idempotency-key": KEY_3 },
+    });
+    expect(foreignDelete.statusCode).toBe(404);
+    expect(foreignDelete.json().error.code).toBe("NOT_FOUND");
+    expect(JSON.stringify(foreignDelete.json())).not.toMatch(/Taylor West/i);
+  });
+
+  it("deletes an unpublished draft and refuses cancel on a draft", async () => {
+    const token = await sign({ sub: AUTH_E, email: "owner.e@example.com" });
+    const opened = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_1}/quote`,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "aaaaaaa2-aaaa-4aaa-8aaa-aaaaaaaaaaa2" },
+    });
+    expect(opened.statusCode).toBe(200);
+    const deleted = await running().app.inject({
+      method: "DELETE",
+      url: `/v1/jobs/${JOB_1}`,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "aaaaaaa3-aaaa-4aaa-8aaa-aaaaaaaaaaa3" },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json().data).toEqual({ id: JOB_1, deleted: true, replayed: false });
+    const replay = await running().app.inject({
+      method: "DELETE",
+      url: `/v1/jobs/${JOB_1}`,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "aaaaaaa3-aaaa-4aaa-8aaa-aaaaaaaaaaa3" },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data.replayed).toBe(true);
+    const missing = await running().app.inject({
+      method: "GET",
+      url: `/v1/jobs/${JOB_1}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(missing.statusCode).toBe(404);
+    const leftover = await running().admin.query(
+      "select count(*)::int as n from commercial.document_drafts where job_id = $1",
+      [JOB_1],
+    );
+    expect(leftover.rows[0]?.n).toBe(0);
+    const cancelDraft = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_2}/cancel`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "aaaaaaa4-aaaa-4aaa-8aaa-aaaaaaaaaaa4",
+      },
+      payload: { reason: "Customer paused the work." },
+    });
+    expect(cancelDraft.statusCode).toBe(409);
+    expect(cancelDraft.json().error.code).toBe("JOB_NOT_CANCELABLE");
   });
 
   it("rejects client job_created analytics", async () => {

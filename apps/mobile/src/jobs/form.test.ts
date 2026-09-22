@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { jobFormFocusName, jobRequestFromForm, emptyJobForm, listStateFromFilter } from "./form.ts";
-import { presentJobDetail, presentJobsList, nextActionCopy } from "./presentation.ts";
-import { canOpenCreateJob, createJobDisabled, createJobPath, jobChangePath, jobDetailPath, jobPublishPath, jobQuotePath, jobReducePath, jobsIndexPath } from "./routes.ts";
+import { jobLifecycleActions, presentJobDetail, presentJobsList, nextActionCopy } from "./presentation.ts";
+import { canOpenCreateJob, createJobDisabled, createJobPath, createLinkedJobPath, jobChangePath, jobDetailPath, jobPublishPath, jobQuotePath, jobReducePath, jobsIndexPath } from "./routes.ts";
 
 describe("job form", () => {
   it("maps a complete form to a create payload", () => {
@@ -32,6 +32,15 @@ describe("job form", () => {
     if (remote.ok) {
       expect(remote.value.site_address).toBeNull();
       expect(remote.value.mode).toBe("direct_invoice");
+    }
+    const linked = jobRequestFromForm(
+      { ...emptyJobForm(), customer_name: "Riley", title: "Follow-up", no_site: true, mode: "quote" },
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    );
+    expect(linked.ok).toBe(true);
+    if (linked.ok) {
+      expect(linked.value.related_job_id).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
     }
   });
 
@@ -127,6 +136,24 @@ describe("jobs list and detail states", () => {
     expect(nextActionCopy("quote", "invoiced", "accepted", false)).toBe("replace_invoice");
     expect(nextActionCopy("quote", "active", "expired")).toBe("quote");
     expect(nextActionCopy("quote", "active", "superseded")).toBe("quote");
+    expect(nextActionCopy("quote", "canceled")).toBe("none");
+    expect(nextActionCopy("quote", "canceled", "accepted", true)).toBe("view_invoice");
+    const canceled = jobLifecycleActions({
+      lifecycle: "canceled",
+      permitted_actions: ["create_linked_job", "view_invoice"],
+      active_invoice: {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        number: "INV-000001",
+        revision_no: 1,
+        lifecycle: "issued",
+        total_cents: 1000,
+        due_date: null,
+      },
+      latest_invoice: null,
+    });
+    expect(canceled.canCreateLinked).toBe(true);
+    expect(canceled.showReceivable).toBe(true);
+    expect(canceled.canDelete).toBe(false);
   });
 });
 
@@ -134,6 +161,9 @@ describe("job navigation", () => {
   it("keeps create and detail under the Jobs tab", () => {
     expect(jobsIndexPath()).toBe("/(tabs)/jobs");
     expect(createJobPath()).toBe("/(tabs)/jobs/new");
+    expect(createLinkedJobPath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(
+      "/(tabs)/jobs/new?relatedJobId=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    );
     expect(jobDetailPath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(
       "/(tabs)/jobs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     );

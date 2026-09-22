@@ -1,12 +1,12 @@
 import { formatUsdCents } from "@job-to-invoice/schemas";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
 import { changeStatusLabel } from "../../../../src/changes/presentation.ts";
-import { nextActionCopy, presentJobDetail, quoteLifecycleLabel, type JobDetail } from "../../../../src/jobs/presentation.ts";
-import { jobQuotePath, jobPublishPath, jobRequestPath, jobInvoicePath, jobInvoiceDetailPath, jobInvoiceReplacePath, jobChangePath, jobReducePath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
+import { jobLifecycleActions, nextActionCopy, presentJobDetail, quoteLifecycleLabel, type JobDetail } from "../../../../src/jobs/presentation.ts";
+import { createLinkedJobPath, jobQuotePath, jobPublishPath, jobRequestPath, jobInvoicePath, jobInvoiceDetailPath, jobInvoiceReplacePath, jobChangePath, jobReducePath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
 import { quoteActionLabel } from "../../../../src/quotes/presentation.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
@@ -22,8 +22,11 @@ export default function JobDetailScreen() {
   const [job, setJob] = useState<JobDetail | undefined>();
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
+  const [mutating, setMutating] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number } | undefined>();
   const openKey = useRef<string | undefined>(undefined);
+  const mutateKey = useRef<string | undefined>(undefined);
 
   const load = useCallback(async () => {
     if (!jobId) {
@@ -66,6 +69,9 @@ export default function JobDetailScreen() {
   const quoteAction = quoteActionLabel(Boolean(view.job?.quote_draft));
   const quoteDisabled =
     opening || auth.snapshot.status === "access_expired" || auth.snapshot.status === "offline_cached";
+  const actions = view.job ? jobLifecycleActions(view.job) : undefined;
+  const lifecycleDisabled =
+    mutating || auth.snapshot.status === "access_expired" || auth.snapshot.status === "offline_cached";
 
   async function openQuote() {
     if (!jobId || quoteDisabled) {
@@ -88,6 +94,65 @@ export default function JobDetailScreen() {
     }
     setError({
       message: result.error.message || copy.quoteLoadError,
+      retryable: result.error.retryable || result.error.status === 0,
+      status: result.error.status,
+    });
+  }
+
+  async function deleteDraft() {
+    if (!jobId || lifecycleDisabled) {
+      return;
+    }
+    setMutating(true);
+    mutateKey.current = retainOrCreateSetupIdempotencyKey(mutateKey.current);
+    const result = await runOwnerRequest<{ id: string; deleted: boolean }>({
+      path: `/v1/jobs/${jobId}`,
+      method: "DELETE",
+      idempotencyKey: mutateKey.current,
+    });
+    setMutating(false);
+    if (result.ok) {
+      router.replace(jobsIndexPath());
+      return;
+    }
+    if (result.error.code === "IDEMPOTENCY_MISMATCH") {
+      mutateKey.current = retainOrCreateSetupIdempotencyKey(undefined);
+    }
+    setError({
+      message: result.error.message || copy.jobLifecycleActionError,
+      retryable: result.error.retryable || result.error.status === 0,
+      status: result.error.status,
+    });
+  }
+
+  async function cancelJob() {
+    if (!jobId || lifecycleDisabled) {
+      return;
+    }
+    const reason = cancelReason.trim();
+    if (!reason) {
+      setError({ message: copy.cancelJobReason, retryable: false, status: 422 });
+      return;
+    }
+    setMutating(true);
+    mutateKey.current = retainOrCreateSetupIdempotencyKey(mutateKey.current);
+    const result = await runOwnerRequest<JobDetail>({
+      path: `/v1/jobs/${jobId}/cancel`,
+      method: "POST",
+      body: { reason },
+      idempotencyKey: mutateKey.current,
+    });
+    setMutating(false);
+    if (result.ok) {
+      setJob(result.data);
+      setCancelReason("");
+      return;
+    }
+    if (result.error.code === "IDEMPOTENCY_MISMATCH") {
+      mutateKey.current = retainOrCreateSetupIdempotencyKey(undefined);
+    }
+    setError({
+      message: result.error.message || copy.jobLifecycleActionError,
       retryable: result.error.retryable || result.error.status === 0,
       status: result.error.status,
     });
@@ -269,6 +334,63 @@ export default function JobDetailScreen() {
                 </Pressable>
               </>
             ) : null}
+            {actions?.showReceivable ? <Text style={styles.banner}>{copy.canceledReceivable}</Text> : null}
+            {view.job?.lifecycle === "canceled" ? <Text style={styles.banner}>{copy.linkedJobHint}</Text> : null}
+            {actions?.canDelete ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: lifecycleDisabled }}
+                disabled={lifecycleDisabled}
+                onPress={() => {
+                  if (auth.snapshot.status === "offline_cached") {
+                    setError({ message: copy.deleteJobOffline, retryable: false, status: 0 });
+                    return;
+                  }
+                  Alert.alert(copy.deleteDraftTitle, copy.deleteDraftConfirm, [
+                    { text: copy.keepJob, style: "cancel" },
+                    { text: copy.deleteDraft, style: "destructive", onPress: () => void deleteDraft() },
+                  ]);
+                }}
+                style={styles.secondary}
+              >
+                <Text style={styles.secondaryLabel}>{mutating ? copy.jobWorking : copy.deleteDraft}</Text>
+              </Pressable>
+            ) : null}
+            {actions?.canCancel ? (
+              <>
+                <Text style={styles.banner}>{copy.cancelJobNotice}</Text>
+                {auth.snapshot.status === "offline_cached" ? (
+                  <Text style={styles.banner}>{copy.cancelJobOffline}</Text>
+                ) : null}
+                <Text style={styles.section}>{copy.cancelJobReason}</Text>
+                <TextInput
+                  accessibilityLabel={copy.cancelJobReason}
+                  editable={!lifecycleDisabled}
+                  multiline
+                  onChangeText={setCancelReason}
+                  style={styles.input}
+                  value={cancelReason}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: lifecycleDisabled }}
+                  disabled={lifecycleDisabled}
+                  onPress={() => void cancelJob()}
+                  style={styles.secondary}
+                >
+                  <Text style={styles.secondaryLabel}>{mutating ? copy.jobWorking : copy.cancelJobConfirm}</Text>
+                </Pressable>
+              </>
+            ) : null}
+            {actions?.canCreateLinked ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push(createLinkedJobPath(jobId))}
+                style={styles.primary}
+              >
+                <Text style={styles.primaryLabel}>{copy.createLinkedJob}</Text>
+              </Pressable>
+            ) : null}
             {view.job?.current_quote ? (
               <>
                 <Text style={styles.section}>{copy.quoteNumber}</Text>
@@ -345,4 +467,14 @@ const styles = StyleSheet.create({
     marginTop: space.gutter,
   },
   secondaryLabel: { color: colors.navy, fontSize: type.body, fontWeight: "600" },
+  input: {
+    minHeight: 88,
+    borderWidth: 1,
+    borderColor: colors.navy,
+    borderRadius: space.radius,
+    padding: space.scale,
+    color: colors.text,
+    fontSize: type.body,
+    textAlignVertical: "top",
+  },
 });

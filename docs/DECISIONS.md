@@ -537,3 +537,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | `0020_catalogue_items.sql`; hosted confirmation `APPLY_0020` |
 | Reversible | Additive table and functions |
 | Escalation category | none |
+
+### D-027 — JOB02 cancel notification and linked create
+
+| Field | Value |
+| --- | --- |
+| ID | D-027 |
+| Date | 2026-09-22 |
+| Status | Resolved |
+| Decision | Cancel of a job with a pending approval request withdraws those requests and queues EMAIL08 using the existing withdraw template. EMAIL01–11 define no accepted-job cancellation template, so cancel of an accepted job with no pending request does not send a new customer email. Owner UI states the PRD operational-notice disclaimer. Linked new jobs reuse `POST /v1/jobs` with optional `related_job_id` that must reference a canceled job in the same workspace. Cancel and delete are online-only and are not queued in SYNC01. Cancel reason is audited as `reason_len` only. |
+| Reason | Inventing EMAIL12 or a new create-linked route would exceed the PRD inventory. `related_job_id` already exists on `jobs`. Withdraw already defines EMAIL08. |
+| Evidence | `supabase/migrations/0021_job_cancel_delete.sql`; `apps/api/src/jobs.ts`; `apps/mobile/app/(tabs)/jobs/[id]/index.tsx` |
+| Owner | Engineering lead |
+| PRD implication | JOB02 / S08 cancel, delete, and linked create. |
+| Impacted requirement IDs | JOB02, JOB01, S08, EMAIL08 |
+| Impacted test IDs | `apps/api/src/jobs.test.ts`; `apps/api/src/jobs.lifecycle.test.ts`; `packages/schemas/src/job.test.ts`; `apps/mobile/src/jobs/form.test.ts`; `supabase/tests/0022_job_cancel_delete.sql` |
+| Migration implications | `0021_job_cancel_delete.sql`; hosted confirmation `APPLY_0021` |
+| Reversible | Additive functions and optional create field |
+| Escalation category | none |

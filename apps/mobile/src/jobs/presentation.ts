@@ -22,6 +22,7 @@ export type JobDetail = JobSummary & {
     postal_code: string;
   } | null;
   internal_notes: string;
+  related_job_id?: string | null;
   permitted_actions: string[];
   quote_draft: {
     id: string;
@@ -203,6 +204,9 @@ export function nextActionCopy(
   if (hasInvoice) {
     return "view_invoice";
   }
+  if (lifecycle === "canceled") {
+    return hasInvoice ? "view_invoice" : "none";
+  }
   if (lifecycle === "invoiced") {
     return "replace_invoice";
   }
@@ -222,6 +226,20 @@ export function nextActionCopy(
     return "none";
   }
   return mode === "direct_invoice" ? "direct" : "quote";
+}
+
+export function jobLifecycleActions(job: Pick<JobDetail, "permitted_actions" | "lifecycle" | "latest_invoice" | "active_invoice">): {
+  canDelete: boolean;
+  canCancel: boolean;
+  canCreateLinked: boolean;
+  showReceivable: boolean;
+} {
+  return {
+    canDelete: job.permitted_actions.includes("delete_job"),
+    canCancel: job.permitted_actions.includes("cancel_job"),
+    canCreateLinked: job.permitted_actions.includes("create_linked_job"),
+    showReceivable: job.lifecycle === "canceled" && Boolean(job.active_invoice || job.latest_invoice),
+  };
 }
 
 export function quoteLifecycleLabel(lifecycle: string): string {
