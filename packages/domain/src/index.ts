@@ -52,6 +52,7 @@ export { canonicalize, canonicalizeToBytes } from "./canonicalize.ts";
 export {
   FREE_JOB_LIMIT,
   CREDIT_SNAPSHOT_SCHEMA_VERSION,
+  DIRECT_INVOICE_NOTICE,
   INVOICE_SNAPSHOT_SCHEMA_VERSION,
   PREVIEW_TTL_MS,
   CHANGE_SNAPSHOT_SCHEMA_VERSION,

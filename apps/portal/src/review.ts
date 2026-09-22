@@ -19,6 +19,7 @@ export const portalCopy = {
   quoteReady: "Review this quote",
   changeReady: "Review this change order",
   invoiceReady: "View this invoice",
+  noPriorApproval: "This invoice was not preceded by in-app scope approval.",
   pdfLoading: "Preparing the official PDF.",
   pdfFailure: "The official PDF is not ready. Approve is unavailable until it is.",
   consentLabel: "I confirm I have reviewed this quote, including the PDF, and I am authorized to approve or decline it. This is not a payment.",

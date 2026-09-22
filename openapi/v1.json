@@ -209,7 +209,7 @@
           }
         ],
         "responses": {
-          "200": { "description": "Job overview with current quote, optional change order, optional active invoice, and permitted_actions; no ledger" },
+          "200": { "description": "Job overview with current quote, optional invoice_draft, optional change order, optional active invoice, and permitted_actions; no ledger" },
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant job" },
@@ -635,7 +635,7 @@
     },
     "/v1/drafts/{draftId}": {
       "get": {
-        "summary": "Read an editing quote draft and server-calculated totals",
+        "summary": "Read an editing quote, change, or direct-invoice draft and server-calculated totals",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -646,7 +646,7 @@
           }
         ],
         "responses": {
-          "200": { "description": "Quote draft payload and calculated totals" },
+          "200": { "description": "Draft payload and calculated totals for quote, change, or direct invoice" },
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant draft" },
@@ -654,7 +654,7 @@
         }
       },
       "patch": {
-        "summary": "Replace the full editing quote draft payload",
+        "summary": "Replace the full editing quote, change, or direct-invoice draft payload",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -697,7 +697,7 @@
     },
     "/v1/drafts/{draftId}/preview": {
       "post": {
-        "summary": "Freeze a 10-minute quote preview and return preview_hash",
+        "summary": "Freeze a 10-minute quote, change, or direct-invoice preview and return preview_hash",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -715,7 +715,7 @@
           }
         ],
         "responses": {
-          "200": { "description": "Frozen quote preview with preview_hash; official number is not allocated" },
+          "200": { "description": "Frozen quote, change, or direct-invoice preview with preview_hash; official number is not allocated" },
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Unknown or cross-tenant draft" },

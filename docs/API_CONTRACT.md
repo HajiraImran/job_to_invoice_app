@@ -200,7 +200,7 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 
 ## API04 Direct invoice
 
-`POST /jobs` with mode `direct_invoice` creates the job and initial draft. Preview: `/drafts/{id}/preview`. Issue: `/jobs/{id}/issue-invoice` with that `preview_hash`. `GET /jobs/{id}` includes draft/document summaries. No separate document-list endpoint in v1. After issue, amount changes use credit/replacement only.
+`POST /jobs` with mode `direct_invoice` creates the job and initial invoice draft. Preview: `/drafts/{id}/preview` (dispatches on `kind=invoice`). Issue: `/jobs/{id}/issue-invoice` with that `preview_hash`. `GET /jobs/{id}` includes `invoice_draft` and document summaries. Customer email is optional; EMAIL06/`view_only` is queued only when present. After issue, amount changes use credit/replacement only. Hosted `0019_direct_invoice.sql` is not applied in this slice.
 
 ## API05 view_only
 

@@ -152,6 +152,12 @@ export default function JobDetailScreen() {
                 <Text style={styles.body}>{formatUsdCents(view.job.quote_draft.total_cents)}</Text>
               </>
             ) : null}
+            {view.job.invoice_draft ? (
+              <>
+                <Text style={styles.section}>{copy.quoteTotal}</Text>
+                <Text style={styles.body}>{formatUsdCents(view.job.invoice_draft.total_cents)}</Text>
+              </>
+            ) : null}
             {view.job.internal_notes ? (
               <>
                 <Text style={styles.section}>{copy.internalNotes}</Text>
@@ -210,6 +216,18 @@ export default function JobDetailScreen() {
                   {changeStatusLabel(view.job.latest_change.lifecycle, view.job.latest_change.request_state)}
                 </Text>
               </>
+            ) : null}
+            {next === "direct" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={copy.createInvoice}
+                accessibilityState={{ disabled: quoteDisabled }}
+                disabled={quoteDisabled}
+                onPress={() => router.push(jobInvoicePath(jobId))}
+                style={styles.primary}
+              >
+                <Text style={styles.primaryLabel}>{copy.createInvoice}</Text>
+              </Pressable>
             ) : null}
             {next === "invoice" ? (
               <Pressable

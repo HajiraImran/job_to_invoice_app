@@ -412,7 +412,7 @@ export function presentIssuedInvoice(
   };
 }
 
-function mapInvoiceError(
+export function mapInvoiceError(
   request: FastifyRequest,
   reply: FastifyReply,
   error: unknown,
@@ -850,22 +850,19 @@ export function registerInvoiceRoutes(
       });
     }
     const secrets = resolveApprovalSecrets(deps.env ?? {});
-    if (!secrets) {
-      return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
-    }
     const hash = requestHash({
       jobId: params.jobId,
       preview_hash: parsed.value.preview_hash,
     });
     const approvalToken = generateApprovalToken();
     try {
-      let tokenHash: string;
-      let tokenKeyVersion: number;
-      let ciphertext: Buffer;
-      let nonce: Buffer;
-      let algorithm: string;
-      let deliveryKeyVersion: number;
-      let encryptedEmail: Buffer;
+      let tokenHash: string | null = null;
+      let tokenKeyVersion: number | null = null;
+      let ciphertext: Buffer | null = null;
+      let nonce: Buffer | null = null;
+      let algorithm: string | null = null;
+      let deliveryKeyVersion: number | null = null;
+      let encryptedEmail: Buffer | null = null;
       const issued = await withApiRole(deps.pool, async (client) => {
         const owner = await client.query<ProvisionRow>(
           `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
@@ -889,6 +886,13 @@ export function registerInvoiceRoutes(
           provisioned.workspace_id,
           provisioned.actor_id,
         ]);
+        const jobMode = await client.query<{ mode: string }>(
+          "select mode from commercial.jobs where id = $1",
+          [params.jobId],
+        );
+        if (!jobMode.rows[0]) {
+          return { kind: "missing" as const };
+        }
         const preview = await client.query<{ recipient: string | null }>(
           `select recipient
            from (
@@ -906,50 +910,62 @@ export function registerInvoiceRoutes(
           [params.jobId],
         );
         const recipient = preview.rows[0]?.recipient;
-        if (!recipient) {
+        const isDirect = jobMode.rows[0].mode === "direct_invoice";
+        if (!isDirect && !recipient) {
           return { kind: "preview" as const };
         }
-        const parsedRecipient = parseOwnerEmail(recipient);
-        if (!parsedRecipient.ok) {
-          return { kind: "preview" as const };
+        if (recipient) {
+          if (!secrets) {
+            return { kind: "unavailable" as const };
+          }
+          const parsedRecipient = parseOwnerEmail(recipient);
+          if (!parsedRecipient.ok) {
+            return { kind: "preview" as const };
+          }
+          encodeFragmentToken(approvalToken);
+          const hashed = hashApprovalToken(approvalToken, secrets.hash);
+          tokenHash = hashed.hash;
+          tokenKeyVersion = hashed.keyVersion;
+          const encrypted = encryptDeliveryToken(approvalToken, secrets.delivery);
+          ciphertext = encrypted.ciphertext;
+          nonce = encrypted.nonce;
+          algorithm = encrypted.algorithm;
+          deliveryKeyVersion = encrypted.keyVersion;
+          const packedEmail = encryptRecipientEmail(parsedRecipient.display, secrets.delivery);
+          encryptedEmail = Buffer.concat([packedEmail.nonce, packedEmail.ciphertext]);
         }
-        encodeFragmentToken(approvalToken);
-        const hashed = hashApprovalToken(approvalToken, secrets.hash);
-        tokenHash = hashed.hash;
-        tokenKeyVersion = hashed.keyVersion;
-        const encrypted = encryptDeliveryToken(approvalToken, secrets.delivery);
-        ciphertext = encrypted.ciphertext;
-        nonce = encrypted.nonce;
-        algorithm = encrypted.algorithm;
-        deliveryKeyVersion = encrypted.keyVersion;
-        const packedEmail = encryptRecipientEmail(parsedRecipient.display, secrets.delivery);
-        encryptedEmail = Buffer.concat([packedEmail.nonce, packedEmail.ciphertext]);
-        const accessUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
-        const row = await client.query<IssueRow>(
-          `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date, due_date,
+        const accessUntil = recipient ? new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) : null;
+        const issueSql = isDirect
+          ? `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date, due_date,
+                  currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
+                  request_id, delivery_state, replayed
+           from commercial.issue_direct_invoice(
+             $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6,
+             $7, $8::integer, $9::bytea, $10::bytea, $11::bytea, $12, $13::integer, $14::timestamptz
+           )`
+          : `select id, workspace_id, job_id, draft_id, kind, number, revision_no, lifecycle, issued_at, issue_date, due_date,
                   currency, net_cents, tax_cents, total_cents, snapshot_json, schema_version, snapshot_sha256, pdf_state,
                   request_id, delivery_state, replayed
            from commercial.issue_invoice(
              $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6,
              $7, $8::integer, $9::bytea, $10::bytea, $11::bytea, $12, $13::integer, $14::timestamptz
-           )`,
-          [
-            provisioned.actor_id,
-            key,
-            hash,
-            request.id,
-            params.jobId,
-            parsed.value.preview_hash,
-            tokenHash,
-            tokenKeyVersion,
-            encryptedEmail,
-            ciphertext,
-            nonce,
-            algorithm,
-            deliveryKeyVersion,
-            accessUntil.toISOString(),
-          ],
-        );
+           )`;
+        const row = await client.query<IssueRow>(issueSql, [
+          provisioned.actor_id,
+          key,
+          hash,
+          request.id,
+          params.jobId,
+          parsed.value.preview_hash,
+          tokenHash,
+          tokenKeyVersion,
+          encryptedEmail,
+          ciphertext,
+          nonce,
+          algorithm,
+          deliveryKeyVersion,
+          accessUntil?.toISOString() ?? null,
+        ]);
         return { kind: "ok" as const, row: row.rows[0] };
       });
       if (!issued) {
@@ -963,6 +979,12 @@ export function registerInvoiceRoutes(
       }
       if (issued.kind === "setup") {
         return sendFail(request, reply, API_ERROR_CODES.SETUP_INCOMPLETE, "Complete business setup first.");
+      }
+      if (issued.kind === "missing") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
+      }
+      if (issued.kind === "unavailable") {
+        return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
       }
       if (issued.kind === "preview") {
         return sendFail(

@@ -55,6 +55,9 @@ describe("portal fragment and states", () => {
     expect(document).toContain("createIdempotencyKey()");
     expect(document).toContain("PortalIdentifierError");
     expect(document).toContain("portalCopy.invoiceReady");
+    expect(document).toContain("no_prior_approval");
+    expect(document).toContain("portalCopy.noPriorApproval");
+    expect(portalCopy.noPriorApproval).toBe("This invoice was not preceded by in-app scope approval.");
     expect(document).toContain("portalCopy.changeReady");
     expect(document).toContain("previous_total_cents");
     expect(document).toContain("viewOnly");

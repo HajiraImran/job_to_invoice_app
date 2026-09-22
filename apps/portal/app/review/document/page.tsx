@@ -30,6 +30,7 @@ type DocumentData = {
     total_cents?: number;
     currency?: string;
     customer?: { name?: string };
+    no_prior_approval?: boolean;
     reason?: string;
     previous_total_cents?: number;
     change_including_tax_cents?: number;
@@ -160,6 +161,7 @@ export default function ReviewDocumentPage() {
             {doc.number} {doc.revision_label}
           </p>
           <p>{doc.snapshot.customer?.name}</p>
+          {doc.snapshot.no_prior_approval ? <p>{portalCopy.noPriorApproval}</p> : null}
           {isChange ? (
             <>
               {doc.snapshot.reason ? <p>{doc.snapshot.reason}</p> : null}

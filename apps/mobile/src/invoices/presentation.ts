@@ -29,6 +29,8 @@ export type InvoicePreviewRecord = {
     tax_cents: number;
     total_cents: number;
     currency: string;
+    origin?: "quote_based" | "direct";
+    no_prior_approval?: boolean;
   };
 };
 

@@ -9,10 +9,13 @@ import {
   parseVersionedSecret,
 } from "@job-to-invoice/config";
 import {
+  buildInvoiceSnapshot,
   buildQuoteSnapshot,
+  calculateDocument,
   canonicalizeToBytes,
   isDomainError,
   type ChangeSnapshotV1,
+  type InvoiceSnapshotV1,
   type QuoteSnapshotAddress,
   type QuoteSnapshotV1,
 } from "@job-to-invoice/domain";
@@ -23,6 +26,7 @@ import {
   isClientUuid,
   maskEmail,
   parseChangeDraft,
+  parseDirectInvoiceDraft,
   parseDraftPayload,
   parseOwnerEmail,
   parseQuotePublish,
@@ -35,7 +39,7 @@ import { buildChangeSnapshot, loadAcceptedScopeSources, mapChangeError } from ".
 import { payloadFromJson } from "./drafts.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { fail, success } from "./envelope.ts";
-import { presentIssuedInvoice, loadInvoiceLedgerState } from "./invoices.ts";
+import { presentIssuedInvoice, loadInvoiceLedgerState, mapInvoiceError } from "./invoices.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
 import {
   quotePublishDatabaseStage,
@@ -548,7 +552,7 @@ export function registerQuotePublishRoutes(
            join commercial.jobs j on j.workspace_id = d.workspace_id and j.id = d.job_id
            join commercial.customers c on c.workspace_id = j.workspace_id and c.id = j.customer_id
            join commercial.workspaces w on w.workspace_id = d.workspace_id
-           where d.id = $1 and d.kind in ('quote', 'change')`,
+           where d.id = $1 and d.kind in ('quote', 'change', 'invoice')`,
           [params.draftId],
         );
         const ctx = loaded.rows[0];
@@ -612,6 +616,138 @@ export function registerQuotePublishRoutes(
           }>(
             `select id, version, preview_hash, preview_expires_at, snapshot_json
              from commercial.freeze_change_preview(
+               $1::uuid, $2::uuid, $3::integer, $4, $5::bytea, $6::jsonb, $7::timestamptz
+             )`,
+            [
+              owner.actor_id,
+              params.draftId,
+              expectedVersion,
+              hash,
+              Buffer.from(bytes),
+              JSON.stringify(snapshot),
+              expiresAt.toISOString(),
+            ],
+          );
+          return { kind: "ok" as const, row: stored.rows[0], snapshot, hash };
+        }
+        if (ctx.kind === "invoice") {
+          const parsed = parseDirectInvoiceDraft(ctx.payload_json);
+          if (!parsed.ok) {
+            return { kind: "invalid" as const, field_errors: parsed.field_errors };
+          }
+          if (!parsed.value.issue_acknowledgement) {
+            return {
+              kind: "invalid" as const,
+              field_errors: [
+                {
+                  field: "issue_acknowledgement",
+                  message: "Confirm that this invoice was not preceded by in-app scope approval.",
+                },
+              ],
+            };
+          }
+          if (!parsed.value.due_date) {
+            return {
+              kind: "invalid" as const,
+              field_errors: [{ field: "due_date", message: "Enter a due date as YYYY-MM-DD." }],
+            };
+          }
+          if (!parsed.value.payment_instructions.trim()) {
+            return {
+              kind: "invalid" as const,
+              field_errors: [{ field: "payment_instructions", message: "Enter payment instructions." }],
+            };
+          }
+          const issue_date = zonedCalendarDate(new Date(), ctx.timezone);
+          if (parsed.value.due_date < issue_date) {
+            return {
+              kind: "invalid" as const,
+              field_errors: [{ field: "due_date", message: "Due date cannot be before the issue date." }],
+            };
+          }
+          if (parsed.value.due_date > addCalendarDays(issue_date, 365)) {
+            return {
+              kind: "invalid" as const,
+              field_errors: [{ field: "due_date", message: "Due date cannot be more than 365 days after issue." }],
+            };
+          }
+          let totals;
+          try {
+            totals = calculateDocument(parsed.value.lines, { require_positive_net: true });
+          } catch (error) {
+            return { kind: "domain" as const, error };
+          }
+          const calculatedById = new Map(totals.lines.map((line) => [line.client_line_id, line]));
+          const lines = parsed.value.lines.map((line, index) => {
+            const money = calculatedById.get(line.client_line_id);
+            if (!money) {
+              throw new Error("Calculated line missing for snapshot");
+            }
+            return {
+              position: index + 1,
+              source_line_id: line.client_line_id,
+              description: line.description,
+              unit: line.unit,
+              custom_unit_label: line.custom_unit_label ?? null,
+              quantity: money.quantity,
+              unit_price_cents: money.unit_price_cents,
+              discount_cents: money.discount_cents,
+              tax_bp: money.tax_bp,
+              gross_cents: money.gross_cents,
+              net_cents: money.net_cents,
+              tax_cents: money.tax_cents,
+              total_cents: money.total_cents,
+            };
+          });
+          const snapshot = buildInvoiceSnapshot({
+            business: {
+              business_name: ctx.business_name,
+              legal_name: ctx.legal_name,
+              contact_name: ctx.contact_name,
+              contact_email: ctx.contact_email,
+              contact_phone: ctx.contact_phone,
+              address: snapshotAddress(ctx.address_json),
+              timezone: ctx.timezone,
+              default_tax_bp: ctx.default_tax_bp,
+            },
+            customer: {
+              name: ctx.customer_name,
+              email: parsed.value.customer_email || ctx.customer_email,
+              phone: ctx.customer_phone,
+              billing_address: snapshotAddress(ctx.billing_address_json),
+            },
+            job: {
+              id: ctx.job_id,
+              title: ctx.title,
+              site_address: snapshotAddress(ctx.site_address_json),
+              no_site: ctx.no_site,
+            },
+            notes: parsed.value.notes,
+            payment_instructions: parsed.value.payment_instructions,
+            issue_date,
+            due_date: parsed.value.due_date,
+            source_quote_id: "",
+            source_quote_number: "",
+            origin: "direct",
+            no_prior_approval: true,
+            lines,
+            net_cents: totals.net_cents,
+            tax_cents: totals.tax_cents,
+            total_cents: totals.total_cents,
+            tax_by_rate: totals.tax_by_rate,
+          });
+          const bytes = canonicalizeToBytes(snapshot);
+          const hash = createHash("sha256").update(bytes).digest("hex");
+          const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS);
+          const stored = await client.query<{
+            id: string;
+            version: number;
+            preview_hash: string;
+            preview_expires_at: Date | string;
+            snapshot_json: InvoiceSnapshotV1;
+          }>(
+            `select id, version, preview_hash, preview_expires_at, snapshot_json
+             from commercial.freeze_direct_invoice_preview(
                $1::uuid, $2::uuid, $3::integer, $4, $5::bytea, $6::jsonb, $7::timestamptz
              )`,
             [
@@ -694,6 +830,7 @@ export function registerQuotePublishRoutes(
       });
     } catch (error) {
       const mapped =
+        mapInvoiceError(request, reply, error) ??
         mapChangeError(request, reply, error, DRAFT_NOT_FOUND) ??
         mapPublishError(request, reply, error, DRAFT_NOT_FOUND);
       if (mapped) {

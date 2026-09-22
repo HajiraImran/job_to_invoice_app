@@ -156,6 +156,7 @@ Do not implement all screens, then the backend, then connect them.
 - Worker: original PDF, then EMAIL06
 - Analytics: `invoice_issued`
 - Tests: QA31–QA36, QA44, F12
+- JRN06 direct invoice: implemented in `0019_direct_invoice.sql` / S15; hosted APPLY_0019 and device evidence remain open
 
 **Vertical slice I — Credits, payments, refunds**
 

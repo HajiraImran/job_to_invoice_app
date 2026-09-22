@@ -483,3 +483,39 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Reversible | Yes for unused actions; replace_link path is production behavior |
 | Escalation category | security |
 
+### D-025 — Direct invoices use dedicated freeze/issue functions
+
+| Field | Value |
+| --- | --- |
+| ID | D-025 |
+| Date | 2026-09-22 |
+| Status | Resolved |
+| Decision | First-issue of a `mode=direct_invoice` job uses `open_direct_invoice_draft`, `save_direct_invoice_draft`, `freeze_direct_invoice_preview`, and `issue_direct_invoice` rather than extending quote-based `freeze_invoice_preview`/`issue_invoice`. Direct issue skips residual-scope matching, writes `scope_entries` for each issued line, consumes the first-job slot like TX01, and queues EMAIL06/`view_only` only when a customer email is present. Quote-based issue remains unchanged. Replacement after void reuses existing 0017 functions because they do not require quote mode. |
+| Reason | Quote-based TX03 requires `mode=quote`, an accepted quote, and residual totals matching current scope. Direct invoices have no prior scope and optional customer email (VAL01). |
+| Evidence | `supabase/migrations/0019_direct_invoice.sql`; `apps/api/src/invoices.direct.test.ts`; `apps/api/src/quotes.ts` preview dispatch; `apps/api/src/invoices.ts` issue dispatch |
+| Owner | Engineering lead |
+| PRD implication | JRN06/API04/QA44/TX03 direct-mode exception. |
+| Impacted requirement IDs | JRN06, API04, QA44, TX03, BIL01, S08, S15, VAL01 |
+| Impacted test IDs | `apps/api/src/invoices.direct.test.ts`; `packages/schemas/src/invoice.test.ts`; `packages/domain/src/invoice-html.test.ts`; `supabase/tests/0020_direct_invoice.sql` |
+| Migration implications | `0019_direct_invoice.sql`; hosted confirmation `APPLY_0019` |
+| Reversible | Additive functions only; quote issue path unchanged |
+| Escalation category | architecture |
+
+### D-025 — Direct invoices use dedicated freeze/issue functions
+
+| Field | Value |
+| --- | --- |
+| ID | D-025 |
+| Date | 2026-09-22 |
+| Status | Resolved |
+| Decision | First-issue of a `mode=direct_invoice` job uses `open_direct_invoice_draft`, `save_direct_invoice_draft`, `freeze_direct_invoice_preview`, and `issue_direct_invoice` rather than extending quote-based `freeze_invoice_preview`/`issue_invoice`. Direct issue skips residual-scope matching, writes `scope_entries` for each issued line, consumes the first-job slot like TX01, and queues EMAIL06/`view_only` only when a customer email is present. Quote-based issue remains unchanged. Replacement after void reuses existing 0017 functions because they do not require quote mode. |
+| Reason | Quote-based TX03 requires `mode=quote`, an accepted quote, and residual totals matching current scope. Direct invoices have no prior scope and optional customer email (VAL01). |
+| Evidence | `supabase/migrations/0019_direct_invoice.sql`; `apps/api/src/invoices.direct.test.ts`; `apps/api/src/quotes.ts` preview dispatch; `apps/api/src/invoices.ts` issue dispatch |
+| Owner | Engineering lead |
+| PRD implication | JRN06/API04/QA44/TX03 direct-mode exception. |
+| Impacted requirement IDs | JRN06, API04, QA44, TX03, BIL01, S08, S15, VAL01 |
+| Impacted test IDs | `apps/api/src/invoices.direct.test.ts`; `packages/schemas/src/invoice.test.ts`; `packages/domain/src/invoice-html.test.ts`; `supabase/tests/0020_direct_invoice.sql` |
+| Migration implications | `0019_direct_invoice.sql`; hosted confirmation `APPLY_0019` |
+| Reversible | Additive functions only; quote issue path unchanged |
+| Escalation category | architecture |
+

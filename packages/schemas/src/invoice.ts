@@ -4,6 +4,7 @@ import { parseOwnerEmail } from "./email.ts";
 import { parseUsAddress, type UsAddress } from "./address.ts";
 import { TERMS_MAX } from "./workspace-setup.ts";
 import { parseBoundedText, parseOptionalBoundedText } from "./text.ts";
+import { parseDraftPayload, type DraftLineInput } from "./draft.ts";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
@@ -17,6 +18,139 @@ export type InvoicePreviewInput = {
   due_date?: string;
   payment_instructions?: string;
 };
+
+export type DirectInvoiceDraftInput = {
+  direct_invoice: true;
+  issue_acknowledgement: boolean;
+  due_date: string | null;
+  payment_instructions: string;
+  notes: string;
+  customer_email: string | null;
+  lines: DraftLineInput[];
+};
+
+export type DirectInvoiceDraftParseResult =
+  | { ok: true; value: DirectInvoiceDraftInput }
+  | { ok: false; field_errors: FieldError[] };
+
+export function emptyDirectInvoiceDraft(): DirectInvoiceDraftInput {
+  return {
+    direct_invoice: true,
+    issue_acknowledgement: false,
+    due_date: null,
+    payment_instructions: "",
+    notes: "",
+    customer_email: null,
+    lines: [],
+  };
+}
+
+export function parseDirectInvoiceDraft(input: unknown): DirectInvoiceDraftParseResult {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { ok: false, field_errors: [{ field: "body", message: "Invalid request." }] };
+  }
+  const record = input as Record<string, unknown>;
+  const allowed = new Set([
+    "direct_invoice",
+    "issue_acknowledgement",
+    "due_date",
+    "payment_instructions",
+    "notes",
+    "customer_email",
+    "lines",
+  ]);
+  const field_errors: FieldError[] = [];
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) {
+      field_errors.push({ field: key, message: "Unknown fields are not allowed." });
+    }
+  }
+  if (record.direct_invoice !== true) {
+    field_errors.push({ field: "direct_invoice", message: "Direct invoice drafts must set direct_invoice true." });
+  }
+  if (typeof record.issue_acknowledgement !== "boolean") {
+    field_errors.push({
+      field: "issue_acknowledgement",
+      message: "Confirm that this invoice was not preceded by in-app scope approval.",
+    });
+  }
+  let due_date: string | null = null;
+  if (record.due_date !== undefined && record.due_date !== null && record.due_date !== "") {
+    if (typeof record.due_date !== "string" || !isCalendarDate(record.due_date)) {
+      field_errors.push({ field: "due_date", message: "Enter a due date as YYYY-MM-DD." });
+    } else {
+      due_date = record.due_date;
+    }
+  }
+  let payment_instructions = "";
+  if (record.payment_instructions !== undefined && record.payment_instructions !== null) {
+    const parsed = parseOptionalBoundedText(record.payment_instructions, {
+      min: 0,
+      max: TERMS_MAX,
+      multiline: true,
+    });
+    if (!parsed.ok) {
+      field_errors.push({ field: "payment_instructions", message: "Payment instructions are too long." });
+    } else {
+      payment_instructions = parsed.value ?? "";
+    }
+  }
+  let notes = "";
+  if (record.notes !== undefined && record.notes !== null) {
+    const parsed = parseOptionalBoundedText(record.notes, { min: 0, max: 2000, multiline: true });
+    if (!parsed.ok) {
+      field_errors.push({ field: "notes", message: "Notes are too long." });
+    } else {
+      notes = parsed.value ?? "";
+    }
+  }
+  let customer_email: string | null = null;
+  if (record.customer_email !== undefined && record.customer_email !== null && record.customer_email !== "") {
+    if (typeof record.customer_email !== "string") {
+      field_errors.push({ field: "customer_email", message: "Enter a valid email." });
+    } else {
+      const email = parseOwnerEmail(record.customer_email);
+      if (!email.ok) {
+        field_errors.push({ field: "customer_email", message: "Enter a valid email." });
+      } else {
+        customer_email = email.display;
+      }
+    }
+  }
+  let lines: DraftLineInput[] = [];
+  if (record.lines !== undefined) {
+    if (!Array.isArray(record.lines)) {
+      field_errors.push({ field: "lines", message: "Lines must be an array." });
+    } else if (record.lines.length > 0) {
+      const parsed = parseDraftPayload({
+        notes: "",
+        terms: "",
+        expiry_days: 14,
+        lines: record.lines,
+      });
+      if (!parsed.ok) {
+        field_errors.push(...parsed.field_errors);
+      } else {
+        lines = parsed.value.lines;
+      }
+    }
+  }
+  if (field_errors.length > 0) {
+    return { ok: false, field_errors };
+  }
+  return {
+    ok: true,
+    value: {
+      direct_invoice: true,
+      issue_acknowledgement: record.issue_acknowledgement === true,
+      due_date,
+      payment_instructions,
+      notes,
+      customer_email,
+      lines,
+    },
+  };
+}
 
 export type InvoiceVoidInput = {
   reason: string;

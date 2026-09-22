@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
+import { DirectInvoiceScreen } from "../../../../src/invoices/direct-screen.tsx";
 import {
   dueDateFromOption,
   presentInvoicePreview,
@@ -22,6 +23,7 @@ export default function InvoicePreviewScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const jobId = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? (params.id[0] ?? "") : "";
+  const [mode, setMode] = useState<string | undefined>();
   const [preview, setPreview] = useState<InvoicePreviewRecord | undefined>();
   const [dueOption, setDueOption] = useState<"receipt" | "7" | "14" | "30" | "custom">("14");
   const [customDue, setCustomDue] = useState("");
@@ -55,6 +57,11 @@ export default function InvoicePreviewScreen() {
       router.replace(jobInvoiceDetailPath(jobId, jobResult.data.active_invoice.id));
       return;
     }
+    setMode(jobResult.data.mode);
+    if (jobResult.data.mode === "direct_invoice") {
+      setLoading(false);
+      return;
+    }
     const result = await runOwnerRequest<InvoicePreviewRecord>({
       path: `/v1/jobs/${jobId}/invoice-preview`,
       method: "POST",
@@ -83,6 +90,10 @@ export default function InvoicePreviewScreen() {
       void load();
     }, [load]),
   );
+
+  if (mode === "direct_invoice") {
+    return <DirectInvoiceScreen jobId={jobId} />;
+  }
 
   const view = presentInvoicePreview({
     authStatus: auth.snapshot.status,

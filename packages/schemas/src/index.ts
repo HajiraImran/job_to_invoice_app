@@ -137,12 +137,15 @@ export {
 } from "./change.ts";
 export { parseQuotePublish, type QuotePublishInput, type QuotePublishParseResult } from "./quote.ts";
 export {
+  emptyDirectInvoiceDraft,
+  parseDirectInvoiceDraft,
   parseInvoiceIssue,
   parseInvoicePreview,
   parseInvoiceReplacementPreview,
   parseInvoiceVoid,
   VOID_REASON_MAX,
   VOID_REASON_MIN,
+  type DirectInvoiceDraftInput,
   type InvoiceIssueInput,
   type InvoiceIssueParseResult,
   type InvoicePreviewInput,

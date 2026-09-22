@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   isClientUuid,
@@ -8,7 +8,7 @@ import {
   type JobListState,
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
-import { quoteDraftSummary } from "./drafts.ts";
+import { invoiceDraftSummary, quoteDraftSummary } from "./drafts.ts";
 import { quoteDocumentSummary } from "./quotes.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { API_ERROR_CODES, fail, success } from "./envelope.ts";
@@ -64,6 +64,9 @@ type JobRow = {
   latest_invoice_lifecycle?: string | null;
   latest_invoice_total?: string | number | null;
   latest_invoice_due?: Date | string | null;
+  invoice_draft_id?: string | null;
+  invoice_draft_version?: number | null;
+  invoice_draft_payload?: unknown;
   change_draft_id?: string | null;
   change_draft_version?: number | null;
   change_draft_payload?: unknown;
@@ -177,7 +180,8 @@ function jobSummary(row: JobListRow) {
 
 function jobDetail(row: JobRow) {
   const canCreateInvoice =
-    row.lifecycle === "active" && row.current_quote_lifecycle === "accepted" && !row.active_invoice_id;
+    (row.lifecycle === "active" && row.current_quote_lifecycle === "accepted" && !row.active_invoice_id) ||
+    (row.mode === "direct_invoice" && row.lifecycle === "draft" && !row.active_invoice_id);
   const canViewInvoice = Boolean(row.active_invoice_id || row.latest_invoice_id);
   const canReplaceInvoice =
     row.lifecycle === "invoiced" && !row.active_invoice_id && row.latest_invoice_lifecycle === "voided";
@@ -211,6 +215,10 @@ function jobDetail(row: JobRow) {
     quote_draft:
       row.quote_draft_id && row.quote_draft_version
         ? quoteDraftSummary(row.quote_draft_payload, row.quote_draft_id, row.quote_draft_version)
+        : null,
+    invoice_draft:
+      row.invoice_draft_id && row.invoice_draft_version
+        ? invoiceDraftSummary(row.invoice_draft_payload, row.invoice_draft_id, row.invoice_draft_version)
         : null,
     current_quote:
       row.current_quote_id && row.current_quote_number && row.current_quote_revision && row.current_quote_lifecycle
@@ -544,7 +552,28 @@ export function registerJobRoutes(
             parsed.value.mode,
           ],
         );
-        return { kind: "ok" as const, row: created.rows[0] };
+        const job = created.rows[0];
+        if (!job) {
+          return { kind: "ok" as const, row: job };
+        }
+        if (job.mode === "direct_invoice") {
+          const opened = await client.query<{
+            id: string;
+            version: number;
+            payload_json: unknown;
+          }>(
+            `select id, version, payload_json
+             from commercial.open_direct_invoice_draft($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid)`,
+            [provisioned.actor_id, randomUUID(), requestHash({ jobId: job.id }), request.id, job.id],
+          );
+          const draft = opened.rows[0];
+          if (draft) {
+            job.invoice_draft_id = draft.id;
+            job.invoice_draft_version = draft.version;
+            job.invoice_draft_payload = draft.payload_json;
+          }
+        }
+        return { kind: "ok" as const, row: job };
       });
       if (!row) {
         return sendFail(request, reply, API_ERROR_CODES.AUTHENTICATION_FAILED, GENERIC_AUTH);
@@ -575,6 +604,9 @@ export function registerJobRoutes(
           field_errors: [{ field: "id", message: "This job id is already used." }],
         });
       }
+      if (code === "P0044") {
+        return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "This job cannot be invoiced yet.");
+      }
       if (code === "23514" || code === "22023") {
         return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");
       }
@@ -603,6 +635,7 @@ export function registerJobRoutes(
           `select j.id, j.workspace_id, j.customer_id, c.name as customer_name, j.title, j.site_address_json,
                   j.no_site, j.lifecycle, j.mode, j.internal_notes, j.version, j.created_at, j.updated_at,
                   d.id as quote_draft_id, d.version as quote_draft_version, d.payload_json as quote_draft_payload,
+                  idr.id as invoice_draft_id, idr.version as invoice_draft_version, idr.payload_json as invoice_draft_payload,
                   q.id as current_quote_id, q.number as current_quote_number, q.revision_no as current_quote_revision,
                   q.lifecycle as current_quote_lifecycle, q.total_cents as current_quote_total,
                   inv.id as active_invoice_id, inv.number as active_invoice_number, inv.revision_no as active_invoice_revision,
@@ -622,6 +655,11 @@ export function registerJobRoutes(
             and d.job_id = j.id
             and d.kind = 'quote'
             and d.draft_state = 'editing'
+           left join commercial.document_drafts idr
+             on idr.workspace_id = j.workspace_id
+            and idr.job_id = j.id
+            and idr.kind = 'invoice'
+            and idr.draft_state = 'editing'
            left join commercial.documents q
              on q.workspace_id = j.workspace_id
             and q.id = j.current_quote_id

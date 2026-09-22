@@ -4,8 +4,10 @@ import { calculateChangeOrder, calculateDraftDocument, isDomainError } from "@jo
 import {
   isClientUuid,
   parseChangeDraft,
+  parseDirectInvoiceDraft,
   parseDraftPayload,
   parseOwnerEmail,
+  type DirectInvoiceDraftInput,
   type DraftLineInput,
   type DraftPayloadInput,
 } from "@job-to-invoice/schemas";
@@ -158,6 +160,93 @@ export function presentQuoteDraft(row: DraftRow) {
   };
 }
 
+export function presentDirectInvoiceDraft(row: DraftRow) {
+  const parsed = parseDirectInvoiceDraft(row.payload_json);
+  const payload: DirectInvoiceDraftInput = parsed.ok ? parsed.value : {
+    direct_invoice: true,
+    issue_acknowledgement: false,
+    due_date: null,
+    payment_instructions: "",
+    notes: "",
+    customer_email: null,
+    lines: [],
+  };
+  let totals;
+  try {
+    totals = calculateDraftDocument(payload.lines);
+  } catch (error) {
+    if (isDomainError(error)) {
+      totals = calculateDraftDocument([]);
+    } else {
+      throw error;
+    }
+  }
+  const calculatedById = new Map(totals.lines.map((line) => [line.client_line_id, line]));
+  return {
+    id: row.id,
+    job_id: row.job_id,
+    kind: row.kind,
+    draft_state: row.draft_state,
+    schema_version: row.schema_version,
+    version: row.version,
+    direct_invoice: true as const,
+    issue_acknowledgement: payload.issue_acknowledgement,
+    due_date: payload.due_date,
+    payment_instructions: payload.payment_instructions,
+    notes: payload.notes,
+    customer_email: payload.customer_email,
+    default_tax_bp: row.default_tax_bp,
+    currency: "USD",
+    lines: payload.lines.map((line: DraftLineInput) => {
+      const money = calculatedById.get(line.client_line_id);
+      return {
+        client_line_id: line.client_line_id,
+        description: line.description,
+        unit: line.unit,
+        custom_unit_label: line.custom_unit_label,
+        quantity: money?.quantity ?? line.quantity,
+        unit_price_cents: line.unit_price_cents,
+        discount_cents: line.discount_cents,
+        tax_bp: line.tax_bp,
+        gross_cents: money?.gross_cents ?? 0,
+        net_cents: money?.net_cents ?? 0,
+        tax_cents: money?.tax_cents ?? 0,
+        total_cents: money?.total_cents ?? 0,
+      };
+    }),
+    net_cents: totals.net_cents,
+    tax_cents: totals.tax_cents,
+    total_cents: totals.total_cents,
+    tax_by_rate: totals.tax_by_rate,
+    created_at: asIso(row.created_at),
+    updated_at: asIso(row.updated_at),
+  };
+}
+
+export function invoiceDraftSummary(raw: unknown, id: string, version: number) {
+  const presented = presentDirectInvoiceDraft({
+    id,
+    workspace_id: "",
+    job_id: "",
+    kind: "invoice",
+    draft_state: "editing",
+    schema_version: 1,
+    payload_json: raw,
+    version,
+    created_at: new Date(0),
+    updated_at: new Date(0),
+    default_tax_bp: 0,
+  });
+  return {
+    id,
+    version,
+    line_count: presented.lines.length,
+    net_cents: presented.net_cents,
+    tax_cents: presented.tax_cents,
+    total_cents: presented.total_cents,
+  };
+}
+
 export function quoteDraftSummary(raw: unknown, id: string, version: number) {
   const presented = presentQuoteDraft({
     id,
@@ -249,6 +338,9 @@ function mapDraftWriteError(
   }
   if (code === "P0007") {
     return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "This job cannot be edited as a quote draft.");
+  }
+  if (code === "P0044") {
+    return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "This job cannot be invoiced yet.");
   }
   if (code === "P0010") {
     return sendFail(request, reply, API_ERROR_CODES.DOCUMENT_IMMUTABLE, "This accepted quote cannot be edited.");
@@ -443,7 +535,7 @@ export function registerDraftRoutes(
            from commercial.document_drafts d
            join commercial.workspaces w on w.workspace_id = d.workspace_id
            where d.id = $1
-             and d.kind in ('quote', 'change')`,
+             and d.kind in ('quote', 'change', 'invoice')`,
           [params.draftId],
         );
         const found = result.rows[0];
@@ -461,6 +553,9 @@ export function registerDraftRoutes(
       }
       if (row.row.kind === "change") {
         return success(request.id, presentChangeDraft(row.row, row.sources));
+      }
+      if (row.row.kind === "invoice") {
+        return success(request.id, presentDirectInvoiceDraft(row.row));
       }
       return success(request.id, presentQuoteDraft(row.row));
     } catch {
@@ -597,6 +692,44 @@ export function registerDraftRoutes(
           );
           return { kind: "ok" as const, row: saved.rows[0], sources };
         }
+        if (current.kind === "invoice") {
+          const parsed = parseDirectInvoiceDraft(body);
+          if (!parsed.ok) {
+            return { kind: "invalid" as const, field_errors: parsed.field_errors };
+          }
+          try {
+            calculateDraftDocument(parsed.value.lines);
+          } catch (error) {
+            return { kind: "domain" as const, error };
+          }
+          const stored = {
+            direct_invoice: true,
+            issue_acknowledgement: parsed.value.issue_acknowledgement,
+            due_date: parsed.value.due_date,
+            payment_instructions: parsed.value.payment_instructions,
+            notes: parsed.value.notes,
+            customer_email: parsed.value.customer_email,
+            lines: parsed.value.lines,
+          };
+          const hash = requestHash({ body: stored, expectedVersion });
+          const saved = await client.query<DraftRow>(
+            `select id, workspace_id, job_id, kind, draft_state, schema_version, payload_json,
+                    version, created_at, updated_at, default_tax_bp, replayed
+             from commercial.save_direct_invoice_draft(
+               $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::integer, $7::jsonb
+             )`,
+            [
+              provisioned.actor_id,
+              key,
+              hash,
+              request.id,
+              params.draftId,
+              expectedVersion,
+              JSON.stringify(stored),
+            ],
+          );
+          return { kind: "ok" as const, row: saved.rows[0], sources: [] };
+        }
         const parsed = parseDraftPayload(body);
         if (!parsed.ok) {
           return { kind: "invalid" as const, field_errors: parsed.field_errors };
@@ -664,6 +797,9 @@ export function registerDraftRoutes(
       }
       if (row.row.kind === "change") {
         return success(request.id, presentChangeDraft(row.row, row.sources));
+      }
+      if (row.row.kind === "invoice") {
+        return success(request.id, presentDirectInvoiceDraft(row.row));
       }
       return success(request.id, presentQuoteDraft(row.row));
     } catch (error) {

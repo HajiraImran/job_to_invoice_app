@@ -31,6 +31,14 @@ export type JobDetail = JobSummary & {
     tax_cents: number;
     total_cents: number;
   } | null;
+  invoice_draft?: {
+    id: string;
+    version: number;
+    line_count: number;
+    net_cents: number;
+    tax_cents: number;
+    total_cents: number;
+  } | null;
   current_quote: {
     id: string;
     number: string;

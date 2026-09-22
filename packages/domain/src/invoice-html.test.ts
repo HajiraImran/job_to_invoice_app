@@ -116,5 +116,67 @@ describe("invoice snapshot and original HTML", () => {
     expect(html).toContain("INV-000001");
     expect(html).toContain("Payment instructions");
     expect(html).not.toContain("Review quote");
+    expect(html).not.toContain("not preceded by in-app scope approval");
+  });
+
+  it("labels a direct invoice as not preceded by in-app scope approval", () => {
+    const quote = quoteSnapshot();
+    const snapshot = buildInvoiceSnapshot({
+      business: quote.business,
+      customer: quote.customer,
+      job: quote.job,
+      notes: "",
+      payment_instructions: "Due on receipt.",
+      issue_date: "2026-09-21",
+      due_date: "2026-09-21",
+      source_quote_id: "",
+      source_quote_number: "",
+      origin: "direct",
+      no_prior_approval: true,
+      lines: [
+        {
+          position: 1,
+          source_line_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          description: "Completed work",
+          unit: "item",
+          custom_unit_label: null,
+          quantity: "1",
+          unit_price_cents: 10000,
+          discount_cents: 0,
+          tax_bp: 0,
+          gross_cents: 10000,
+          net_cents: 10000,
+          tax_cents: 0,
+          total_cents: 10000,
+        },
+      ],
+      net_cents: 10000,
+      tax_cents: 0,
+      total_cents: 10000,
+      tax_by_rate: [{ tax_bp: 0, net_cents: 10000, tax_cents: 0 }],
+    });
+    const html = renderInvoiceOriginalHtml({
+      number: "INV-000001",
+      revision_no: 1,
+      snapshot,
+      lines: snapshot.lines.map((line) => ({
+        position: line.position,
+        description: line.description,
+        quantity: line.quantity,
+        unit: line.unit,
+        custom_unit_label: line.custom_unit_label,
+        unit_price_cents: line.unit_price_cents,
+        discount_cents: line.discount_cents,
+        net_cents: line.net_cents,
+        tax_bp: line.tax_bp,
+        tax_cents: line.tax_cents,
+        total_cents: line.total_cents,
+      })),
+      net_cents: snapshot.net_cents,
+      tax_cents: snapshot.tax_cents,
+      total_cents: snapshot.total_cents,
+    });
+    expect(html).toContain("This invoice was not preceded by in-app scope approval.");
+    expect(snapshot.origin).toBe("direct");
   });
 });

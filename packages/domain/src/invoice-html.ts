@@ -6,7 +6,7 @@ import {
   formatTaxBp,
   type QuotePdfLine,
 } from "./quote-html.ts";
-import type { InvoiceSnapshotV1 } from "./snapshot.ts";
+import { DIRECT_INVOICE_NOTICE, type InvoiceSnapshotV1 } from "./snapshot.ts";
 
 export const INVOICE_PDF_TEMPLATE_VERSION = "invoice-original-v1";
 
@@ -110,6 +110,11 @@ export function renderInvoiceOriginalHtml(document: InvoicePdfDocument): string 
     <div>${addressHtml(snapshot.business.address)}</div>
   </header>
   <h2>Invoice ${escapeHtml(document.number)} · R${document.revision_no}</h2>
+  ${
+    snapshot.no_prior_approval
+      ? `<p><strong>${escapeHtml(DIRECT_INVOICE_NOTICE)}</strong></p>`
+      : ""
+  }
   <div>Issue date: ${escapeHtml(formatCalendarDate(snapshot.issue_date))}</div>
   <div>Due date: ${escapeHtml(formatCalendarDate(snapshot.due_date))}</div>
   <div>Currency: ${escapeHtml(snapshot.currency)}</div>

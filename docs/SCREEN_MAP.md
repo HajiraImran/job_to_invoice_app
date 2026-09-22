@@ -117,7 +117,7 @@ Customer/site, scope total, current step, documents, activity. Next action varie
 
 Canceled jobs that retain a receivable must show it.
 
-Implemented route: `/(tabs)/jobs/[id]`. Quote-mode drafts show Create/Open quote. After publish, S08 shows quote lifecycle (`issued` / `accepted` / `declined` / `expired` / `superseded` / `withdrawn`) from GET `/v1/jobs/{id}` on focus refresh. Declined/expired/superseded quotes can open a revision. After an unpaid void, S08 offers view of the voided invoice and Create replacement. Direct-invoice jobs do not enter the quote editor. No fake ledger totals.
+Implemented route: `/(tabs)/jobs/[id]`. Quote-mode drafts show Create/Open quote. After publish, S08 shows quote lifecycle (`issued` / `accepted` / `declined` / `expired` / `superseded` / `withdrawn`) from GET `/v1/jobs/{id}` on focus refresh. Declined/expired/superseded quotes can open a revision. After an unpaid void, S08 offers view of the voided invoice and Create replacement. Direct-invoice drafts show Create invoice and do not enter the quote editor. No fake ledger totals.
 
 ### S09 Quote editor
 
@@ -159,7 +159,7 @@ Implemented route: `/(tabs)/jobs/[id]/reduce`. Same change draft as S13. Remaini
 
 Source summary, lines, due date, instructions, issue. Block unresolved changes. Direct-invoice label (JRN06).
 
-Implemented route: `/(tabs)/jobs/[id]/invoice`. Online-only quote-based preview/issue. Direct-invoice path not in this slice. Device 2026-09-21: preview and issue passed. PDF readiness/open/share, EMAIL06, and worker completion NOT VERIFIED (intermittent network/database). Do not retry INV-000001.
+Implemented route: `/(tabs)/jobs/[id]/invoice`. Online-only quote-based residual preview/issue. Direct-invoice jobs edit lines, acknowledgement, due date, optional customer email, then freeze via `/drafts/{id}/preview` and issue via `/jobs/{id}/issue-invoice`. Device 2026-09-21: quote preview and issue passed. Direct path, PDF readiness/open/share, EMAIL06, and worker completion NOT VERIFIED. Do not retry INV-000001.
 
 ### S16 Invoice detail
 

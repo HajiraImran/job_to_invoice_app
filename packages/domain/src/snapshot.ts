@@ -70,6 +70,7 @@ export type QuoteSnapshotV1 = {
 };
 
 export const INVOICE_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+export const DIRECT_INVOICE_NOTICE = "This invoice was not preceded by in-app scope approval.";
 
 export type InvoiceSnapshotLine = {
   position: number;
@@ -100,6 +101,8 @@ export type InvoiceSnapshotV1 = {
   due_date: string;
   source_quote_id: string;
   source_quote_number: string;
+  origin: "quote_based" | "direct";
+  no_prior_approval: boolean;
   lines: InvoiceSnapshotLine[];
   net_cents: number;
   tax_cents: number;
@@ -181,6 +184,8 @@ export function buildInvoiceSnapshot(input: {
   due_date: string;
   source_quote_id: string;
   source_quote_number: string;
+  origin?: "quote_based" | "direct";
+  no_prior_approval?: boolean;
   lines: ResidualSourceLine[];
   net_cents: number;
   tax_cents: number;
@@ -203,6 +208,8 @@ export function buildInvoiceSnapshot(input: {
     due_date: input.due_date,
     source_quote_id: input.source_quote_id,
     source_quote_number: input.source_quote_number,
+    origin: input.origin ?? "quote_based",
+    no_prior_approval: input.no_prior_approval === true,
     lines: input.lines,
     net_cents: input.net_cents,
     tax_cents: input.tax_cents,
