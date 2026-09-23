@@ -29,6 +29,7 @@ import { registerPortalRoutes } from "./portal.ts";
 import { registerActionGrantRoutes } from "./action-grants.ts";
 import { registerRequestMutationRoutes } from "./requests.ts";
 import { RateLimiter } from "./rate-limit.ts";
+import { registerSubscriptionRoutes } from "./subscription.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
 declare module "fastify" {
@@ -249,14 +250,29 @@ export function buildApp(deps: AppDeps) {
             row.workspace_id,
             row.actor_id,
           ]);
-          const consumed = await client.query<{ free_jobs_consumed: number }>(
-            "select free_jobs_consumed from commercial.job_allowances where workspace_id = $1",
+          const consumed = await client.query<{
+            free_jobs_consumed: number;
+            trial_started_at: Date | string | null;
+            trial_ends_at: Date | string | null;
+            trial_jobs_consumed: number;
+          }>(
+            `select free_jobs_consumed, trial_started_at, trial_ends_at, trial_jobs_consumed
+             from commercial.job_allowances where workspace_id = $1`,
             [row.workspace_id],
           );
-          return consumed.rows[0]?.free_jobs_consumed ?? 0;
+          return consumed.rows[0];
         });
-        entitlementSource = "free";
-        canPublish = allowance < 3;
+        const freeConsumed = Number(allowance?.free_jobs_consumed ?? 0);
+        const trialConsumed = Number(allowance?.trial_jobs_consumed ?? 0);
+        const trialEnds = allowance?.trial_ends_at
+          ? allowance.trial_ends_at instanceof Date
+            ? allowance.trial_ends_at.getTime()
+            : Date.parse(String(allowance.trial_ends_at))
+          : Number.NaN;
+        const trialActive =
+          Boolean(allowance?.trial_started_at) && Number.isFinite(trialEnds) && Date.now() < trialEnds && trialConsumed < 20;
+        entitlementSource = trialActive ? "trial" : "free";
+        canPublish = freeConsumed < 3 || trialActive;
       }
       const body = success(request.id, {
         user: {
@@ -437,6 +453,9 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerInvoiceRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerSubscriptionRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerActionGrantRoutes(app, deps, {

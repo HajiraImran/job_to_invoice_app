@@ -19,6 +19,8 @@ const FORBIDDEN_PATH_PATTERNS: RegExp[] = [
   /\/cancel\b/i,
   /\/archive\b/i,
   /\/finish\b/i,
+  /\/subscription\b/i,
+  /\/trial\b/i,
 ];
 
 export const ALLOWED_OUTBOX_METHODS = ["POST", "PATCH"] as const;

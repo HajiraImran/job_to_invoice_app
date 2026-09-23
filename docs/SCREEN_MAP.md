@@ -191,7 +191,7 @@ Implemented route: `/(tabs)/items`. Workspace setup seeds five zero-price exampl
 
 ### S21 Subscription
 
-Free usage/trial date, StoreKit monthly/annual prices, buy/restore/manage. States: pending, active, canceled-but-active, expired, refund, sync failure. Never show purchase success on cancel/pending.
+Implemented route: `/(tabs)/settings/subscription`. Free usage and app-managed 14-day trial start/status (`0023_app_managed_trial.sql`). StoreKit monthly/annual prices, buy/restore/manage, and paid billing states remain later. Never show purchase success on cancel/pending.
 
 ### S22 Settings
 

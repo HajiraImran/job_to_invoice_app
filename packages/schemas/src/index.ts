@@ -1,6 +1,8 @@
 /** Quote publication snapshot schema (QUO02A). Official numbers live on documents rows. */
 export const SNAPSHOT_SCHEMA_VERSION = 1;
 export const FREE_JOB_LIMIT = 3;
+export { TRIAL_DAYS, TRIAL_JOB_LIMIT, canPublishFromAllowance, parseTrialStart, trialIsActive } from "./subscription.ts";
+export type { TrialStartParseResult } from "./subscription.ts";
 export const PREVIEW_TTL_MS = 10 * 60 * 1000;
 
 export {

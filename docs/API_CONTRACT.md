@@ -174,8 +174,8 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /assets/{id}/complete | Owner | Enqueue validation |
 | GET /assets/{id} | Owner | State; authorized thumbnail if ready |
 | DELETE /assets/{id} | Owner | Unpublished unused only |
-| POST /subscription/trial | Owner | Explicit start; once |
-| GET /subscription | Owner | Entitlement, trial, usage |
+| POST /subscription/trial | Owner | Explicit start; once. **Implemented:** `POST /v1/subscription/trial`; `{ acknowledged: true }`; Idempotency-Key; once per workspace; `trial_started`; queues EMAIL09 two days before end. Purchase/reconcile later. |
+| GET /subscription | Owner | Entitlement, trial, usage. **Implemented:** `GET /v1/subscription`; free usage, trial dates/caps, `can_start_trial`. |
 | POST /subscription/reconcile | Owner | Provider hint; authoritative fetch |
 | POST /webhooks/revenuecat | Provider auth | Durable event; async process |
 | POST /webhooks/email | Provider signature | Delivery dedup |

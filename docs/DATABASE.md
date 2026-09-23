@@ -230,7 +230,7 @@ Composite FKs:
 | assets | job_id?, draft_id?, visibility internal/customer, bucket_key, upload_state pending/processing/ready/rejected, media_type, source_size, stored_size?, width?, height?, sha256?, rejection_code?, uploaded_by |
 | document_assets | document_id, asset_id, position; append-only after document issue |
 | artifacts | document_id?, export_id?, type original_pdf/status_pdf/receipt_pdf/statement_pdf/export_zip, object_key, sha256, bytes, template_version, generated_at, state ready/failed |
-| job_allowances | PRIMARY KEY (workspace_id). Exactly one row per workspace. free_jobs_consumed default 0, trial_started_at?, trial_ends_at?, trial_jobs_consumed default 0, retained_bytes default 0, version. Created on provision/setup; slot increments remain a later slice. |
+| job_allowances | PRIMARY KEY (workspace_id). Exactly one row per workspace. free_jobs_consumed default 0, trial_started_at?, trial_ends_at?, trial_jobs_consumed default 0, retained_bytes default 0, version. Created on provision/setup. First publication consumes a trial slot while the app-managed trial is active, otherwise a lifetime free slot (`0023_app_managed_trial.sql`). |
 | entitlement_snapshots | user_id unique, provider_customer_id unique, entitlement pro, status, product_id?, expires_at?, will_renew?, verified_at, source_event_id?, environment sandbox/production |
 | provider_events | provider, external_event_id unique per provider, received_at, payload_encrypted?, processing_state, processed_at?, attempts, last_error_code? |
 

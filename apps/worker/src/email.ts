@@ -224,6 +224,33 @@ export function renderEmail06(input: {
   return { subject, text, html };
 }
 
+export function renderEmail09(input: {
+  appName: string;
+  endsOn: string;
+  remainingFreeSlots: number;
+}): { subject: string; text: string; html: string } {
+  const remaining =
+    input.remainingFreeSlots > 0
+      ? `You still have ${input.remainingFreeSlots} unused free published jobs after the trial.`
+      : "You have no unused free published jobs after the trial.";
+  const subject = `Your trial ends on ${input.endsOn}`;
+  const text = [
+    `${input.appName}`,
+    `Your trial ends on ${input.endsOn}.`,
+    "No automatic charge.",
+    remaining,
+    "You can finish existing jobs and purchase Pro when it is available.",
+  ].join("\n");
+  const html = `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>Your trial ends on ${escapeHtml(input.endsOn)}.</p>
+<p>No automatic charge.</p>
+<p>${escapeHtml(remaining)}</p>
+<p>You can finish existing jobs and purchase Pro when it is available.</p>
+</body></html>`;
+  return { subject, text, html };
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -359,6 +386,27 @@ function asBuffer(value: unknown): Buffer | undefined {
   return undefined;
 }
 
+type TrialClaimRow = {
+  id: string;
+  workspace_id: string;
+  template_id: string;
+  effect_key: string;
+  attempts: number;
+  created_by: string;
+  recipient_email: string;
+  remaining_free_slots: string | number;
+  trial_ends_at: Date | string | null;
+  provider_message_id: string | null;
+};
+
+function trialEndsOn(value: Date | string | null): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const iso = value instanceof Date ? value.toISOString() : String(value);
+  return iso.length >= 10 ? iso.slice(0, 10) : undefined;
+}
+
 export async function processSendEmail(input: {
   pool: Pool;
   deliverySecret: VersionedSecret | string;
@@ -368,6 +416,75 @@ export async function processSendEmail(input: {
   appName: string;
   send?: ResendSender;
 }): Promise<"idle" | "done" | "retry" | "dead"> {
+  const trialClaimed = await withWorkerRole(
+    input.pool,
+    async (client) => {
+      const result = await client.query<TrialClaimRow>("select * from commercial.claim_trial_ending_email()");
+      const row = result.rows[0];
+      if (!row) {
+        return undefined;
+      }
+      await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+        row.workspace_id,
+        row.created_by,
+      ]);
+      return row;
+    },
+    { timeoutMs: WORKER_CLAIM_TIMEOUT_MS, statementTimeoutMs: WORKER_STATEMENT_TIMEOUT_MS },
+  );
+  if (trialClaimed) {
+    const endsOn = trialEndsOn(trialClaimed.trial_ends_at);
+    if (!endsOn || !trialClaimed.recipient_email) {
+      await withWorkerRole(input.pool, async (client) => {
+        await client.query("select commercial.fail_trial_ending_email($1::uuid, $2, $3)", [
+          trialClaimed.id,
+          "VALIDATION_FAILED",
+          true,
+        ]);
+      });
+      return "dead";
+    }
+    const rendered = renderEmail09({
+      appName: input.appName,
+      endsOn: formatCalendarDate(endsOn),
+      remainingFreeSlots: Number(trialClaimed.remaining_free_slots),
+    });
+    const from = `${input.appName} <quotes@${input.fromDomain}>`;
+    const send = input.send ?? ((payload) => sendResendEmail(payload));
+    const result = await whileLeased(input.pool, trialClaimed.id, () =>
+      send({
+        apiKey: input.apiKey,
+        idempotencyKey: trialClaimed.effect_key,
+        from,
+        to: trialClaimed.recipient_email,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+      }),
+    );
+    if (result.ok) {
+      await withWorkerRole(input.pool, async (client) => {
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          trialClaimed.workspace_id,
+          trialClaimed.created_by,
+        ]);
+        await client.query("select commercial.complete_trial_ending_email($1::uuid, $2)", [
+          trialClaimed.id,
+          result.id,
+        ]);
+      });
+      return "done";
+    }
+    const status = await withWorkerRole(input.pool, async (client) => {
+      const failed = await client.query<{ fail_trial_ending_email: string }>(
+        "select commercial.fail_trial_ending_email($1::uuid, $2, $3) as fail_trial_ending_email",
+        [trialClaimed.id, result.retryable ? "PROVIDER_RETRY" : "PROVIDER_REJECTED", !result.retryable],
+      );
+      return failed.rows[0]?.fail_trial_ending_email;
+    });
+    return status === "dead" ? "dead" : "retry";
+  }
+
   const claimed = await withWorkerRole(
     input.pool,
     async (client) => {

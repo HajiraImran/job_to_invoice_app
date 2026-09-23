@@ -109,6 +109,7 @@ describe("redaction", () => {
     expect(API_ERROR_CODES.JOB_NOT_CANCELABLE).toBe("JOB_NOT_CANCELABLE");
     expect(API_ERROR_CODES.JOB_NOT_ARCHIVABLE).toBe("JOB_NOT_ARCHIVABLE");
     expect(API_ERROR_CODES.JOB_NOT_FINISHABLE).toBe("JOB_NOT_FINISHABLE");
+    expect(API_ERROR_CODES.TRIAL_ALREADY_STARTED).toBe("TRIAL_ALREADY_STARTED");
   });
 
   it("redacts nested sensitive keys and rejects unsafe analytics properties", () => {

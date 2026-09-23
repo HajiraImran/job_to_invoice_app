@@ -1230,6 +1230,55 @@
         }
       }
     },
+    "/v1/subscription": {
+      "get": {
+        "summary": "Verified free and trial entitlement",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Free usage, trial dates, and whether a trial can be started" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/subscription/trial": {
+      "post": {
+        "summary": "Start the once-only 14-day app-managed trial",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["acknowledged"],
+                "properties": {
+                  "acknowledged": { "type": "boolean", "const": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Trial started or idempotent replay of the same start" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "409": { "description": "Trial already used or idempotency mismatch" },
+          "422": { "description": "Missing acknowledgement or Idempotency-Key" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
     "/v1/requests/{requestId}/resend": {
       "post": {
         "summary": "Resend a pending approval request email (NTF04, APR03 rotate)",

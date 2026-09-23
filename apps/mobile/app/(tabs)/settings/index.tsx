@@ -1,13 +1,16 @@
+import { useRouter } from "expo-router";
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { useCallback, useEffect, useState } from "react";
-import { LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED } from "../../src/drafts/sync.ts";
-import { copy } from "../../src/i18n/en.ts";
-import { useAuth } from "../../src/session/AuthProvider.tsx";
-import { signOutAlertSpec, signOutChoiceProceeds } from "../../src/session/sign-out.ts";
-import { colors, space, type } from "../../src/theme.ts";
+import { LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED } from "../../../src/drafts/sync.ts";
+import { copy } from "../../../src/i18n/en.ts";
+import { useAuth } from "../../../src/session/AuthProvider.tsx";
+import { signOutAlertSpec, signOutChoiceProceeds } from "../../../src/session/sign-out.ts";
+import { subscriptionPath } from "../../../src/subscription/presentation.ts";
+import { colors, space, type } from "../../../src/theme.ts";
 
 export default function SettingsScreen() {
   const auth = useAuth();
+  const router = useRouter();
   const [syncSummary, setSyncSummary] = useState<string | undefined>();
 
   const refreshSyncSummary = useCallback(async () => {
@@ -99,6 +102,14 @@ export default function SettingsScreen() {
           <Text style={styles.syncLabel}>{copy.synchronizeNow}</Text>
         </Pressable>
       ) : null}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={copy.subscriptionTitle}
+        onPress={() => router.push(subscriptionPath())}
+        style={styles.syncButton}
+      >
+        <Text style={styles.syncLabel}>{copy.subscriptionTitle}</Text>
+      </Pressable>
       {auth.error ? (
         <Text accessibilityLiveRegion="assertive" style={styles.banner}>
           {auth.error}

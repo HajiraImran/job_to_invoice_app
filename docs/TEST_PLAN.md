@@ -73,8 +73,8 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA08 | Replay draft operation 20 times | One mutation; stable version | Integration |
 | QA09 | Publish timed out after commit and retried | One number, slot, request, outbox | Integration |
 | QA10 | Fourth new free job | Paywall; draft kept; first three completable. Stage 2 integration against real `job_allowances` (no RevenueCat). No stub path. | Integration + E2E |
-| QA11 | Trial replay/reinstall/email change | Original expiry/cap; no billing | Integration |
-| QA12 | Trial expires during pending approval | Customer can approve; owner can finish | Integration |
+| QA11 | Trial replay/reinstall/email change | Original expiry/cap; no billing. Local: `apps/api/src/subscription.test.ts` second start keeps original dates. Reinstall/email-change device unverified. | Integration |
+| QA12 | Trial expires during pending approval | Customer can approve; owner can finish. Local: expired trial blocks new jobs; existing trial job remains readable. Portal approve-after-expiry and device unverified. | Integration |
 | QA13 | Paid owner downgrades with jobs | Completion/export; new-job gate | E2E |
 | QA14 | Reset customer/site of published job | Blocked; new job required | API |
 | QA15 | Edit catalogue price and business address | Issued docs unchanged | Integration; apps/api/src/items.test.ts catalogue price edit leaves canonical bytes and issued line price unchanged. Business-address half remains S22. Not VERIFIED on device. Hosted APPLY_0020 not applied. |

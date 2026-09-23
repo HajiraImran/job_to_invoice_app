@@ -69,6 +69,7 @@ describe("SYNC01 outbox rules and retry", () => {
     expect(isForbiddenOutboxPath("/v1/jobs/x/cancel")).toBe(true);
     expect(isForbiddenOutboxPath("/v1/jobs/x/archive")).toBe(true);
     expect(isForbiddenOutboxPath("/v1/jobs/x/finish")).toBe(true);
+    expect(isForbiddenOutboxPath("/v1/subscription/trial")).toBe(true);
     expect(isForbiddenOutboxPath("/v1/jobs/x/quote")).toBe(false);
     expect(() =>
       assertOutboxOperationAllowed({ method: "POST", path: "/v1/jobs", resourceKind: "job" }),

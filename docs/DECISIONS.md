@@ -573,3 +573,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | `0022_job_archive_finish.sql`. Do not modify 0001–0021. Do not change hosted confirmation from `APPLY_0021` until 0021 is applied. |
 | Reversible | Additive functions only |
 | Escalation category | none |
+
+### D-029 — App-managed trial is once-only and independent of StoreKit
+
+| Field | Value |
+| --- | --- |
+| ID | D-029 |
+| Date | 2026-09-23 |
+| Status | Resolved |
+| Decision | `POST /v1/subscription/trial` starts the 14-day app-managed trial only after `{ acknowledged: true }`, once per workspace, using server UTC. While the trial is active, first publication consumes a trial slot and leaves unused free slots for after expiry. EMAIL09 is queued at start with `available_at = trial_ends_at - 2 days`. StoreKit prices, RevenueCat purchase, restore, and reconcile are not implemented in this slice because product IDs remain provisional and credentials are empty. Hosted confirmation stays `APPLY_0022`; `0023` is local-only until 0022 is applied. |
+| Reason | SUB03 is explicit, app-managed, and unblocked. Implementing paid IAP here would hard-code provisional identifiers and invent store configuration. |
+| Evidence | `supabase/migrations/0023_app_managed_trial.sql`; `apps/api/src/subscription.ts`; `apps/mobile/app/(tabs)/settings/subscription.tsx` |
+| Owner | Engineering lead |
+| PRD implication | SUB03, SUB02 trial marking, EMAIL09, S21 trial half, QA11/QA12. |
+| Impacted requirement IDs | SUB03, SUB02, S21, EMAIL09, INV09, QA11, QA12 |
+| Impacted test IDs | `apps/api/src/subscription.test.ts`; `packages/schemas/src/subscription.test.ts`; `apps/mobile/src/subscription/presentation.test.ts`; `supabase/tests/0024_app_managed_trial.sql` |
+| Migration implications | `0023_app_managed_trial.sql`. Do not modify 0001–0022. Do not change hosted confirmation from `APPLY_0022` until 0022 is applied. |
+| Reversible | Additive functions, indexes, and CREATE OR REPLACE of live publish slot allocation |
+| Escalation category | none |

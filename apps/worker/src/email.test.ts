@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderEmail01, renderEmail02, renderEmail03, renderEmail04, renderEmail05, renderEmail06, renderEmail07, renderEmail08, reviewHref, sendResendEmail } from "./email.ts";
+import { renderEmail01, renderEmail02, renderEmail03, renderEmail04, renderEmail05, renderEmail06, renderEmail07, renderEmail08, renderEmail09, reviewHref, sendResendEmail } from "./email.ts";
 
 describe("EMAIL01 template", () => {
   it("renders a fragment href without a token query parameter or PDF attachment", () => {
@@ -126,6 +126,18 @@ describe("EMAIL03 EMAIL04 EMAIL05 EMAIL08 templates", () => {
     });
     expect(replaced.html).toContain("/review#newtoken");
     expect(replaced.html).not.toContain("?token=");
+  });
+
+  it("renders EMAIL09 with no automatic charge and remaining free slots", () => {
+    const rendered = renderEmail09({
+      appName: "Job to Invoice",
+      endsOn: "September 24, 2026",
+      remainingFreeSlots: 2,
+    });
+    expect(rendered.subject).toBe("Your trial ends on September 24, 2026");
+    expect(rendered.text).toContain("No automatic charge.");
+    expect(rendered.text).toContain("2 unused free published jobs");
+    expect(rendered.html).not.toContain("@");
   });
 });
 

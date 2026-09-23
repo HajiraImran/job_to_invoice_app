@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
 import { jobDetailPath, jobQuotePath, jobRequestPath } from "../../../../src/jobs/routes.ts";
+import { subscriptionPath } from "../../../../src/subscription/presentation.ts";
 import type { JobDetail } from "../../../../src/jobs/presentation.ts";
 import {
   presentQuotePdf,
@@ -316,6 +317,16 @@ export default function QuotePublishScreen() {
             {view.kind === "conflict" ? (
               <Pressable accessibilityRole="button" onPress={() => router.replace(jobQuotePath(jobId))} style={styles.secondary}>
                 <Text style={styles.secondaryLabel}>{copy.openQuote}</Text>
+              </Pressable>
+            ) : null}
+            {view.kind === "entitlement" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={copy.viewPlan}
+                onPress={() => router.push(`${subscriptionPath()}?from=publish`)}
+                style={styles.secondary}
+              >
+                <Text style={styles.secondaryLabel}>{copy.viewPlan}</Text>
               </Pressable>
             ) : null}
           </>
