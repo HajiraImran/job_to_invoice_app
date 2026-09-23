@@ -31,6 +31,7 @@ import { registerRequestMutationRoutes } from "./requests.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { registerSubscriptionRoutes } from "./subscription.ts";
 import { registerExportRoutes } from "./exports.ts";
+import { registerDeletionRoutes } from "./deletion.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
 declare module "fastify" {
@@ -240,12 +241,15 @@ export function buildApp(deps: AppDeps) {
       if (!isUsableProvisionRow(row)) {
         return replyFail("bootstrap_query_failed", "UNAVAILABLE", "Service unavailable.");
       }
-      if (row.account_status === "deleted" || row.account_status === "deleting") {
+      if (row.account_status === "deleted") {
         return replyFail("response_sent", API_ERROR_CODES.ACCOUNT_DELETING, "This account is not available.");
       }
       let canPublish = false;
       let entitlementSource = "unverified";
-      if (row.setup_completed) {
+      if (row.account_status === "deleting") {
+        canPublish = false;
+        entitlementSource = "unverified";
+      } else if (row.setup_completed) {
         const allowance = await withApiRole(deps.pool, async (client) => {
           await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
             row.workspace_id,
@@ -460,6 +464,9 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerExportRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerDeletionRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerActionGrantRoutes(app, deps, {

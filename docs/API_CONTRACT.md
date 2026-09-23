@@ -116,7 +116,7 @@ Both texts are required. Keep every §22 route. `POST /account/action-grants` is
 
 | Method and route | Access | Input and result |
 | --- | --- | --- |
-| POST /account/action-grants | Owner after fresh OTP (not refresh) | `{action}` for export, deletion, email_change, replace_link; returns one-time grant for `X-Action-Grant`; 5-minute expiry; single use. **Implemented:** `POST /v1/account/action-grants` issues `replace_link` and `export` when JWT `auth_time` is fresh (D-024); deletion and email_change return 422. |
+| POST /account/action-grants | Owner after fresh OTP (not refresh) | `{action}` for export, deletion, email_change, replace_link; returns one-time grant for `X-Action-Grant`; 5-minute expiry; single use. **Implemented:** `POST /v1/account/action-grants` issues `replace_link`, `export`, and `deletion` when JWT `auth_time` is fresh (D-024); email_change returns 422. |
 
 Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. Grant issued for `export` used on `replace_link` → 403.
 
@@ -181,8 +181,8 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /webhooks/email | Provider signature | Delivery dedup |
 | POST /exports | Owner + X-Action-Grant export | Cutoff; 202 export ID. **Implemented:** `POST /v1/exports`; Idempotency-Key + X-Action-Grant; `{ newer?: true }`; reuses a 24h bundle unless newer; two new exports/UTC day (`EXPORT_LIMIT`). |
 | GET /exports/{id} | Owner | Status/manifest/download. **Implemented:** `GET /v1/exports/{id}`, `GET /v1/exports/latest`, `GET /v1/exports/{id}/download` (authenticated presign until `download_until`). |
-| POST /account/deletion | Owner + X-Action-Grant deletion | Confirmation phrase; lock and revoke refresh tokens |
-| GET /account/deletion | Owner limited session | Deletion state |
+| POST /account/deletion | Owner + X-Action-Grant deletion | Confirmation phrase; lock and revoke refresh tokens. **Implemented:** `POST /v1/account/deletion`; `{ confirmation: "DELETE" }`; Idempotency-Key + X-Action-Grant; immediate lock; EMAIL11 queued; no cancel. Auth Admin refresh-token revoke is unavailable without service_role. |
+| GET /account/deletion | Owner limited session | Deletion state. **Implemented:** `GET /v1/account/deletion` while `active` or `deleting`. GET `/v1/me` stays available during `deleting` with `can_publish=false`. |
 | POST /support/cases | Owner | Category/message; optional content grant |
 | GET /operations/{id} | Same initiating actor | Pending or durable result |
 | POST /analytics/batch | Owner | Allowlisted events, max 50 |

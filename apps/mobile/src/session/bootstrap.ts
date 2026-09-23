@@ -187,6 +187,9 @@ export function classifyOwnerMeError(error: Pick<ApiError, "status" | "code">): 
   if (error.status === 401 && error.code === "AUTHENTICATION_FAILED") {
     return "BOOTSTRAP_SESSION";
   }
+  if (error.status === 403 && error.code === "ACCOUNT_DELETING") {
+    return "BOOTSTRAP_SESSION";
+  }
   if (error.status === 503 && error.code === "UNAVAILABLE") {
     return "BOOTSTRAP_SERVICE";
   }

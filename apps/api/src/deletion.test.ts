@@ -16,9 +16,9 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 function setupBody(email: string) {
   return {
-    business_name: "Export Co",
-    legal_name: "Export Co LLC",
-    contact_name: "Owner E",
+    business_name: "Delete Co",
+    legal_name: "Delete Co LLC",
+    contact_name: "Owner D",
     contact_email: email,
     contact_phone: "+12025550123",
     address: { line1: "123 Main Street", city: "Austin", state: "TX", postal_code: "78701" },
@@ -33,7 +33,7 @@ function setupBody(email: string) {
   };
 }
 
-describe("EXP01/EXP02 owner export", () => {
+describe("PRV03/PRV06 account deletion", () => {
   let stop: (() => Promise<void>) | undefined;
   let pool: Pool | undefined;
   let app: ReturnType<typeof buildApp> | undefined;
@@ -47,7 +47,7 @@ describe("EXP01/EXP02 owner export", () => {
     admin = new Client({ connectionString: resolved.url });
     await admin.connect();
     await applyCleanMigrations(admin, repoRoot);
-    await admin.query("grant api_app, worker_app to current_user");
+    await admin.query("grant api_app, worker_app, purge_app to current_user");
     pool = new Pool({ connectionString: resolved.url, max: 4 });
     const fixture = await createJwtFixture();
     sign = fixture.sign;
@@ -61,9 +61,6 @@ describe("EXP01/EXP02 owner export", () => {
       env,
       pool,
       logOwnerMe: () => undefined,
-      documentsStore: {
-        presignGet: async (key, expiresIn) => `https://files.example.test/${key}?exp=${expiresIn ?? 300}`,
-      },
       verifyJwt: createJwtVerifier({
         issuer: fixture.issuer,
         audience: fixture.audience,
@@ -107,21 +104,21 @@ describe("EXP01/EXP02 owner export", () => {
     });
   }
 
-  async function exportGrant(token: string) {
+  async function deletionGrant(token: string) {
     return running().app.inject({
       method: "POST",
       url: "/v1/account/action-grants",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      payload: { action: "export" },
+      payload: { action: "deletion" },
     });
   }
 
-  it("issues export grants, reuses a 24h bundle, caps two new exports, and isolates tenants (QA56)", async () => {
+  it("locks immediately, replays the same key, blocks cancel, and isolates tenants (QA57)", async () => {
     const { app: api, admin: db } = running();
     const ownerA = randomUUID();
     const ownerB = randomUUID();
-    const emailA = "owner.export.a@example.com";
-    const emailB = "owner.export.b@example.com";
+    const emailA = "owner.delete.a@example.com";
+    const emailB = "owner.delete.b@example.com";
     const tokenA = await tokenFor(ownerA, emailA);
     const tokenB = await tokenFor(ownerB, emailB);
     expect((await completeSetup(tokenA, emailA)).statusCode).toBe(200);
@@ -138,143 +135,137 @@ describe("EXP01/EXP02 owner export", () => {
           method: "POST",
           url: "/v1/account/action-grants",
           headers: { authorization: `Bearer ${stale}`, "content-type": "application/json" },
-          payload: { action: "export" },
+          payload: { action: "deletion" },
         })
       ).statusCode,
     ).toBe(403);
 
-    const emailChange = await api.inject({
-      method: "POST",
-      url: "/v1/account/action-grants",
-      headers: { authorization: `Bearer ${tokenA}`, "content-type": "application/json" },
-      payload: { action: "email_change" },
-    });
-    expect(emailChange.statusCode).toBe(422);
-
     const missingGrant = await api.inject({
       method: "POST",
-      url: "/v1/exports",
+      url: "/v1/account/deletion",
       headers: {
         authorization: `Bearer ${tokenA}`,
         "content-type": "application/json",
         "idempotency-key": randomUUID(),
       },
-      payload: {},
+      payload: { confirmation: "DELETE" },
     });
     expect(missingGrant.statusCode).toBe(403);
     expect(missingGrant.json().error.code).toBe("ACTION_GRANT_REQUIRED");
 
-    const grant1 = await exportGrant(tokenA);
+    const wrongPhrase = await api.inject({
+      method: "POST",
+      url: "/v1/account/deletion",
+      headers: {
+        authorization: `Bearer ${tokenA}`,
+        "content-type": "application/json",
+        "idempotency-key": randomUUID(),
+        "x-action-grant": (await deletionGrant(tokenA)).json().data.grant,
+      },
+      payload: { confirmation: "delete" },
+    });
+    expect(wrongPhrase.statusCode).toBe(422);
+
+    const grant1 = await deletionGrant(tokenA);
     expect(grant1.statusCode).toBe(201);
+    const key = randomUUID();
     const first = await api.inject({
       method: "POST",
-      url: "/v1/exports",
+      url: "/v1/account/deletion",
+      headers: {
+        authorization: `Bearer ${tokenA}`,
+        "content-type": "application/json",
+        "idempotency-key": key,
+        "x-action-grant": grant1.json().data.grant,
+      },
+      payload: { confirmation: "DELETE" },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data.status).toBe("locked");
+    expect(first.json().data.retained_categories).toEqual([]);
+    const deletionId = first.json().data.id as string;
+
+    const replay = await api.inject({
+      method: "POST",
+      url: "/v1/account/deletion",
+      headers: {
+        authorization: `Bearer ${tokenA}`,
+        "content-type": "application/json",
+        "idempotency-key": key,
+        "x-action-grant": grant1.json().data.grant,
+      },
+      payload: { confirmation: "DELETE" },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().data.id).toBe(deletionId);
+    expect(replay.json().data.replayed).toBe(true);
+
+    const me = await api.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(me.statusCode).toBe(200);
+    expect(me.json().data.user.status).toBe("deleting");
+    expect(me.json().data.entitlement.can_publish).toBe(false);
+
+    const status = await api.inject({
+      method: "GET",
+      url: "/v1/account/deletion",
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().data.deletion.id).toBe(deletionId);
+    expect(status.json().data.deletion.status).toBe("locked");
+
+    const second = await api.inject({
+      method: "POST",
+      url: "/v1/account/deletion",
       headers: {
         authorization: `Bearer ${tokenA}`,
         "content-type": "application/json",
         "idempotency-key": randomUUID(),
         "x-action-grant": grant1.json().data.grant,
       },
-      payload: {},
+      payload: { confirmation: "DELETE" },
     });
-    expect(first.statusCode).toBe(202);
-    const firstId = first.json().data.id as string;
-    expect(first.json().data.status).toBe("queued");
-    expect(first.json().data.reused).toBe(false);
-    const latest = await api.inject({
-      method: "GET",
-      url: "/v1/exports/latest",
-      headers: { authorization: `Bearer ${tokenA}` },
-    });
-    expect(latest.statusCode).toBe(200);
-    expect(latest.json().data.export.id).toBe(firstId);
+    expect(second.statusCode).toBe(403);
+    expect(second.json().error.code).toBe("ACCOUNT_DELETING");
 
-    const grantReuse = await exportGrant(tokenA);
-    const reused = await api.inject({
+    const exportAfter = await api.inject({
       method: "POST",
       url: "/v1/exports",
       headers: {
         authorization: `Bearer ${tokenA}`,
         "content-type": "application/json",
         "idempotency-key": randomUUID(),
-        "x-action-grant": grantReuse.json().data.grant,
+        "x-action-grant": "not-a-grant",
       },
       payload: {},
     });
-    expect(reused.statusCode).toBe(202);
-    expect(reused.json().data.id).toBe(firstId);
-    expect(reused.json().data.reused).toBe(true);
+    expect(exportAfter.statusCode).toBe(403);
+    expect(exportAfter.json().error.code).toBe("ACCOUNT_DELETING");
 
-    const grantNewer = await exportGrant(tokenA);
-    const newer = await api.inject({
-      method: "POST",
-      url: "/v1/exports",
-      headers: {
-        authorization: `Bearer ${tokenA}`,
-        "content-type": "application/json",
-        "idempotency-key": randomUUID(),
-        "x-action-grant": grantNewer.json().data.grant,
-      },
-      payload: { newer: true },
-    });
-    expect(newer.statusCode).toBe(202);
-    expect(newer.json().data.id).not.toBe(firstId);
-    expect(newer.json().data.reused).toBe(false);
-
-    const grantCap = await exportGrant(tokenA);
-    const capped = await api.inject({
-      method: "POST",
-      url: "/v1/exports",
-      headers: {
-        authorization: `Bearer ${tokenA}`,
-        "content-type": "application/json",
-        "idempotency-key": randomUUID(),
-        "x-action-grant": grantCap.json().data.grant,
-      },
-      payload: { newer: true },
-    });
-    expect(capped.statusCode).toBe(429);
-    expect(capped.json().error.code).toBe("EXPORT_LIMIT");
-
-    const foreign = await api.inject({
+    const other = await api.inject({
       method: "GET",
-      url: `/v1/exports/${firstId}`,
+      url: "/v1/account/deletion",
       headers: { authorization: `Bearer ${tokenB}` },
     });
-    expect(foreign.statusCode).toBe(404);
-
-    await db.query("select * from commercial.claim_build_export()");
-    await db.query(
-      `select commercial.complete_export($1::uuid, $2, $3, $4::bigint, $5::jsonb, $6::integer, $7::integer)`,
-      [firstId, `${firstId}/export-part-001.zip`, "ab".repeat(32), 128, JSON.stringify({ schema_version: 1 }), 0, 1],
-    );
-
-    const ready = await api.inject({
+    expect(other.statusCode).toBe(200);
+    expect(other.json().data.deletion).toBeNull();
+    const meB = await api.inject({
       method: "GET",
-      url: `/v1/exports/${firstId}`,
-      headers: { authorization: `Bearer ${tokenA}` },
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${tokenB}` },
     });
-    expect(ready.statusCode).toBe(200);
-    expect(ready.json().data.status).toBe("ready");
-    expect(ready.json().data.download_available).toBe(true);
+    expect(meB.statusCode).toBe(200);
+    expect(meB.json().data.user.status).toBe("active");
 
-    const download = await api.inject({
-      method: "GET",
-      url: `/v1/exports/${firstId}/download`,
-      headers: { authorization: `Bearer ${tokenA}` },
-    });
-    expect(download.statusCode).toBe(200);
-    expect(download.json().data.url).toContain("export-part-001.zip");
-    expect(download.json().data.url).not.toMatch(/INV-000001/);
-
-    const payload = await db.query<{ export_workspace_payload: { jobs?: Array<Record<string, unknown>> } }>(
-      `select commercial.export_workspace_payload(w.workspace_id, now())
-       from commercial.workspaces w
-       join identity.app_users u on u.id = w.owner_user_id
-       where u.auth_user_id = $1`,
-      [ownerA],
+    const email = await db.query<{ status: string; template: string }>(
+      `select status, payload_json->>'template_id' as template
+       from commercial.outbox_tasks
+       where payload_json->>'template_id' = 'EMAIL11'`,
     );
-    const snapshot = payload.rows[0]?.export_workspace_payload;
-    expect(JSON.stringify(snapshot)).not.toContain("internal_notes");
+    expect(email.rows.some((row) => row.template === "EMAIL11" && row.status === "pending")).toBe(true);
   });
 });

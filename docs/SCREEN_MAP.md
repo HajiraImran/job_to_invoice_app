@@ -203,7 +203,7 @@ Local vs server values and times. Keep server or Save local as draft copy. Prese
 
 ### S24 Export and deletion
 
-Implemented export route: `/(tabs)/settings/data`. Status, 24h reuse, newer request, authenticated download, reauthentication. Deletion consequences, type DELETE, progress, and retained-record explanation remain unimplemented. Deletion does not cancel Apple billing (PRV03).
+Implemented route: `/(tabs)/settings/data`. Export status, 24h reuse, newer request, authenticated download, reauthentication. Deletion consequences, type DELETE, progress, empty retained-record explanation, and Apple Manage subscription disclaimer. Deletion does not cancel Apple billing (PRV03).
 
 ### S25 Customer access
 

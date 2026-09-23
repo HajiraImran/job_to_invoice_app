@@ -14,6 +14,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { secureRandomUUID } from "../../../src/crypto/uuid.ts";
 import {
+  deletionStatusLabel,
+  presentDeletion,
+  type DeletionRecord,
+} from "../../../src/deletion/presentation.ts";
+import { issueDeletionGrant, submitDeletionRequest } from "../../../src/deletion/request-deletion.ts";
+import {
   exportStatusLabel,
   presentExport,
   type ExportRecord,
@@ -28,11 +34,17 @@ export default function ExportDataScreen() {
   const auth = useAuth();
   const insets = useSafeAreaInsets();
   const [record, setRecord] = useState<ExportRecord | null | undefined>();
+  const [deletion, setDeletion] = useState<DeletionRecord | null | undefined>();
   const [loading, setLoading] = useState(true);
   const [requesting, setRequesting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [stepUp, setStepUp] = useState(false);
+  const [deletionStepUp, setDeletionStepUp] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [deletionError, setDeletionError] = useState<string | undefined>();
+  const [confirmation, setConfirmation] = useState("");
   const exportKey = useRef(retainOrCreateSetupIdempotencyKey(undefined));
+  const deletionKey = useRef(retainOrCreateSetupIdempotencyKey(undefined));
   const poll = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const loadLatest = useCallback(async () => {
@@ -43,8 +55,20 @@ export default function ExportDataScreen() {
     if (result.ok) {
       setRecord(result.data.export);
       setError(undefined);
+    } else if (result.error.code === "ACCOUNT_DELETING") {
+      setError(undefined);
     } else {
       setError(result.error.message || copy.exportLoadError);
+    }
+    const deletionResult = await auth.runOwnerRequest<{ deletion: DeletionRecord | null }>({
+      path: "/v1/account/deletion",
+      method: "GET",
+    });
+    if (deletionResult.ok) {
+      setDeletion(deletionResult.data.deletion);
+      setDeletionError(undefined);
+    } else if (deletionResult.error.code !== "ACCOUNT_DELETING") {
+      setDeletionError(deletionResult.error.message || copy.deletionLoadError);
     }
     setLoading(false);
     return result.ok ? result.data.export : undefined;
@@ -123,6 +147,57 @@ export default function ExportDataScreen() {
     await requestExport(false);
   }
 
+  async function requestDeletion() {
+    if (auth.snapshot.status === "offline_cached") {
+      setDeletionError(copy.deletionOffline);
+      return;
+    }
+    if (confirmation !== "DELETE") {
+      setDeletionError(copy.deletionTypeLabel);
+      return;
+    }
+    setDeleting(true);
+    setDeletionError(undefined);
+    const grant = await issueDeletionGrant((options) => auth.runOwnerRequest(options));
+    if (!grant.ok && grant.stepUp) {
+      setDeletionStepUp(true);
+      setDeleting(false);
+      const email = auth.emailDisplay || auth.snapshot.emailDisplay || "";
+      if (email) {
+        auth.setEmailDisplay(email);
+      }
+      auth.setCode("");
+      await auth.sendCode();
+      return;
+    }
+    if (!grant.ok) {
+      setDeleting(false);
+      setDeletionError(grant.error.message || copy.deletionStartError);
+      return;
+    }
+    const submitted = await submitDeletionRequest((options) => auth.runOwnerRequest(options), {
+      grant: grant.grant,
+      idempotencyKey: deletionKey.current,
+    });
+    if (!submitted.ok) {
+      setDeleting(false);
+      setDeletionError(submitted.error.message || copy.deletionStartError);
+      return;
+    }
+    await loadLatest();
+    setDeleting(false);
+  }
+
+  async function verifyDeletionStepUp() {
+    await auth.verifyCode();
+    setDeletionStepUp(false);
+    await requestDeletion();
+  }
+
+  async function openAppleSubscriptions() {
+    await Linking.openURL("https://apps.apple.com/account/subscriptions");
+  }
+
   async function download() {
     if (!record?.id) {
       return;
@@ -146,6 +221,16 @@ export default function ExportDataScreen() {
     record,
     error,
   });
+  const deletionView = presentDeletion({
+    authStatus: auth.snapshot.status,
+    accountStatus: auth.bootstrap?.user.status,
+    requesting: deleting,
+    stepUp: deletionStepUp,
+    confirmation,
+    record: deletion,
+    error: deletionError,
+  });
+  const exportDisabled = view.exportDisabled || deletionView.kind === "locked";
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -200,9 +285,9 @@ export default function ExportDataScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={copy.exportStart}
-          disabled={view.exportDisabled}
+          disabled={exportDisabled}
           onPress={() => void requestExport(false)}
-          style={[styles.button, view.exportDisabled ? styles.disabled : null]}
+          style={[styles.button, exportDisabled ? styles.disabled : null]}
         >
           <Text style={styles.buttonLabel}>{requesting ? copy.exportWorking : copy.exportStart}</Text>
         </Pressable>
@@ -227,7 +312,79 @@ export default function ExportDataScreen() {
             </Pressable>
           </>
         ) : null}
-        <Text style={styles.note}>{copy.exportDeletionDeferred}</Text>
+        <Text accessibilityRole="header" style={styles.title}>
+          {copy.deletionTitle}
+        </Text>
+        <Text style={styles.body}>{copy.deletionIntro}</Text>
+        <Text style={styles.body}>{copy.deletionWarningLinks}</Text>
+        <Text style={styles.body}>{copy.deletionWarningKeep}</Text>
+        <Text style={styles.body}>{copy.deletionWarningCancel}</Text>
+        <Text style={styles.body}>{copy.deletionApple}</Text>
+        {deletion ? (
+          <Text accessibilityLiveRegion="polite" style={styles.body}>
+            {deletionStatusLabel(deletion.status)}
+            {deletion.purge_deadline ? ` · ${deletion.purge_deadline}` : ""}
+          </Text>
+        ) : deletionView.kind === "locked" ? (
+          <Text accessibilityLiveRegion="polite" style={styles.body}>
+            {copy.deletionLocked}
+          </Text>
+        ) : null}
+        {deletionView.message ? (
+          <Text accessibilityLiveRegion="assertive" style={styles.banner}>
+            {deletionView.message}
+          </Text>
+        ) : null}
+        {deletionStepUp ? (
+          <View style={styles.stepUp}>
+            <Text style={styles.body}>{copy.deletionFreshAuth}</Text>
+            <TextInput
+              accessibilityLabel={copy.codeLabel}
+              keyboardType="number-pad"
+              maxLength={6}
+              onChangeText={auth.setCode}
+              style={styles.input}
+              value={auth.code}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={copy.verify}
+              onPress={() => void verifyDeletionStepUp()}
+              style={styles.button}
+            >
+              <Text style={styles.buttonLabel}>{copy.verify}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {deletionView.kind !== "locked" ? (
+          <>
+            <TextInput
+              accessibilityLabel={copy.deletionTypeLabel}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              onChangeText={setConfirmation}
+              style={styles.input}
+              value={confirmation}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={copy.deletionConfirm}
+              disabled={deletionView.confirmDisabled}
+              onPress={() => void requestDeletion()}
+              style={[styles.danger, deletionView.confirmDisabled ? styles.disabled : null]}
+            >
+              <Text style={styles.buttonLabel}>{deleting ? copy.deletionWorking : copy.deletionConfirm}</Text>
+            </Pressable>
+          </>
+        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={copy.deletionManageSubscription}
+          onPress={() => void openAppleSubscriptions()}
+          style={styles.secondary}
+        >
+          <Text style={styles.secondaryLabel}>{copy.deletionManageSubscription}</Text>
+        </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -239,7 +396,6 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: type.screen, fontWeight: "700" },
   body: { color: colors.secondary, fontSize: type.body },
   banner: { color: colors.navy, fontSize: type.secondary },
-  note: { color: colors.secondary, fontSize: type.secondary, marginTop: space.gutter },
   stepUp: { gap: space.scale },
   input: {
     minHeight: 44,
@@ -268,4 +424,11 @@ const styles = StyleSheet.create({
   },
   secondaryLabel: { color: colors.navy, fontSize: type.body, fontWeight: "600" },
   disabled: { opacity: 0.5 },
+  danger: {
+    minHeight: 44,
+    backgroundColor: colors.danger,
+    borderRadius: space.radius,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

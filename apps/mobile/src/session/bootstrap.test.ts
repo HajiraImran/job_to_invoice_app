@@ -55,6 +55,7 @@ describe("owner bootstrap after OTP", () => {
   it("maps each bootstrap support category from /v1/me outcomes", () => {
     expect(classifyOwnerMeError({ status: 0, code: "UNAVAILABLE" })).toBe("BOOTSTRAP_NETWORK");
     expect(classifyOwnerMeError({ status: 401, code: "AUTHENTICATION_FAILED" })).toBe("BOOTSTRAP_SESSION");
+    expect(classifyOwnerMeError({ status: 403, code: "ACCOUNT_DELETING" })).toBe("BOOTSTRAP_SESSION");
     expect(classifyOwnerMeError({ status: 503, code: "UNAVAILABLE" })).toBe("BOOTSTRAP_SERVICE");
     expect(classifyOwnerMeError({ status: 200, code: "INVALID_RESPONSE" })).toBe("BOOTSTRAP_RESPONSE");
     expect(classifyOwnerMeError({ status: 401, code: "AUTHENTICATION_REQUIRED" })).toBe("BOOTSTRAP_UNKNOWN");

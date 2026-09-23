@@ -609,3 +609,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | `0024_owner_export.sql`. Do not modify 0001–0023. Hosted confirmation is `APPLY_0024`. |
 | Reversible | Additive table, functions, and artifact FK |
 | Escalation category | none |
+
+### D-031 — Account deletion is lock-then-purge_app, not Auth Admin delete
+
+| Field | Value |
+| --- | --- |
+| ID | D-031 |
+| Date | 2026-09-23 |
+| Status | Resolved |
+| Decision | After hosted 0024, the next unblocked customer-visible slice is account deletion (PRV03–PRV06, EMAIL11, S24 type DELETE), not paid IAP. Confirmed deletion immediately locks the owner, withdraws pending approvals, revokes portal sessions, and queues EMAIL11. `purge_app` on `DATABASE_URL_PURGE` deletes live commercial rows and storage objects. Counsel retention categories stay an empty array. Supabase Auth user deletion is not implemented because it requires `service_role`, which is forbidden. The identity row remains a `deleted` tombstone keyed by `auth_user_id` so `provision_owner` cannot recreate a workspace. Refresh tokens at the Auth provider are not revoked. |
+| Reason | Implementation Plan Stage 4 K remaining half after export. Paid purchase remains blocked on empty RevenueCat credentials. Genuine app-record/object deletion is available without inventing an Auth Admin path. |
+| Evidence | `supabase/migrations/0025_account_deletion.sql`; `apps/api/src/deletion.ts`; `apps/worker/src/purge.ts`; `apps/mobile/app/(tabs)/settings/data.tsx` |
+| Owner | Engineering lead |
+| PRD implication | PRV03–PRV06, EMAIL11, S24 deletion, ACC02A deletion grant, QA57. QA58 restore-ledger and PRV05 provider deletion remain open. |
+| Impacted requirement IDs | PRV03, PRV04, PRV05, PRV06, EMAIL11, DB05, S24, ACC02A, QA57 |
+| Impacted test IDs | `apps/api/src/deletion.test.ts`; `apps/worker/src/purge.test.ts`; `apps/worker/src/email.test.ts`; `packages/schemas/src/deletion.test.ts`; `supabase/tests/0026_account_deletion.sql` |
+| Migration implications | `0025_account_deletion.sql`. Do not modify 0001–0024. Hosted confirmation is `APPLY_0025`. |
+| Reversible | Additive table and functions; tombstone identity is retained |
+| Escalation category | none |

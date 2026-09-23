@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderEmail01, renderEmail02, renderEmail03, renderEmail04, renderEmail05, renderEmail06, renderEmail07, renderEmail08, renderEmail09, renderEmail10, reviewHref, sendResendEmail } from "./email.ts";
+import { renderEmail01, renderEmail02, renderEmail03, renderEmail04, renderEmail05, renderEmail06, renderEmail07, renderEmail08, renderEmail09, renderEmail10, renderEmail11, reviewHref, sendResendEmail } from "./email.ts";
 
 describe("EMAIL01 template", () => {
   it("renders a fragment href without a token query parameter or PDF attachment", () => {
@@ -149,6 +149,23 @@ describe("EMAIL03 EMAIL04 EMAIL05 EMAIL08 templates", () => {
     expect(rendered.subject).not.toMatch(/@|INV-|customer/i);
     expect(rendered.text).toContain("does not include an export attachment");
     expect(rendered.html).not.toContain(".zip");
+  });
+
+  it("renders EMAIL11 with lock time, 30-day removal, and no cancel path", () => {
+    const rendered = renderEmail11({
+      appName: "Job to Invoice",
+      lockedAt: "2026-09-23T12:00:00.000Z",
+      completeBy: "2026-10-23T12:00:00.000Z",
+      supportUrl: "https://support.example.test",
+    });
+    expect(rendered.subject).toBe("Your account deletion request");
+    expect(rendered.text).toContain("Locked at 2026-09-23T12:00:00.000Z");
+    expect(rendered.text).toContain("2026-10-23T12:00:00.000Z");
+    expect(rendered.text).toContain("cannot be cancelled");
+    expect(rendered.text).toContain("does not cancel an Apple subscription");
+    expect(rendered.text).toContain("No invoices or customer records are kept by default");
+    expect(rendered.html).toContain("https://support.example.test");
+    expect(rendered.html).not.toContain("INV-");
   });
 });
 

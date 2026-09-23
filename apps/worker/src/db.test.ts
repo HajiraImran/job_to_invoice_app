@@ -84,7 +84,7 @@ function scriptedPool(script: Script): {
           if (normalized.startsWith("set local statement_timeout")) {
             return { rows: [] };
           }
-          if (normalized === "set local role worker_app") {
+          if (normalized === "set local role worker_app" || normalized === "set local role purge_app") {
             if (script.setRole) {
               throw script.setRole;
             }

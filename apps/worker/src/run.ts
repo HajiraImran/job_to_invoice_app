@@ -2,6 +2,7 @@ import { loadWorkerEnv, type LoadedEnv, type LoadedWorkerEnv } from "@job-to-inv
 import { processGenerateOriginalPdf } from "./outbox.ts";
 import { processSendEmail } from "./email.ts";
 import { processBuildExport, processPurgeExports } from "./export.ts";
+import { processPurgeAccount } from "./purge.ts";
 import { renderQuoteOriginalPdf } from "./pdf.ts";
 import { createDocumentsObjectStore } from "./documents-store.ts";
 import { createWorkerPool, workerStageFromError } from "./db.ts";
@@ -11,7 +12,7 @@ export const WORKER_POLL_MS = 2_000;
 export const WORKER_NO_WORK_EVERY_MS = 30_000;
 
 export function workerStatus(env: LoadedEnv | LoadedWorkerEnv): string {
-  return `worker original-pdf email export (${env.APP_ENV})`;
+  return `worker original-pdf email export purge (${env.APP_ENV})`;
 }
 
 export function workerPollReady(env: LoadedWorkerEnv): "ready" | "missing_database" | "missing_storage" {
@@ -114,6 +115,13 @@ export async function startWorker(): Promise<string> {
     attemptTimeoutMs: env.databaseConnectAttemptTimeoutMs,
     deadlineMs: env.databaseConnectDeadlineMs,
   });
+  const purgeUrl = "DATABASE_URL_PURGE" in env ? env.DATABASE_URL_PURGE : undefined;
+  const purgePool = purgeUrl
+    ? createWorkerPool(purgeUrl, {
+        attemptTimeoutMs: env.databaseConnectAttemptTimeoutMs,
+        deadlineMs: env.databaseConnectDeadlineMs,
+      })
+    : undefined;
   const writeStage = (stage: WorkerPdfStage, sqlstate?: string) => writeWorkerPdfEvent({ stage, sqlstate });
   const apiKey = env.EMAIL_API_KEY;
   const fromDomain = env.EMAIL_FROM_DOMAIN;
@@ -136,7 +144,16 @@ export async function startWorker(): Promise<string> {
       if (built !== "idle") {
         return built === "failed" ? "dead" : built;
       }
-      await processPurgeExports({ pool });
+      await processPurgeExports({ pool, deleteObject: store.deleteObject });
+      if (purgePool && store.deleteObject) {
+        const purged = await processPurgeAccount({
+          pool: purgePool,
+          store: { deleteObject: store.deleteObject },
+        });
+        if (purged !== "idle") {
+          return purged === "failed" ? "dead" : purged;
+        }
+      }
       return processSendEmail({
         pool,
         deliverySecret: deliveryKey,
@@ -144,6 +161,7 @@ export async function startWorker(): Promise<string> {
         fromDomain,
         portalOrigin: env.PORTAL_ORIGIN ?? "http://localhost:3000",
         appName: env.PUBLIC_APP_NAME,
+        supportUrl: env.SUPPORT_URL,
       });
     },
     onStage: writeStage,

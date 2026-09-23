@@ -384,7 +384,7 @@ try {
       );
       assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
     }
-    assert(setRoleFiles === 21, "expected SET ROLE migrator in 0002–0008, 0010, 0011, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, and 0024");
+    assert(setRoleFiles === 22, "expected SET ROLE migrator in 0002–0008, 0010, 0011, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, and 0025");
   });
 
   await test("migration history inserts succeed as the restored bootstrap role", async () => {
@@ -393,8 +393,8 @@ try {
     );
     assert(
       recorded.rows.map((row) => row.version).join(",") ===
-        "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012,0013,0014,0015,0016,0017,0018,0019,0020,0021,0022,0023,0024",
-      "bootstrap role must record 0001-0024 after RESET ROLE",
+        "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012,0013,0014,0015,0016,0017,0018,0019,0020,0021,0022,0023,0024,0025",
+      "bootstrap role must record 0001-0025 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {
@@ -1877,6 +1877,101 @@ try {
     assert(after.rows[0]?.state === "expired", "request marked expired");
     const quote = await admin.query("select lifecycle from commercial.documents where id = $1", [ids.doc]);
     assert(quote.rows[0]?.lifecycle === "expired", "document marked expired");
+  });
+
+  await test("account deletion locks, isolates tenant B, and purge_app removes live records", async () => {
+    await admin.query("set role migrator");
+    await admin.query(
+      `update commercial.workspaces
+         set setup_completed_at = now(),
+             address_json = '{"line1":"123 Main Street","city":"Austin","state":"TX","postal_code":"78701"}'::jsonb
+       where id = $1`,
+      [A.ws],
+    );
+    await admin.query("reset role");
+    const grantHash = Buffer.alloc(32, 9);
+    await admin.query(
+      `insert into identity.action_grants (id, user_id, action, token_hash, expires_at)
+       values (gen_random_uuid(), $1, 'deletion', $2, now() + interval '5 minutes')`,
+      [A.user, grantHash],
+    );
+    const requested = await withApi(admin, async () => {
+      const row = await admin.query(
+        `select id, status, workspace_id from commercial.request_account_deletion(
+          $1::uuid, $2::uuid, 'delete-hash', $3::uuid, $4::bytea, true
+        )`,
+        [A.user, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa98", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa99", grantHash],
+      );
+      return row.rows[0];
+    });
+    assert(requested.status === "locked", "deletion locks immediately");
+    const userA = await admin.query("select status from identity.app_users where id = $1", [A.user]);
+    assert(userA.rows[0].status === "deleting", "owner status deleting");
+    const userB = await admin.query("select status from identity.app_users where id = $1", [B.user]);
+    assert(userB.rows[0].status === "active", "tenant B remains active");
+    const jobsB = await admin.query("select count(*)::int as n from commercial.jobs where workspace_id = $1", [B.ws]);
+    assert(jobsB.rows[0].n >= 1, "tenant B jobs remain before purge");
+
+    await expectFail(
+      () =>
+        withApi(admin, async () => {
+          await admin.query("select * from commercial.claim_purge_account()");
+        }),
+      /permission denied|42501/i,
+      "api_app cannot claim purge",
+    );
+
+    await admin.query(
+      `update commercial.outbox_tasks
+         set status = 'done'
+       where workspace_id = $1
+         and payload_json->>'template_id' = 'EMAIL11'`,
+      [A.ws],
+    );
+
+    await admin.query("begin");
+    try {
+      await admin.query("set local role purge_app");
+      const claim = await admin.query(
+        "select id, workspace_id from commercial.claim_purge_account()",
+      );
+      assert(claim.rows[0]?.workspace_id === A.ws, "purge_app claims locked workspace A");
+      await admin.query("select commercial.complete_purge_account($1::uuid)", [claim.rows[0].id]);
+      await admin.query("commit");
+    } catch (error) {
+      await admin.query("rollback");
+      throw error;
+    }
+
+    const jobsA = await admin.query("select count(*)::int as n from commercial.jobs where workspace_id = $1", [A.ws]);
+    assert(jobsA.rows[0].n === 0, "workspace A jobs purged");
+    const docsA = await admin.query("select count(*)::int as n from commercial.documents where workspace_id = $1", [A.ws]);
+    assert(docsA.rows[0].n === 0, "workspace A documents purged");
+    const customersA = await admin.query("select count(*)::int as n from commercial.customers where workspace_id = $1", [A.ws]);
+    assert(customersA.rows[0].n === 0, "workspace A customers purged");
+    assert((await admin.query("select count(*)::int as n from commercial.jobs where workspace_id = $1", [B.ws])).rows[0].n >= 1, "tenant B jobs survive");
+    const tombstone = await admin.query(
+      "select status, auth_user_id, normalized_email from identity.app_users where id = $1",
+      [A.user],
+    );
+    assert(tombstone.rows[0].status === "deleted", "identity tombstone remains");
+    assert(tombstone.rows[0].auth_user_id === A.auth, "auth_user_id kept so provision cannot recreate");
+    assert(String(tombstone.rows[0].normalized_email).startsWith("deleted+"), "email anonymized");
+    const provisioned = await withApi(admin, async () => {
+      const row = await admin.query(
+        "select actor_id, workspace_id, account_status from identity.provision_owner($1::uuid, $2, $3)",
+        [A.auth, "a@example.com", "a@example.com"],
+      );
+      return row.rows[0];
+    });
+    assert(provisioned.account_status === "deleted", "provision returns deleted tombstone");
+    assert(provisioned.workspace_id === A.ws, "provision does not create a second workspace");
+    const ledger = await admin.query(
+      "select status, jsonb_typeof(retained_categories_json) as kind from commercial.deletion_requests where workspace_id = $1",
+      [A.ws],
+    );
+    assert(ledger.rows[0].status === "completed", "deletion ledger completed");
+    assert(ledger.rows[0].kind === "array", "retained categories stay an empty array");
   });
 
   console.log(`${passed} passed, ${failed} failed`);

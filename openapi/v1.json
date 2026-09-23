@@ -1176,7 +1176,7 @@
     "/v1/account/action-grants": {
       "post": {
         "summary": "Issue a single-use ACC02A action grant after fresh owner authentication",
-        "description": "Requires JWT auth_time within 300 seconds. This deployment issues replace_link and export; deletion and email_change return 422. The plaintext grant is returned once and must be sent as X-Action-Grant. Grant hashes are stored server-side; grants are not logged.",
+        "description": "Requires JWT auth_time within 300 seconds. This deployment issues replace_link, export, and deletion; email_change returns 422. The plaintext grant is returned once and must be sent as X-Action-Grant. Grant hashes are stored server-side; grants are not logged.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "required": true,
@@ -1202,7 +1202,7 @@
                       "required": ["grant", "action", "expires_at"],
                       "properties": {
                         "grant": { "type": "string", "description": "base64url 32-byte secret; send as X-Action-Grant once" },
-                        "action": { "type": "string", "enum": ["replace_link", "export"] },
+                        "action": { "type": "string", "enum": ["replace_link", "export", "deletion"] },
                         "expires_at": { "type": "string", "format": "date-time" }
                       }
                     },
@@ -1224,7 +1224,7 @@
           "403": {
             "description": "ACTION_GRANT_REQUIRED when auth_time is missing or older than 300s; ACCOUNT_SUSPENDED / ACCOUNT_DELETING / SETUP_INCOMPLETE"
           },
-          "422": { "description": "Unknown fields, unsupported action, or deferred action (deletion/email_change)" },
+          "422": { "description": "Unknown fields, unsupported action, or deferred action (email_change)" },
           "429": { "description": "RATE_LIMITED; Retry-After seconds" },
           "503": { "description": "Service unavailable" }
         }
@@ -1374,6 +1374,60 @@
           "401": { "description": "Missing or invalid access token" },
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "404": { "description": "Not ready, expired, purged, or cross-tenant" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/account/deletion": {
+      "post": {
+        "summary": "Confirm account deletion after a fresh deletion action grant",
+        "description": "Requires X-Action-Grant for action deletion and Idempotency-Key. Body confirmation must be DELETE. Locks immediately, withdraws pending approvals, queues EMAIL11. No cancel. Auth Admin user deletion is not performed.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "X-Action-Grant",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["confirmation"],
+                "properties": {
+                  "confirmation": { "type": "string", "enum": ["DELETE"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Deletion locked or idempotent replay" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "ACTION_GRANT_REQUIRED, ACTION_GRANT_INVALID, ACCOUNT_DELETING, suspended, or setup incomplete" },
+          "409": { "description": "Idempotency mismatch" },
+          "422": { "description": "Unknown fields, missing DELETE phrase, or missing Idempotency-Key" },
+          "503": { "description": "Service unavailable" }
+        }
+      },
+      "get": {
+        "summary": "Owner deletion state during the limited locked session",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Deletion request or deletion null" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended or already deleted after purge" },
           "503": { "description": "Service unavailable" }
         }
       }
@@ -1856,7 +1910,7 @@
           "action": {
             "type": "string",
             "enum": ["export", "deletion", "email_change", "replace_link"],
-            "description": "Inventory actions per ACC02A. Only replace_link is issued in the current deployment; others return 422."
+            "description": "Inventory actions per ACC02A. replace_link, export, and deletion are issued; email_change returns 422."
           }
         }
       },

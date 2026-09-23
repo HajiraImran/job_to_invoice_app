@@ -259,7 +259,7 @@ Composite FKs:
 | analytics_events | event_id unique, pseudonymous_owner_id?, job_id?, event_name, schema_version, occurred_at, received_at, safe_properties_json |
 | staff_users | Global table: auth_subject unique, role agent/supervisor/infra, mfa_required true, status; no commercial tenant access by default |
 | staff_access_grants | staff_user_id, support_case_id, scope_json, reason, approved_by, expires_at, revoked_at? |
-| deletion_requests | workspace_id NOT NULL, owner_id, requested_at, verified_at, status locked/purging/completed/exception, purge_deadline, completed_at?, retained_categories_json? |
+| deletion_requests | workspace_id NOT NULL, owner_id, requested_at, verified_at, status locked/purging/completed/exception, purge_after, purge_deadline, completed_at?, retained_categories_json?. **Implemented** in `0025_account_deletion.sql`. Live commercial rows and storage objects are purged by `purge_app`. `app_users` stays as a `deleted` tombstone keyed by `auth_user_id`. Counsel categories are an empty array until supplied. |
 
 Delivery attempt states: queued, submitting, accepted_by_provider, delivered, bounced, complained, failed (NTF03).
 
@@ -317,6 +317,7 @@ Deletion uses `purge_app` only, on a scheduled job with a separate DSN. Operatio
 - Purge Storage objects separately
 - Backups expire within 35 days (BACKUP_RETENTION_DAYS)
 - Restricted retention categories come from counsel before launch; no default blanket invoice exemption
+- Live path implemented in `0025_account_deletion.sql`: `request_account_deletion` locks and queues EMAIL11; `claim_purge_account` / `complete_purge_account` run only as `purge_app`. Identity stays as `app_users.status=deleted` because Auth Admin `deleteUser` requires forbidden `service_role`.
 
 ## Active invoice uniqueness
 

@@ -88,8 +88,12 @@ export function registerActionGrantRoutes(
         field_errors: parsed.field_errors,
       });
     }
-    // This slice issues replace_link and export. Deletion and email_change remain deferred.
-    if (parsed.value.action !== "replace_link" && parsed.value.action !== "export") {
+    // This slice issues replace_link, export, and deletion. email_change remains deferred.
+    if (
+      parsed.value.action !== "replace_link" &&
+      parsed.value.action !== "export" &&
+      parsed.value.action !== "deletion"
+    ) {
       return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
         field_errors: [{ field: "action", message: "This action is not available yet." }],
       });

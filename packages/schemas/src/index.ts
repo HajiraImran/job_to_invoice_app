@@ -178,6 +178,10 @@ export {
   type ExportRequestInput,
 } from "./export.ts";
 export {
+  DELETION_CONFIRMATION,
+  parseDeletionRequest,
+} from "./deletion.ts";
+export {
   emptyDirectInvoiceDraft,
   parseDirectInvoiceDraft,
   parseInvoiceIssue,

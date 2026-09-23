@@ -240,7 +240,7 @@ export function createWorkerPool(connectionString: string, timeouts?: Partial<Wo
 export async function withWorkerRole<T>(
   pool: Pool,
   fn: (client: PoolClient) => Promise<T>,
-  options?: { timeoutMs?: number; statementTimeoutMs?: number } & AcquireConnectOptions,
+  options?: { timeoutMs?: number; statementTimeoutMs?: number; role?: "worker_app" | "purge_app" } & AcquireConnectOptions,
 ): Promise<T> {
   const claimTimeoutMs = options?.timeoutMs;
   const statementTimeoutMs = options?.statementTimeoutMs ?? WORKER_STATEMENT_TIMEOUT_MS;
@@ -293,7 +293,7 @@ export async function withWorkerRole<T>(
       }
       throwIfClaimTimedOut();
       try {
-        await client.query("set local role worker_app");
+        await client.query(`set local role ${options?.role === "purge_app" ? "purge_app" : "worker_app"}`);
       } catch (error) {
         destroy = isRetryableConnectError(error);
         throw stageError("set_role_failed", error);

@@ -198,7 +198,7 @@ Do not implement all screens, then the backend, then connect them.
 - Email: EMAIL10, EMAIL11
 - Analytics: `export_completed`
 - Tests: QA56–QA58
-- Owner export (EXP01 / EXP02 / EMAIL10 / S24 export): implemented in `0024_owner_export.sql`. Account deletion, EMAIL11, and type-DELETE confirmation remain a later K half.
+- Owner export (EXP01 / EXP02 / EMAIL10 / S24 export): implemented in `0024_owner_export.sql`. Account deletion (PRV03–PRV06 / EMAIL11 / S24 type DELETE): implemented in `0025_account_deletion.sql`. Auth/RevenueCat/Sentry provider deletion and backup-restore ledger remain unverified (PRV05).
 
 **Vertical slice L — Support intake**
 

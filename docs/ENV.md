@@ -76,7 +76,7 @@ Purge process:
 
 Not used by this slice:
 
-- RevenueCat, staff, backup, and later EMAIL02/06–11 keys
+- RevenueCat, staff, backup, and later purchase keys
 
 Portal Next.js BFF (`apps/portal`) reads process-local `API_BASE_URL` and `PORTAL_ORIGIN`. It sets the `jti_portal` HttpOnly SameSite=Lax host-only cookie on the portal origin after exchange/verify. Development HTTP may omit `Secure`. Production and staging require HTTPS + `Secure`. Do not post the session cookie to the API port.
 

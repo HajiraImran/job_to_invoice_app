@@ -82,6 +82,7 @@ const developmentSchema = z.object({
   AUTH_JWKS_JSON: z.string().optional(),
   DATABASE_URL_API: z.string().optional(),
   DATABASE_URL_WORKER: z.string().optional(),
+  DATABASE_URL_PURGE: z.string().optional(),
   APPROVAL_TOKEN_HASH_KEY: z.string().optional(),
   APPROVAL_DELIVERY_ENCRYPTION_KEY: z.string().optional(),
   APPROVAL_EVIDENCE_ENCRYPTION_KEY: z.string().optional(),

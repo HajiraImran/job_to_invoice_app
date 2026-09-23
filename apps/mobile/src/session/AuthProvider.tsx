@@ -212,7 +212,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         snapshotRef.current = decision.snapshot;
         setError(undefined);
         await openSyncForBootstrap(decision.bootstrap);
-        if (decision.enableOutboxDrain && outboxDrainEligibleAfterRecovery(decision.snapshot.status)) {
+        if (
+          decision.enableOutboxDrain &&
+          decision.bootstrap.user.status !== "deleting" &&
+          outboxDrainEligibleAfterRecovery(decision.snapshot.status)
+        ) {
           await drainEligibleOutbox();
         }
         return;

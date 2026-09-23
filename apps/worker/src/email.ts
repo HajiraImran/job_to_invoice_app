@@ -246,6 +246,41 @@ export function renderEmail10(input: {
   return { subject, text, html };
 }
 
+export function renderEmail11(input: {
+  appName: string;
+  lockedAt: string;
+  completeBy: string;
+  supportUrl?: string;
+}): { subject: string; text: string; html: string } {
+  const support = input.supportUrl
+    ? `Support: ${input.supportUrl}`
+    : "Contact support from Settings if you need help.";
+  const subject = "Your account deletion request";
+  const text = [
+    `${input.appName}`,
+    "Your account deletion request is locked.",
+    `Locked at ${input.lockedAt}.`,
+    `Live app records and stored files are scheduled for removal by ${input.completeBy}.`,
+    "Customer review links stop working immediately.",
+    "No invoices or customer records are kept by default.",
+    "This request cannot be cancelled in the app.",
+    "Deleting the account does not cancel an Apple subscription.",
+    support,
+  ].join("\n");
+  const html = `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>Your account deletion request is locked.</p>
+<p>Locked at ${escapeHtml(input.lockedAt)}.</p>
+<p>Live app records and stored files are scheduled for removal by ${escapeHtml(input.completeBy)}.</p>
+<p>Customer review links stop working immediately.</p>
+<p>No invoices or customer records are kept by default.</p>
+<p>This request cannot be cancelled in the app.</p>
+<p>Deleting the account does not cancel an Apple subscription.</p>
+<p>${escapeHtml(support)}</p>
+</body></html>`;
+  return { subject, text, html };
+}
+
 export function renderEmail09(input: {
   appName: string;
   endsOn: string;
@@ -441,6 +476,19 @@ type ExportClaimRow = {
   provider_message_id: string | null;
 };
 
+type DeletionClaimRow = {
+  id: string;
+  workspace_id: string;
+  template_id: string;
+  effect_key: string;
+  attempts: number;
+  created_by: string;
+  recipient_email: string;
+  requested_at: Date | string | null;
+  purge_deadline: Date | string | null;
+  provider_message_id: string | null;
+};
+
 function exportExpiresAt(value: Date | string | null): string | undefined {
   if (!value) {
     return undefined;
@@ -455,6 +503,7 @@ export async function processSendEmail(input: {
   fromDomain: string;
   portalOrigin: string;
   appName: string;
+  supportUrl?: string;
   send?: ResendSender;
 }): Promise<"idle" | "done" | "retry" | "dead"> {
   const trialClaimed = await withWorkerRole(
@@ -590,6 +639,77 @@ export async function processSendEmail(input: {
         [exportClaimed.id, result.retryable ? "PROVIDER_RETRY" : "PROVIDER_REJECTED", !result.retryable],
       );
       return failed.rows[0]?.fail_export_ready_email;
+    });
+    return status === "dead" ? "dead" : "retry";
+  }
+
+  const deletionClaimed = await withWorkerRole(
+    input.pool,
+    async (client) => {
+      const result = await client.query<DeletionClaimRow>("select * from commercial.claim_deletion_receipt_email()");
+      const row = result.rows[0];
+      if (!row) {
+        return undefined;
+      }
+      await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+        row.workspace_id,
+        row.created_by,
+      ]);
+      return row;
+    },
+    { timeoutMs: WORKER_CLAIM_TIMEOUT_MS, statementTimeoutMs: WORKER_STATEMENT_TIMEOUT_MS },
+  );
+  if (deletionClaimed) {
+    const lockedAt = exportExpiresAt(deletionClaimed.requested_at);
+    const completeBy = exportExpiresAt(deletionClaimed.purge_deadline);
+    if (!lockedAt || !completeBy || !deletionClaimed.recipient_email) {
+      await withWorkerRole(input.pool, async (client) => {
+        await client.query("select commercial.fail_deletion_receipt_email($1::uuid, $2, $3)", [
+          deletionClaimed.id,
+          "VALIDATION_FAILED",
+          true,
+        ]);
+      });
+      return "dead";
+    }
+    const rendered = renderEmail11({
+      appName: input.appName,
+      lockedAt,
+      completeBy,
+      supportUrl: input.supportUrl,
+    });
+    const from = `${input.appName} <quotes@${input.fromDomain}>`;
+    const send = input.send ?? ((payload) => sendResendEmail(payload));
+    const result = await whileLeased(input.pool, deletionClaimed.id, () =>
+      send({
+        apiKey: input.apiKey,
+        idempotencyKey: deletionClaimed.effect_key,
+        from,
+        to: deletionClaimed.recipient_email,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+      }),
+    );
+    if (result.ok) {
+      await withWorkerRole(input.pool, async (client) => {
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          deletionClaimed.workspace_id,
+          deletionClaimed.created_by,
+        ]);
+        await client.query("select commercial.complete_deletion_receipt_email($1::uuid, $2)", [
+          deletionClaimed.id,
+          result.id,
+        ]);
+      });
+      return "done";
+    }
+    const status = await withWorkerRole(input.pool, async (client) => {
+      const failed = await client.query<{ fail_deletion_receipt_email: string }>(
+        "select commercial.fail_deletion_receipt_email($1::uuid, $2, $3) as fail_deletion_receipt_email",
+        [deletionClaimed.id, result.retryable ? "PROVIDER_RETRY" : "PROVIDER_REJECTED", !result.retryable],
+      );
+      return failed.rows[0]?.fail_deletion_receipt_email;
     });
     return status === "dead" ? "dead" : "retry";
   }
