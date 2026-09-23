@@ -197,6 +197,8 @@ Implemented route: `/(tabs)/settings/subscription`. Free usage and app-managed 1
 
 Business defaults, notifications, support, privacy/export/deletion, sign out. Sensitive actions reauthenticate. Logo/address updates apply to future drafts only. Switching accounts locks and wipes the previous encrypted local database after unsynced-work confirmation (SYNC06).
 
+Implemented support route: `/(tabs)/settings/support`. Owner files a case with category, message, and optional 24-hour content grant. Online only. No 24-hour reply claim. Public support address is shown only when `SUPPORT_URL` is configured. S28 staff console is BLOCKED.
+
 ### S23 Conflict recovery
 
 Local vs server values and times. Keep server or Save local as draft copy. Preserve both copies. Never last-write-wins for amounts, recipients, terms or site identity (SYNC03). Pause that resource’s draft queue until the owner chooses. No automatic replacement of sent documents. Authoritative commands are never auto-issued from the offline queue (SYNC05). NTF05 conflict copy.
@@ -219,7 +221,7 @@ Implemented route: `/review/receipt`. Decision/time/revision, PDF download, no p
 
 ### S28 Support console
 
-Case lookup, bounded metadata, allowed operational actions. Staff MFA, reason required, access expires, immutable audit.
+Case lookup, bounded metadata, allowed operational actions. Staff MFA, reason required, access expires, immutable audit. **BLOCKED:** staff authentication, MFA, roles, and `STAFF_AUTH_CONFIG` are unavailable.
 
 ## Error-code to screen
 

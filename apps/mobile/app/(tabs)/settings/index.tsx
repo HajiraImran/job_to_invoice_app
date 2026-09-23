@@ -7,6 +7,7 @@ import { useAuth } from "../../../src/session/AuthProvider.tsx";
 import { signOutAlertSpec, signOutChoiceProceeds } from "../../../src/session/sign-out.ts";
 import { exportPath } from "../../../src/export/presentation.ts";
 import { subscriptionPath } from "../../../src/subscription/presentation.ts";
+import { supportPath } from "../../../src/support/presentation.ts";
 import { colors, space, type } from "../../../src/theme.ts";
 
 export default function SettingsScreen() {
@@ -110,6 +111,14 @@ export default function SettingsScreen() {
         style={styles.syncButton}
       >
         <Text style={styles.syncLabel}>{copy.subscriptionTitle}</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={copy.supportTitle}
+        onPress={() => router.push(supportPath())}
+        style={styles.syncButton}
+      >
+        <Text style={styles.syncLabel}>{copy.supportTitle}</Text>
       </Pressable>
       <Pressable
         accessibilityRole="button"

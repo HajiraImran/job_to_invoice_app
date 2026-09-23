@@ -5,6 +5,7 @@ import {
   analyticsPropertiesAreSafe,
   isClientAnalyticsEvent,
   parseOwnerEmail,
+  publicSupportUrl,
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
 import { withApiRole, withTenant, ApiTransactionError } from "./db.ts";
@@ -32,6 +33,7 @@ import { RateLimiter } from "./rate-limit.ts";
 import { registerSubscriptionRoutes } from "./subscription.ts";
 import { registerExportRoutes } from "./exports.ts";
 import { registerDeletionRoutes } from "./deletion.ts";
+import { registerSupportRoutes } from "./support.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
 declare module "fastify" {
@@ -296,6 +298,7 @@ export function buildApp(deps: AppDeps) {
         },
         first_sign_in: row.first_sign_in,
         analytics_alias_id: row.analytics_alias_id,
+        support_url: publicSupportUrl("SUPPORT_URL" in deps.env ? deps.env.SUPPORT_URL : undefined),
       });
       emit(200, "response_sent");
       return body;
@@ -467,6 +470,9 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerDeletionRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerSupportRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerActionGrantRoutes(app, deps, {

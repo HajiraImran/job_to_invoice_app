@@ -183,7 +183,7 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | GET /exports/{id} | Owner | Status/manifest/download. **Implemented:** `GET /v1/exports/{id}`, `GET /v1/exports/latest`, `GET /v1/exports/{id}/download` (authenticated presign until `download_until`). |
 | POST /account/deletion | Owner + X-Action-Grant deletion | Confirmation phrase; lock and revoke refresh tokens. **Implemented:** `POST /v1/account/deletion`; `{ confirmation: "DELETE" }`; Idempotency-Key + X-Action-Grant; immediate lock; EMAIL11 queued; no cancel. Auth Admin refresh-token revoke is unavailable without service_role. |
 | GET /account/deletion | Owner limited session | Deletion state. **Implemented:** `GET /v1/account/deletion` while `active` or `deleting`. GET `/v1/me` stays available during `deleting` with `can_publish=false`. |
-| POST /support/cases | Owner | Category/message; optional content grant |
+| POST /support/cases | Owner | Category/message; optional content grant. **Implemented:** `POST /v1/support/cases`; Idempotency-Key; `{ category, message, grant_content_access? }`; categories account/billing/documents/access/other; message 10–2000; optional 24h content grant stored on the case; `support_opened` `{ category }` only. Allowed while `active` or `deleting`. Admin staff routes remain BLOCKED. |
 | GET /operations/{id} | Same initiating actor | Pending or durable result |
 | POST /analytics/batch | Owner | Allowlisted events, max 50 |
 | POST /portal/exchange | Request token | Scope cookie; no private data yet |

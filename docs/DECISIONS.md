@@ -627,3 +627,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | `0025_account_deletion.sql`. Do not modify 0001–0024. Hosted confirmation is `APPLY_0025`. |
 | Reversible | Additive table and functions; tombstone identity is retained |
 | Escalation category | none |
+
+### D-032 — Owner support intake without staff console
+
+| Field | Value |
+| --- | --- |
+| ID | D-032 |
+| Date | 2026-09-23 |
+| Status | Resolved |
+| Decision | After hosted 0025, skip S28 because staff authentication, MFA, roles, `STAFF_AUTH_CONFIG`, and `SUPPORT_URL` are unavailable. The next unblocked Stage 4 L half is owner case intake: `POST /v1/support/cases`, S22 form, `support_cases`, and server `support_opened` `{ category }`. Optional 24-hour content grant is stored on the case. `staff_users` and `staff_access_grants` are not created. A public support link is shown only when `SUPPORT_URL` is a real http(s) value. No 24-hour reply is claimed. |
+| Reason | Implementation Plan Stage 4 L owner screen is customer-visible and does not require staff identity. Inventing staff credentials would violate §34 and SEC05. |
+| Evidence | `supabase/migrations/0026_owner_support.sql`; `apps/api/src/support.ts`; `apps/mobile/app/(tabs)/settings/support.tsx` |
+| Owner | Engineering lead |
+| PRD implication | DEC13 owner half, S22 support, `POST /support/cases`. S28, SEC05, QA59, QA60 remain BLOCKED. |
+| Impacted requirement IDs | DEC13, S22, S28, SEC05, QA59, QA60 |
+| Impacted test IDs | `apps/api/src/support.test.ts`; `packages/schemas/src/support.test.ts`; `apps/mobile/src/support/presentation.test.ts`; `supabase/tests/0027_owner_support.sql` |
+| Migration implications | `0026_owner_support.sql`. Do not modify 0001–0025. Hosted confirmation is `APPLY_0026`. |
+| Reversible | Additive table and functions; purge deletes support cases |
+| Escalation category | none |

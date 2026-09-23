@@ -1432,6 +1432,49 @@
         }
       }
     },
+    "/v1/support/cases": {
+      "post": {
+        "summary": "Create an owner support case",
+        "description": "Owner-authenticated case intake. Category and message required. Optional 24-hour content-access grant is stored on the case. Staff console routes are not implemented. Does not claim a 24-hour reply. Idempotency-Key required. Allowed while the account is active or deleting.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["category", "message"],
+                "properties": {
+                  "category": {
+                    "type": "string",
+                    "enum": ["account", "billing", "documents", "access", "other"]
+                  },
+                  "message": { "type": "string", "minLength": 10, "maxLength": 2000 },
+                  "grant_content_access": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Case created or idempotent replay" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended or setup incomplete" },
+          "409": { "description": "Idempotency mismatch" },
+          "422": { "description": "Unknown fields, invalid category or message, or missing Idempotency-Key" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
     "/v1/requests/{requestId}/resend": {
       "post": {
         "summary": "Resend a pending approval request email (NTF04, APR03 rotate)",

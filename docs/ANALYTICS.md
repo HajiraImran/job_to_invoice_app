@@ -49,7 +49,7 @@ Sentry is error monitoring, not product analytics. Session replay and screenshot
 | subscription_expired | Verified state loses Pro | known_reason enum | S21 | MET08 |
 | export_completed | Bundle ready | size_bucket, job_count_bucket | S24 | — |
 | sync_conflict | Server draft conflict | resource_kind, client_version | S23 | — |
-| support_opened | Case created | category | S22 | — |
+| support_opened | Server case created (`POST /v1/support/cases`) | category only; never message | S22 | — |
 
 No amount, reference, email or document text on any event.
 

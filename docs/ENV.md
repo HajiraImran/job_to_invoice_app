@@ -74,9 +74,13 @@ Purge process:
 
 - `DATABASE_URL_PURGE`
 
+Owner support intake (`POST /v1/support/cases`, S22):
+
+- `SUPPORT_URL` — optional public monitored address. Shown only when set to http(s). Empty is not invented.
+
 Not used by this slice:
 
-- RevenueCat, staff, backup, and later purchase keys
+- RevenueCat, staff (`STAFF_AUTH_CONFIG`), backup, and later purchase keys
 
 Portal Next.js BFF (`apps/portal`) reads process-local `API_BASE_URL` and `PORTAL_ORIGIN`. It sets the `jti_portal` HttpOnly SameSite=Lax host-only cookie on the portal origin after exchange/verify. Development HTTP may omit `Secure`. Production and staging require HTTPS + `Secure`. Do not post the session cookie to the API port.
 

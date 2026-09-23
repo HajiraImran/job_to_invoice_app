@@ -4,6 +4,7 @@ export type OwnerBootstrap = {
   entitlement: { source: string; can_publish: boolean };
   first_sign_in: boolean;
   analytics_alias_id: string;
+  support_url?: string | null;
 };
 
 export type ApiError = {

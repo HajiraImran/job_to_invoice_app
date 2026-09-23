@@ -255,7 +255,7 @@ Composite FKs:
 | idempotency_records | actor_scope, key, route, request_hash, operation_id unique, status, response_code?, response_json?, created_at, expires_at, permanence financial/ephemeral; unique actor_scope/key. Workspace setup uses ephemeral 30-day rows (`0004_workspace_setup.sql`). |
 | audit_events | workspace_id tenant key, actor_type, actor_id?, action, entity_type, entity_id, occurred_at, request_id, before_version?, after_version?, reason?, safe_metadata_json; append-only. Setup writes `workspace_setup_completed` without names or addresses. |
 | exports | workspace_id NOT NULL, created_by, operation_id unique, newer, cutoff_at, status queued/running/ready/failed/expired, schema_version, part_count, job_count?, artifact_id?, object_key?, sha256?, bytes?, manifest_json?, download_until?, delete_after?, ready_at?, failed_at?, purged_at?, error_code?. **Implemented** in `0024_owner_export.sql`. |
-| support_cases | workspace_id NOT NULL, owner_id, category, message, state, content_access_granted_at?, content_access_expires_at?, assigned_staff_id? |
+| support_cases | workspace_id NOT NULL, owner_id, category, message, state, content_access_granted_at?, content_access_expires_at?, assigned_staff_id?. **Implemented** in `0026_owner_support.sql`. Owner create only. `assigned_staff_id` stays null until staff tables exist. |
 | analytics_events | event_id unique, pseudonymous_owner_id?, job_id?, event_name, schema_version, occurred_at, received_at, safe_properties_json |
 | staff_users | Global table: auth_subject unique, role agent/supervisor/infra, mfa_required true, status; no commercial tenant access by default |
 | staff_access_grants | staff_user_id, support_case_id, scope_json, reason, approved_by, expires_at, revoked_at? |
@@ -342,8 +342,8 @@ ledger:       ledger_entries, credit_allocations, ledger_refund_allocations
 files:        assets, artifacts
 billing:      entitlement_snapshots, provider_events
 async:        outbox_tasks, delivery_attempts, idempotency_records
-ops:          audit_events, exports, analytics_events, deletion_requests
-staff:        staff_users, staff_access_grants, support_cases
+ops:          audit_events, exports, analytics_events, deletion_requests, support_cases
+staff:        staff_users, staff_access_grants (not created; S28 BLOCKED)
 ```
 
 Production SQL must enforce this contract with tests. The table is a design contract, not a substitute for migrations (DEL02).

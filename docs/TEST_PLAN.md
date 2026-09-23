@@ -121,8 +121,8 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA56 | Export after subscription expiry | Authenticated export; checksums | E2E |
 | QA57 | Deletion with active subscription | Accept; explain billing; revoke; purge | E2E |
 | QA58 | Restore backup containing deleted owner | Deletion ledger reapplied first | Drill |
-| QA59 | Staff access without owner grant | Metadata only; attempt audited | Isolation |
-| QA60 | Staff grant expires/revoked | Content stops at next request | Isolation |
+| QA59 | Staff access without owner grant | BLOCKED: no staff authentication. Expected later: metadata only; attempt audited | Isolation |
+| QA60 | Staff grant expires/revoked | BLOCKED: no staff authentication. Expected later: content stops at next request | Isolation |
 | QA61 | VoiceOver / Dynamic Type / keyboard / zoom | Core flows usable | Device |
 | QA62 | Low disk during draft save | Failure; do not show Saved | Device |
 | QA63 | Token in URL/error/analytics/referrer | Mailbox HTML uses `#` not `?token=`; after exchange logs contain only `token_hash`; no click-tracking rewrite | Isolation |

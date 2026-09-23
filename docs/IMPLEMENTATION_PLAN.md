@@ -205,6 +205,7 @@ Do not implement all screens, then the backend, then connect them.
 - Screens: S22 (owner), S28 (staff, may start metadata-only)
 - API: `POST /support/cases`, admin routes
 - Tests: QA59–QA60
+- Owner case intake (DEC13 / S22 / `POST /support/cases` / `support_opened`): implemented in `0026_owner_support.sql`. Optional 24-hour content grant is stored on the case. Public `SUPPORT_URL` is shown only when configured. S28 / SEC05 / QA59–QA60 remain **BLOCKED** on missing staff authentication, MFA, roles, and `STAFF_AUTH_CONFIG`.
 
 **Exit evidence:** sandbox billing/restore and deletion tests; account/receipt mapping documented.
 

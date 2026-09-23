@@ -182,6 +182,18 @@ export {
   parseDeletionRequest,
 } from "./deletion.ts";
 export {
+  SUPPORT_CATEGORIES,
+  SUPPORT_CONTENT_GRANT_HOURS,
+  SUPPORT_MESSAGE_MAX,
+  SUPPORT_MESSAGE_MIN,
+  isSupportCategory,
+  parseSupportCase,
+  publicSupportUrl,
+  type SupportCategory,
+  type SupportCaseParseFail,
+  type SupportCaseParseOk,
+} from "./support.ts";
+export {
   emptyDirectInvoiceDraft,
   parseDirectInvoiceDraft,
   parseInvoiceIssue,
