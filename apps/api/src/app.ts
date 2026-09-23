@@ -30,6 +30,7 @@ import { registerActionGrantRoutes } from "./action-grants.ts";
 import { registerRequestMutationRoutes } from "./requests.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { registerSubscriptionRoutes } from "./subscription.ts";
+import { registerExportRoutes } from "./exports.ts";
 import { registerWorkspaceRoutes } from "./workspace.ts";
 
 declare module "fastify" {
@@ -45,7 +46,7 @@ export type AppDeps = {
   logOwnerMe?: (event: OwnerMeSafeEvent) => void;
   logQuotePublish?: (event: QuotePublishSafeEvent) => void;
   logPortal?: (event: { event: "portal"; request_id: string; status: number; stage: string; sqlstate?: string }) => void;
-  documentsStore?: { presignGet: (key: string) => Promise<string> };
+  documentsStore?: { presignGet: (key: string, expiresIn?: number) => Promise<string> };
   nowSec?: () => number;
 };
 
@@ -456,6 +457,9 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerSubscriptionRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerExportRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerActionGrantRoutes(app, deps, {

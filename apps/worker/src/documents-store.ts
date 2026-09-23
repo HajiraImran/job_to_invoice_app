@@ -1,8 +1,9 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { workerClientOptions, type WorkerDocumentsStorageConfig } from "@job-to-invoice/config";
 
 export type DocumentsObjectStore = {
   putObject: (input: { key: string; body: Buffer; contentType: string }) => Promise<void>;
+  getObject?: (key: string) => Promise<Buffer | undefined>;
 };
 
 export function privatePutObjectInput(input: {
@@ -38,6 +39,15 @@ export function createDocumentsObjectStore(config: WorkerDocumentsStorageConfig)
           }),
         ),
       );
+    },
+    async getObject(key) {
+      try {
+        const result = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }));
+        const bytes = await result.Body?.transformToByteArray();
+        return bytes ? Buffer.from(bytes) : undefined;
+      } catch {
+        return undefined;
+      }
     },
   };
 }

@@ -198,6 +198,7 @@ Do not implement all screens, then the backend, then connect them.
 - Email: EMAIL10, EMAIL11
 - Analytics: `export_completed`
 - Tests: QA56–QA58
+- Owner export (EXP01 / EXP02 / EMAIL10 / S24 export): implemented in `0024_owner_export.sql`. Account deletion, EMAIL11, and type-DELETE confirmation remain a later K half.
 
 **Vertical slice L — Support intake**
 

@@ -57,9 +57,9 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.equal(confirm.includes(confirmationExpr), true);
   assert.match(
     yaml,
-    /Type APPLY_0023 to apply pending hosted development migration 0023_app_managed_trial\.sql/,
+    /Type APPLY_0024 to apply pending hosted development migration 0024_owner_export\.sql/,
   );
-  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0023" \]/);
+  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0024" \]/);
   assert.doesNotMatch(yaml, /APPLY_0014/);
   assert.doesNotMatch(yaml, /APPLY_0015/);
   assert.doesNotMatch(yaml, /APPLY_0016/);
@@ -69,6 +69,7 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.doesNotMatch(yaml, /APPLY_0020/);
   assert.doesNotMatch(yaml, /APPLY_0021/);
   assert.doesNotMatch(yaml, /APPLY_0022/);
+  assert.doesNotMatch(yaml, /APPLY_0023/);
   assert.doesNotMatch(confirm, /secrets\./);
   assert.doesNotMatch(confirm, /DATABASE_URL_MIGRATIONS/);
   assert.doesNotMatch(confirm, /environment:/);
@@ -97,10 +98,10 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.equal([...apply.matchAll(/pnpm hosted:db-push/g)].length, 1);
   assert.equal([...apply.matchAll(/pnpm hosted:db-check/g)].length, 2);
   assert.equal([...apply.matchAll(/grep -qx 'ok: true'/g)].length, 2);
-  assert.match(apply, /grep -qx 'pending: 0023_app_managed_trial\.sql'/);
+  assert.match(apply, /grep -qx 'pending: 0024_owner_export\.sql'/);
   assert.match(apply, /grep -qx 'pending: \(none\)'/);
   assert.ok(
-    apply.indexOf("pending: 0023_app_managed_trial.sql") < apply.indexOf("pnpm hosted:db-push"),
+    apply.indexOf("pending: 0024_owner_export.sql") < apply.indexOf("pnpm hosted:db-push"),
   );
 
   assert.doesNotMatch(yaml, /^env:/m);
@@ -118,11 +119,11 @@ test("hosted development migration workflow is dispatch-only and statically gate
 
   const names = namedSteps(apply);
   assert.ok(
-    names.indexOf("Check pending hosted migration 0023") <
-      names.indexOf("Apply hosted migration 0023"),
+    names.indexOf("Check pending hosted migration 0024") <
+      names.indexOf("Apply hosted migration 0024"),
   );
   assert.ok(
-    names.indexOf("Apply hosted migration 0023") <
+    names.indexOf("Apply hosted migration 0024") <
       names.indexOf("Verify no pending hosted migrations"),
   );
   assert.ok(

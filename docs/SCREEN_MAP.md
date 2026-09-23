@@ -203,7 +203,7 @@ Local vs server values and times. Keep server or Save local as draft copy. Prese
 
 ### S24 Export and deletion
 
-Export status/download. Deletion consequences, type DELETE, progress, retained-record explanation. Reauthentication. Manage subscription shown; deletion does not cancel Apple billing (PRV03).
+Implemented export route: `/(tabs)/settings/data`. Status, 24h reuse, newer request, authenticated download, reauthentication. Deletion consequences, type DELETE, progress, and retained-record explanation remain unimplemented. Deletion does not cancel Apple billing (PRV03).
 
 ### S25 Customer access
 
@@ -241,6 +241,7 @@ Case lookup, bounded metadata, allowed operational actions. Staff MFA, reason re
 | REFUND_EXCEEDS_BALANCE | S17 |
 | ENTRY_ALREADY_REVERSED | S16 |
 | ENTITLEMENT_REQUIRED | S21 |
+| EXPORT_LIMIT | S24 |
 | QUOTA_EXCEEDED | S21 / upload UI |
 | ASSET_NOT_READY | S11 remove or retry |
 | PURCHASE_ACCOUNT_MISMATCH | S21 |

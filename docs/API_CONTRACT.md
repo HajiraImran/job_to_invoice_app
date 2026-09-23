@@ -116,7 +116,7 @@ Both texts are required. Keep every §22 route. `POST /account/action-grants` is
 
 | Method and route | Access | Input and result |
 | --- | --- | --- |
-| POST /account/action-grants | Owner after fresh OTP (not refresh) | `{action}` for export, deletion, email_change, replace_link; returns one-time grant for `X-Action-Grant`; 5-minute expiry; single use. **Implemented:** `POST /v1/account/action-grants` issues `replace_link` only when JWT `auth_time` is fresh (D-024); other actions return 422. |
+| POST /account/action-grants | Owner after fresh OTP (not refresh) | `{action}` for export, deletion, email_change, replace_link; returns one-time grant for `X-Action-Grant`; 5-minute expiry; single use. **Implemented:** `POST /v1/account/action-grants` issues `replace_link` and `export` when JWT `auth_time` is fresh (D-024); deletion and email_change return 422. |
 
 Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. Grant issued for `export` used on `replace_link` → 403.
 
@@ -179,8 +179,8 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /subscription/reconcile | Owner | Provider hint; authoritative fetch |
 | POST /webhooks/revenuecat | Provider auth | Durable event; async process |
 | POST /webhooks/email | Provider signature | Delivery dedup |
-| POST /exports | Owner + X-Action-Grant export | Cutoff; 202 export ID |
-| GET /exports/{id} | Owner | Status/manifest/download |
+| POST /exports | Owner + X-Action-Grant export | Cutoff; 202 export ID. **Implemented:** `POST /v1/exports`; Idempotency-Key + X-Action-Grant; `{ newer?: true }`; reuses a 24h bundle unless newer; two new exports/UTC day (`EXPORT_LIMIT`). |
+| GET /exports/{id} | Owner | Status/manifest/download. **Implemented:** `GET /v1/exports/{id}`, `GET /v1/exports/latest`, `GET /v1/exports/{id}/download` (authenticated presign until `download_until`). |
 | POST /account/deletion | Owner + X-Action-Grant deletion | Confirmation phrase; lock and revoke refresh tokens |
 | GET /account/deletion | Owner limited session | Deletion state |
 | POST /support/cases | Owner | Category/message; optional content grant |

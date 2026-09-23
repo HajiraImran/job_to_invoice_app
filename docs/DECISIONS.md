@@ -591,3 +591,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | `0023_app_managed_trial.sql`. Do not modify 0001–0022. Do not change hosted confirmation from `APPLY_0022` until 0022 is applied. |
 | Reversible | Additive functions, indexes, and CREATE OR REPLACE of live publish slot allocation |
 | Escalation category | none |
+
+### D-030 — Owner export is the first Stage 4 K half
+
+| Field | Value |
+| --- | --- |
+| ID | D-030 |
+| Date | 2026-09-23 |
+| Status | Resolved |
+| Decision | After hosted 0023, the next unblocked customer-visible slice is owner export (`POST /v1/exports`, S24 export, EMAIL10), not paid IAP and not account deletion. Paid purchase remains blocked on empty RevenueCat credentials and provisional product IDs. Deletion (PRV03–PRV06, EMAIL11) is a separate later K half. Customers remain teammate-owned; export reads `customers` only through SQL. ZIP is STORE-format without a third-party library. Single numbered part plus MANIFEST covers EXP02 split/checksum until a size threshold is proven. |
+| Reason | Implementation Plan order after remaining J is blocked. EXP01/EXP02 and EMAIL10 are unblocked and independently shippable. |
+| Evidence | `supabase/migrations/0024_owner_export.sql`; `apps/api/src/exports.ts`; `apps/mobile/app/(tabs)/settings/data.tsx`; `apps/worker/src/export.ts` |
+| Owner | Engineering lead |
+| PRD implication | EXP01, EXP02, EMAIL10, S24 export, QA55, QA56, ANA01 `export_completed`. |
+| Impacted requirement IDs | EXP01, EXP02, EMAIL10, S24, ACC02A, ANA01, QA55, QA56 |
+| Impacted test IDs | `apps/api/src/exports.test.ts`; `apps/worker/src/export-bundle.test.ts`; `apps/worker/src/email.test.ts`; `packages/schemas/src/export.test.ts`; `supabase/tests/0025_owner_export.sql` |
+| Migration implications | `0024_owner_export.sql`. Do not modify 0001–0023. Hosted confirmation is `APPLY_0024`. |
+| Reversible | Additive table, functions, and artifact FK |
+| Escalation category | none |

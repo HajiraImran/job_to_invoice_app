@@ -1176,7 +1176,7 @@
     "/v1/account/action-grants": {
       "post": {
         "summary": "Issue a single-use ACC02A action grant after fresh owner authentication",
-        "description": "Requires JWT auth_time within 300 seconds. This deployment issues replace_link only; export, deletion, and email_change return 422. The plaintext grant is returned once and must be sent as X-Action-Grant. Grant hashes are stored server-side; grants are not logged.",
+        "description": "Requires JWT auth_time within 300 seconds. This deployment issues replace_link and export; deletion and email_change return 422. The plaintext grant is returned once and must be sent as X-Action-Grant. Grant hashes are stored server-side; grants are not logged.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "required": true,
@@ -1202,7 +1202,7 @@
                       "required": ["grant", "action", "expires_at"],
                       "properties": {
                         "grant": { "type": "string", "description": "base64url 32-byte secret; send as X-Action-Grant once" },
-                        "action": { "type": "string", "enum": ["replace_link"] },
+                        "action": { "type": "string", "enum": ["replace_link", "export"] },
                         "expires_at": { "type": "string", "format": "date-time" }
                       }
                     },
@@ -1224,7 +1224,7 @@
           "403": {
             "description": "ACTION_GRANT_REQUIRED when auth_time is missing or older than 300s; ACCOUNT_SUSPENDED / ACCOUNT_DELETING / SETUP_INCOMPLETE"
           },
-          "422": { "description": "Unknown fields, unsupported action, or deferred action (export/deletion/email_change)" },
+          "422": { "description": "Unknown fields, unsupported action, or deferred action (deletion/email_change)" },
           "429": { "description": "RATE_LIMITED; Retry-After seconds" },
           "503": { "description": "Service unavailable" }
         }
@@ -1275,6 +1275,105 @@
           "403": { "description": "Suspended, locked, or setup incomplete" },
           "409": { "description": "Trial already used or idempotency mismatch" },
           "422": { "description": "Missing acknowledgement or Idempotency-Key" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/exports": {
+      "post": {
+        "summary": "Queue an owner workspace export after a fresh export action grant",
+        "description": "Requires X-Action-Grant for action export and Idempotency-Key. Reuses a completed or in-flight bundle from the last 24 hours unless newer is true. Caps two new exports per UTC day.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "X-Action-Grant",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "newer": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "Export queued, reused, or idempotent replay" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "ACTION_GRANT_REQUIRED, ACTION_GRANT_INVALID, suspended, locked, or setup incomplete" },
+          "409": { "description": "Idempotency mismatch" },
+          "422": { "description": "Unknown fields or missing Idempotency-Key" },
+          "429": { "description": "EXPORT_LIMIT two new exports per day" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/exports/latest": {
+      "get": {
+        "summary": "Latest reusable owner export",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Latest queued, running, or ready export, or export null" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/exports/{exportId}": {
+      "get": {
+        "summary": "Owner export status and manifest",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "exportId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Export status, cutoff, download window, and manifest" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Unknown or cross-tenant export" },
+          "503": { "description": "Service unavailable" }
+        }
+      }
+    },
+    "/v1/exports/{exportId}/download": {
+      "get": {
+        "summary": "Authenticated export download URL",
+        "description": "Requires owner authentication. Returns a time-limited object URL while download_until is in the future. Does not attach the ZIP to email.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "exportId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Presigned URL, expires_at, sha256, bytes" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "404": { "description": "Not ready, expired, purged, or cross-tenant" },
           "503": { "description": "Service unavailable" }
         }
       }

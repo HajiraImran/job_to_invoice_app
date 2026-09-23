@@ -5,6 +5,7 @@ import { LOCAL_DRAFT_PERSISTENCE_IMPLEMENTED } from "../../../src/drafts/sync.ts
 import { copy } from "../../../src/i18n/en.ts";
 import { useAuth } from "../../../src/session/AuthProvider.tsx";
 import { signOutAlertSpec, signOutChoiceProceeds } from "../../../src/session/sign-out.ts";
+import { exportPath } from "../../../src/export/presentation.ts";
 import { subscriptionPath } from "../../../src/subscription/presentation.ts";
 import { colors, space, type } from "../../../src/theme.ts";
 
@@ -109,6 +110,14 @@ export default function SettingsScreen() {
         style={styles.syncButton}
       >
         <Text style={styles.syncLabel}>{copy.subscriptionTitle}</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={copy.exportTitle}
+        onPress={() => router.push(exportPath())}
+        style={styles.syncButton}
+      >
+        <Text style={styles.syncLabel}>{copy.exportTitle}</Text>
       </Pressable>
       {auth.error ? (
         <Text accessibilityLiveRegion="assertive" style={styles.banner}>

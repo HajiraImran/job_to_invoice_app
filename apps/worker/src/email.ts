@@ -224,6 +224,28 @@ export function renderEmail06(input: {
   return { subject, text, html };
 }
 
+export function renderEmail10(input: {
+  appName: string;
+  expiresAt: string;
+}): { subject: string; text: string; html: string } {
+  const subject = "Your business export is ready";
+  const text = [
+    `${input.appName}`,
+    "Your business export is ready.",
+    "Open Settings, then Export and deletion, while signed in.",
+    `Download is available until ${input.expiresAt}.`,
+    "This message does not include an export attachment.",
+  ].join("\n");
+  const html = `<!doctype html><html lang="en"><body>
+<p>${escapeHtml(input.appName)}</p>
+<p>Your business export is ready.</p>
+<p>Open Settings, then Export and deletion, while signed in.</p>
+<p>Download is available until ${escapeHtml(input.expiresAt)}.</p>
+<p>This message does not include an export attachment.</p>
+</body></html>`;
+  return { subject, text, html };
+}
+
 export function renderEmail09(input: {
   appName: string;
   endsOn: string;
@@ -407,6 +429,25 @@ function trialEndsOn(value: Date | string | null): string | undefined {
   return iso.length >= 10 ? iso.slice(0, 10) : undefined;
 }
 
+type ExportClaimRow = {
+  id: string;
+  workspace_id: string;
+  template_id: string;
+  effect_key: string;
+  attempts: number;
+  created_by: string;
+  recipient_email: string;
+  download_until: Date | string | null;
+  provider_message_id: string | null;
+};
+
+function exportExpiresAt(value: Date | string | null): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
 export async function processSendEmail(input: {
   pool: Pool;
   deliverySecret: VersionedSecret | string;
@@ -481,6 +522,74 @@ export async function processSendEmail(input: {
         [trialClaimed.id, result.retryable ? "PROVIDER_RETRY" : "PROVIDER_REJECTED", !result.retryable],
       );
       return failed.rows[0]?.fail_trial_ending_email;
+    });
+    return status === "dead" ? "dead" : "retry";
+  }
+
+  const exportClaimed = await withWorkerRole(
+    input.pool,
+    async (client) => {
+      const result = await client.query<ExportClaimRow>("select * from commercial.claim_export_ready_email()");
+      const row = result.rows[0];
+      if (!row) {
+        return undefined;
+      }
+      await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+        row.workspace_id,
+        row.created_by,
+      ]);
+      return row;
+    },
+    { timeoutMs: WORKER_CLAIM_TIMEOUT_MS, statementTimeoutMs: WORKER_STATEMENT_TIMEOUT_MS },
+  );
+  if (exportClaimed) {
+    const expiresAt = exportExpiresAt(exportClaimed.download_until);
+    if (!expiresAt || !exportClaimed.recipient_email) {
+      await withWorkerRole(input.pool, async (client) => {
+        await client.query("select commercial.fail_export_ready_email($1::uuid, $2, $3)", [
+          exportClaimed.id,
+          "VALIDATION_FAILED",
+          true,
+        ]);
+      });
+      return "dead";
+    }
+    const rendered = renderEmail10({
+      appName: input.appName,
+      expiresAt,
+    });
+    const from = `${input.appName} <quotes@${input.fromDomain}>`;
+    const send = input.send ?? ((payload) => sendResendEmail(payload));
+    const result = await whileLeased(input.pool, exportClaimed.id, () =>
+      send({
+        apiKey: input.apiKey,
+        idempotencyKey: exportClaimed.effect_key,
+        from,
+        to: exportClaimed.recipient_email,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+      }),
+    );
+    if (result.ok) {
+      await withWorkerRole(input.pool, async (client) => {
+        await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+          exportClaimed.workspace_id,
+          exportClaimed.created_by,
+        ]);
+        await client.query("select commercial.complete_export_ready_email($1::uuid, $2)", [
+          exportClaimed.id,
+          result.id,
+        ]);
+      });
+      return "done";
+    }
+    const status = await withWorkerRole(input.pool, async (client) => {
+      const failed = await client.query<{ fail_export_ready_email: string }>(
+        "select commercial.fail_export_ready_email($1::uuid, $2, $3) as fail_export_ready_email",
+        [exportClaimed.id, result.retryable ? "PROVIDER_RETRY" : "PROVIDER_REJECTED", !result.retryable],
+      );
+      return failed.rows[0]?.fail_export_ready_email;
     });
     return status === "dead" ? "dead" : "retry";
   }

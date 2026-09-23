@@ -1,6 +1,6 @@
 /**
  * Outbox eligibility rules (SYNC05).
- * Never queue publish, approval, invoice, payment, ledger, purchase, or deletion commands.
+ * Never queue publish, approval, invoice, payment, ledger, purchase, export, or deletion commands.
  */
 
 const FORBIDDEN_PATH_PATTERNS: RegExp[] = [
@@ -21,6 +21,7 @@ const FORBIDDEN_PATH_PATTERNS: RegExp[] = [
   /\/finish\b/i,
   /\/subscription\b/i,
   /\/trial\b/i,
+  /\/exports?\b/i,
 ];
 
 export const ALLOWED_OUTBOX_METHODS = ["POST", "PATCH"] as const;

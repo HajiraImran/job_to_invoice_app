@@ -31,6 +31,7 @@ export const API_ERROR_CODES = {
   JOB_NOT_FINISHABLE: "JOB_NOT_FINISHABLE",
   RELATED_JOB_UNAVAILABLE: "RELATED_JOB_UNAVAILABLE",
   TRIAL_ALREADY_STARTED: "TRIAL_ALREADY_STARTED",
+  EXPORT_LIMIT: "EXPORT_LIMIT",
 } as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];
@@ -88,6 +89,8 @@ export function httpStatusForCode(code: string): number {
     case API_ERROR_CODES.JOB_NOT_FINISHABLE:
     case API_ERROR_CODES.TRIAL_ALREADY_STARTED:
       return 409;
+    case API_ERROR_CODES.EXPORT_LIMIT:
+      return 429;
     case API_ERROR_CODES.REQUEST_UNAVAILABLE:
       return 404;
     case API_ERROR_CODES.ENTITLEMENT_REQUIRED:
