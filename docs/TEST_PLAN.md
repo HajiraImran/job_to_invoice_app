@@ -342,6 +342,20 @@ Quote-based invoice preview and issue passed on device. Status remains **IMPLEME
 | Worker completion | NOT VERIFIED (intermittent network/database) |
 | Record payment / refund (S17) | NOT VERIFIED |
 
+## Customer slice
+
+Automated evidence is IMPLEMENTED, not VERIFIED. Do not mark QA03, QA08, QA14, QA55, or QA61 complete from these tests alone. Hosted `APPLY_0027` is not dispatched. Physical iPhone and VoiceOver remain open.
+
+| Check | Evidence |
+| --- | --- |
+| Schema, email normalization, E.164, postal_code | `packages/schemas/src/customer.test.ts` |
+| API envelopes, idempotency, duplicate confirmation, archive, delete, cross-tenant 404, job binding, issued snapshot bytes | `apps/api/src/customers.test.ts` |
+| Privilege, tenant isolation, FORCE RLS | `supabase/tests/0028_customers.sql` via `pnpm test:db` |
+| Mobile form, offline denial, accessibility state | `apps/mobile/src/customers/form.test.ts` |
+| Customer mutations excluded from SYNC01 | `apps/mobile/src/sync/sync01.test.ts` |
+| OpenAPI | `pnpm validate:openapi` |
+| Hosted workflow phrase | `node scripts/hosted-development-migrations.workflow.test.mjs` |
+
 ## Setup slice commands
 
 ```sh

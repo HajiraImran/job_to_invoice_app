@@ -104,7 +104,7 @@ describe("job list query", () => {
     const parsed = parseJobListQuery({});
     expect(parsed).toEqual({
       ok: true,
-      value: { cursor: null, limit: JOB_LIST_DEFAULT_LIMIT, search: null, state: "open" },
+      value: { cursor: null, limit: JOB_LIST_DEFAULT_LIMIT, search: null, state: "open", customer_id: null },
     });
   });
 

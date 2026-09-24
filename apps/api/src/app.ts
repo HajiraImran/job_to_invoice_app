@@ -21,6 +21,7 @@ import {
 import type { QuotePublishSafeEvent } from "./publish-log.ts";
 import { registerChangeRoutes } from "./changes.ts";
 import { registerDraftRoutes } from "./drafts.ts";
+import { registerCustomerRoutes } from "./customers.ts";
 import { registerItemRoutes } from "./items.ts";
 import { registerJobRoutes } from "./jobs.ts";
 import { registerQuotePublishRoutes } from "./quotes.ts";
@@ -449,6 +450,9 @@ export function buildApp(deps: AppDeps) {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerItemRoutes(app, deps, {
+    limiterAllow: (key) => limiter.allow(key),
+  });
+  registerCustomerRoutes(app, deps, {
     limiterAllow: (key) => limiter.allow(key),
   });
   registerDraftRoutes(app, deps, {

@@ -217,6 +217,38 @@ if (
   errors.push("S12 request mutations must not require If-Match (not implemented)");
 }
 
+if (!spec.paths?.["/v1/customers"]?.get || !spec.paths?.["/v1/customers"]?.post) {
+  errors.push("GET and POST /v1/customers are required");
+}
+if (!spec.paths?.["/v1/customers/{customerId}"]?.get || !spec.paths?.["/v1/customers/{customerId}"]?.patch || !spec.paths?.["/v1/customers/{customerId}"]?.delete) {
+  errors.push("GET, PATCH, and DELETE /v1/customers/{customerId} are required");
+}
+if (!spec.paths?.["/v1/customers/{customerId}/archive"]?.post) {
+  errors.push("POST /v1/customers/{customerId}/archive is required");
+}
+if (spec.paths?.["/v1/customers/{customerId}/archive"]?.post?.parameters?.some((item) => item.name === "If-Match")) {
+  errors.push("Customer archive must not require If-Match");
+}
+if (!spec.paths?.["/v1/customers/{customerId}"]?.patch?.parameters?.some((item) => item.name === "If-Match")) {
+  errors.push("PATCH /v1/customers/{customerId} requires If-Match");
+}
+if (!spec.components?.schemas?.CustomerCreate || !spec.components?.schemas?.PostalAddress) {
+  errors.push("CustomerCreate and PostalAddress schemas are required");
+}
+if (spec.components?.schemas?.PostalAddress && !spec.components.schemas.PostalAddress.properties?.postal_code) {
+  errors.push("PostalAddress must use postal_code");
+}
+if (spec.components?.schemas?.PostalAddress?.properties?.zip) {
+  errors.push("PostalAddress must not use zip");
+}
+const jobGet = spec.paths?.["/v1/jobs"]?.get;
+if (!jobGet?.parameters?.some((item) => item.name === "customer_id")) {
+  errors.push("GET /v1/jobs must accept customer_id");
+}
+if (!spec.components?.schemas?.JobCreate?.properties?.customer_id) {
+  errors.push("JobCreate must accept customer_id");
+}
+
 if (errors.length > 0) {
   console.error(errors.join("\n"));
   process.exit(1);

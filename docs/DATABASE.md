@@ -141,7 +141,7 @@ Foreign keys:
 
 | Table | Domain fields beyond common fields |
 | --- | --- |
-| customers | name, email?, normalized_email?, phone?, billing_address_json?, archived_at?, version |
+| customers | name, email?, normalized_email?, phone?, billing_address_json?, archived_at?, version. **Implemented** commands in `0027_customer_feature.sql`: email pair, E.164 phone, billing address with postal_code, non-unique (workspace_id, normalized_email) index, delete policy. No UNIQUE on normalized_email. |
 | catalogue_items | description, unit, custom_unit_label?, default_quantity, unit_price_cents, discount_cents, tax_bp, archived_at?, version. **Implemented** in `0020_catalogue_items.sql`. Seeded on workspace setup. Copy-on-use only; no live FK from document lines. |
 | jobs | customer_id, title, site_address_json?, no_site bool, lifecycle, archived_from_state?, current_quote_id?, active_invoice_id?, scope_version default 0, first_published_at?, entitlement_origin free/trial/paid?, completion_right bool, internal_notes, related_job_id?, mode quote/direct_invoice, version |
 

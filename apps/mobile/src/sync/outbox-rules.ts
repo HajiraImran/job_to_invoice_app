@@ -22,6 +22,7 @@ const FORBIDDEN_PATH_PATTERNS: RegExp[] = [
   /\/subscription\b/i,
   /\/trial\b/i,
   /\/exports?\b/i,
+  /\/customers\b/i,
 ];
 
 export const ALLOWED_OUTBOX_METHODS = ["POST", "PATCH"] as const;

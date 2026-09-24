@@ -20,7 +20,11 @@ export function fail(
   id: string,
   code: string,
   message: string,
-  options?: { field_errors?: ApiErrorBody["error"]["field_errors"]; retryable?: boolean },
+  options?: {
+    field_errors?: ApiErrorBody["error"]["field_errors"];
+    retryable?: boolean;
+    duplicates?: ApiErrorBody["error"]["duplicates"];
+  },
 ): { status: number; body: ApiErrorBody } {
   const status = code === "UNAVAILABLE" ? 503 : httpStatusForCode(code);
   return {
@@ -31,6 +35,7 @@ export function fail(
         message: redactText(message),
         field_errors: options?.field_errors ?? [],
         retryable: options?.retryable ?? (status === 429 || status >= 500),
+        ...(options?.duplicates ? { duplicates: options.duplicates } : {}),
       },
       meta: { request_id: id, server_time: serverTime() },
     },

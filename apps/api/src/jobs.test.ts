@@ -160,6 +160,7 @@ describe("jobs API", () => {
       i: JOB_1,
       s: "faucet",
       t: "open",
+      c: null,
     });
     expect(decodeJobCursor("not-a-cursor")).toBeUndefined();
   });

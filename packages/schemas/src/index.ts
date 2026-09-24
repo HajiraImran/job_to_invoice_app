@@ -106,8 +106,26 @@ export {
   type JobLifecycle,
   type JobListQuery,
   type JobListState,
+  type JobListScope,
   type JobMode,
 } from "./job.ts";
+export {
+  CUSTOMER_LIST_DEFAULT_LIMIT,
+  CUSTOMER_LIST_MAX_LIMIT,
+  CUSTOMER_LIST_STATES,
+  CUSTOMER_NAME_MIN,
+  CUSTOMER_PRIMARY_MIN_PT,
+  CUSTOMER_TARGET_MIN_PT,
+  parseCustomerArchive,
+  parseCustomerCreate,
+  parseCustomerListQuery,
+  parseCustomerPatch,
+  type CustomerDuplicate,
+  type CustomerListQuery,
+  type CustomerListState,
+  type CustomerPatch,
+  type CustomerWrite,
+} from "./customer.ts";
 export {
   CUSTOM_UNIT_LABEL_MAX,
   DRAFT_EXPIRY_DAYS_DEFAULT,

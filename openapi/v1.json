@@ -318,6 +318,113 @@
         }
       }
     },
+    "/v1/customers": {
+      "get": {
+        "summary": "List customers in the caller's workspace",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 } },
+          { "name": "search", "in": "query", "required": false, "schema": { "type": "string", "maxLength": 120 } },
+          { "name": "state", "in": "query", "required": false, "schema": { "type": "string", "enum": ["active", "archived", "all"], "default": "active" } }
+        ],
+        "responses": {
+          "200": { "description": "Cursor page of customers and next_cursor. Omits normalized_email and workspace_id." },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "422": { "description": "Validation failed, including a cursor that does not match state or search" }
+        }
+      },
+      "post": {
+        "summary": "Create a customer",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CustomerCreate" } } }
+        },
+        "responses": {
+          "200": { "description": "Customer created or idempotent replay" },
+          "401": { "description": "Missing or invalid access token" },
+          "403": { "description": "Suspended, locked, or setup incomplete" },
+          "409": { "description": "Duplicate email without confirmation, or idempotency mismatch. Duplicate matches are id, name, and archived only." },
+          "422": { "description": "Validation failed" }
+        }
+      }
+    },
+    "/v1/customers/{customerId}": {
+      "get": {
+        "summary": "Read one customer",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "customerId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Customer contact and billing address. Jobs are listed with GET /v1/jobs?customer_id." },
+          "401": { "description": "Missing or invalid access token" },
+          "404": { "description": "Unknown or cross-tenant customer" }
+        }
+      },
+      "patch": {
+        "summary": "Partially update a customer",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "customerId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "If-Match", "in": "header", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CustomerPatch" } } }
+        },
+        "responses": {
+          "200": { "description": "Updated customer" },
+          "401": { "description": "Missing or invalid access token" },
+          "404": { "description": "Unknown or cross-tenant customer" },
+          "409": { "description": "Version conflict, duplicate email, or idempotency mismatch" },
+          "422": { "description": "Validation failed" }
+        }
+      },
+      "delete": {
+        "summary": "Delete an unreferenced customer",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "customerId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Customer deleted" },
+          "401": { "description": "Missing or invalid access token" },
+          "404": { "description": "Unknown or cross-tenant customer" },
+          "409": { "description": "Customer has jobs. Archive instead." },
+          "422": { "description": "Validation failed" }
+        }
+      }
+    },
+    "/v1/customers/{customerId}/archive": {
+      "post": {
+        "summary": "Archive or restore a customer",
+        "description": "Does not require If-Match. Version increments only when archived_at changes.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "customerId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CustomerArchive" } } }
+        },
+        "responses": {
+          "200": { "description": "Archived or restored customer" },
+          "401": { "description": "Missing or invalid access token" },
+          "404": { "description": "Unknown or cross-tenant customer" },
+          "409": { "description": "Idempotency mismatch" },
+          "422": { "description": "Validation failed" }
+        }
+      }
+    },
     "/v1/jobs": {
       "get": {
         "summary": "List jobs in the caller's workspace",
@@ -346,7 +453,14 @@
             "in": "query",
             "required": false,
             "schema": { "type": "string", "enum": ["open", "finished", "archived"], "default": "open" },
-            "description": "S05 Active maps to open (draft, active, invoiced, canceled)."
+            "description": "S05 Active maps to open (draft, active, invoiced, canceled). When customer_id is set and state is omitted, every lifecycle is returned."
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Limit jobs to one customer in the caller's workspace. Unknown or cross-tenant customers are 404."
           }
         ],
         "responses": {
@@ -357,7 +471,7 @@
         }
       },
       "post": {
-        "summary": "Create a draft job and the minimum customer row",
+        "summary": "Create a draft job for an existing customer, or a legacy name-only customer",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -1775,12 +1889,61 @@
       }
     },
     "schemas": {
+      "CustomerCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "email": { "type": ["string", "null"], "maxLength": 254 },
+          "phone": { "type": ["string", "null"], "pattern": "^\\+[1-9][0-9]{7,14}$" },
+          "billing_address": { "$ref": "#/components/schemas/PostalAddress" },
+          "confirm_duplicate_email": { "type": "boolean" }
+        }
+      },
+      "CustomerPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "email": { "type": ["string", "null"], "maxLength": 254 },
+          "phone": { "type": ["string", "null"] },
+          "billing_address": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/PostalAddress" },
+              { "type": "null" }
+            ]
+          },
+          "confirm_duplicate_email": { "type": "boolean" }
+        }
+      },
+      "CustomerArchive": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["archived"],
+        "properties": { "archived": { "type": "boolean" } }
+      },
+      "PostalAddress": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["line1", "city", "state", "postal_code"],
+        "properties": {
+          "line1": { "type": "string" },
+          "line2": { "type": "string" },
+          "city": { "type": "string" },
+          "state": { "type": "string" },
+          "postal_code": { "type": "string" }
+        }
+      },
       "JobCreate": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "customer_name", "title", "no_site", "mode"],
+        "description": "Send exactly one of customer_id or customer_name. customer_id uses an active customer. customer_name remains for existing clients and offline job create.",
+        "required": ["id", "title", "no_site", "mode"],
         "properties": {
           "id": { "type": "string", "format": "uuid" },
+          "customer_id": { "type": "string", "format": "uuid" },
           "customer_name": { "type": "string", "minLength": 1, "maxLength": 120 },
           "title": { "type": "string", "minLength": 1, "maxLength": 120 },
           "no_site": { "type": "boolean" },

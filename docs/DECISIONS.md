@@ -645,3 +645,21 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Migration implications | `0026_owner_support.sql`. Do not modify 0001–0025. Hosted confirmation is `APPLY_0026`. |
 | Reversible | Additive table and functions; purge deletes support cases |
 | Escalation category | none |
+
+### D-033 — Customer commands use transaction-local identity
+
+| Field | Value |
+| --- | --- |
+| ID | D-033 |
+| Date | 2026-09-24 |
+| Status | Resolved |
+| Decision | Customer create, update, archive, delete, and job binding are SECURITY INVOKER functions. They derive the workspace from `identity.set_local_tenant_context` and reject a supplied actor id that does not match. Archive and restore do not require If-Match. PATCH does. Duplicate, referenced, and archived conflicts raise before any idempotency write, so a 409 is not stored. Email is normalized by trimming and lowercasing only. Billing address uses postal_code. `commercial.create_job` remains for the legacy customer_name path. Customer mutations are online only and are not SYNC01 operations. Hosted confirmation for this migration is `APPLY_0027`. This decision does not apply it. |
+| Reason | The target PRD requires owner-scoped customers, generic cross-tenant 404, and frozen issued snapshots. A freely supplied actor id would bypass the existing transaction-local tenant pattern. |
+| Evidence | `supabase/migrations/0027_customer_feature.sql`; `supabase/tests/0028_customers.sql`; `apps/api/src/customers.ts` |
+| Owner | Engineering lead |
+| PRD implication | S06, S07, S19, CUS01, CUS02. Apply-current on drafts remains unimplemented. |
+| Impacted requirement IDs | S06, S07, S19, CUS01, CUS02, VAL01, VAL02, API01, API02, API03, DB01, DB02, DB03, DB04, AUTHZ01, ARC02, ARC03, SEC02, SYNC03, SYNC05, UI04, NFR01, ANA01 |
+| Impacted test IDs | QA03, QA08, QA14, QA55, QA61 |
+| Migration implications | `0027_customer_feature.sql`. Do not modify 0001–0026. Hosted confirmation is `APPLY_0027`. |
+| Reversible | Additive constraints, indexes, policy, and functions |
+| Escalation category | none |
