@@ -298,8 +298,17 @@ try {
     .filter((name) => name.endsWith(".sql"))
     .sort()) {
     await test(`sql ${file}`, async () => {
-      const result = await admin.query(readFileSync(join(testsDir, file), "utf8"));
-      const row = result.rows[0];
+      const statements = splitSqlStatements(readFileSync(join(testsDir, file), "utf8"));
+      let result;
+      try {
+        for (const statement of statements) {
+          result = await admin.query(statement);
+        }
+      } catch (error) {
+        await admin.query("rollback").catch(() => undefined);
+        throw error;
+      }
+      const row = result?.rows?.[0];
       assert(row, `${file} returned no row`);
       if ("ok" in row) {
         assert(row.ok === true, `${file} ok=false`);
@@ -384,7 +393,7 @@ try {
       );
       assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
     }
-    assert(setRoleFiles === 23, "expected SET ROLE migrator in 0002–0008, 0010, 0011, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, and 0026");
+    assert(setRoleFiles === 24, "expected SET ROLE migrator in 0002–0008, 0010, 0011, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, and 0027");
   });
 
   await test("migration history inserts succeed as the restored bootstrap role", async () => {
@@ -393,8 +402,8 @@ try {
     );
     assert(
       recorded.rows.map((row) => row.version).join(",") ===
-        "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012,0013,0014,0015,0016,0017,0018,0019,0020,0021,0022,0023,0024,0025,0026",
-      "bootstrap role must record 0001-0026 after RESET ROLE",
+        "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012,0013,0014,0015,0016,0017,0018,0019,0020,0021,0022,0023,0024,0025,0026,0027",
+      "bootstrap role must record 0001-0027 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {

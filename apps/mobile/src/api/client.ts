@@ -13,6 +13,7 @@ export type ApiError = {
   message: string;
   retryable: boolean;
   field_errors?: { field: string; message: string }[];
+  duplicates?: { id: string; name: string; archived: boolean }[];
 };
 
 export async function ownerRequest<T>(options: {
@@ -52,6 +53,7 @@ export async function ownerRequest<T>(options: {
         message?: string;
         retryable?: boolean;
         field_errors?: { field: string; message: string }[];
+        duplicates?: { id: string; name: string; archived: boolean }[];
       };
     };
     if (!response.ok) {
@@ -63,6 +65,7 @@ export async function ownerRequest<T>(options: {
           message: json.error?.message ?? "Request failed.",
           retryable: json.error?.retryable === true,
           field_errors: json.error?.field_errors,
+          duplicates: json.error?.duplicates,
         },
       };
     }

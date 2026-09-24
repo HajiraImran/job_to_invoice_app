@@ -1,6 +1,6 @@
 import { US_STATES } from "@job-to-invoice/schemas";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -31,7 +31,7 @@ export default function CreateJobScreen() {
   const [values, setValues] = useState<JobFormValues>(emptyJobForm);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | undefined>();
-  const params = useLocalSearchParams<{ relatedJobId?: string | string[] }>();
+  const params = useLocalSearchParams<{ relatedJobId?: string | string[]; customerId?: string | string[]; customerName?: string | string[] }>();
   const relatedJobId =
     typeof params.relatedJobId === "string" ? params.relatedJobId : Array.isArray(params.relatedJobId) ? (params.relatedJobId[0] ?? "") : "";
   const [submitting, setSubmitting] = useState(false);
@@ -44,10 +44,19 @@ export default function CreateJobScreen() {
   const setField = useCallback(<K extends keyof JobFormValues>(key: K, value: JobFormValues[K]) => {
     setValues((current) => ({ ...current, [key]: value }));
   }, []);
+  const online = auth.snapshot.status === "authenticated";
+  const selectedCustomerId = firstParam(params.customerId);
+  const selectedCustomerName = firstParam(params.customerName);
+
+  useEffect(() => {
+    if (!selectedCustomerId) return;
+    setField("customer_id", selectedCustomerId);
+    if (selectedCustomerName) setField("customer_name", selectedCustomerName);
+  }, [selectedCustomerId, selectedCustomerName, setField]);
 
   const parsed = useMemo(
-    () => jobRequestFromForm(values, jobId.current ?? "", relatedJobId || undefined),
-    [relatedJobId, values],
+    () => jobRequestFromForm(values, jobId.current ?? "", relatedJobId || undefined, { savedCustomer: online }),
+    [online, relatedJobId, values],
   );
 
   function focusField(field?: string) {
@@ -94,7 +103,7 @@ export default function CreateJobScreen() {
         const pendingJob: JobDetail = {
           id: parsed.value.id,
           customer_id: parsed.value.id,
-          customer_name: parsed.value.customer_name,
+          customer_name: parsed.value.customer_name ?? "",
           title: parsed.value.title,
           lifecycle: "draft",
           mode: parsed.value.mode,
@@ -200,15 +209,28 @@ export default function CreateJobScreen() {
           </Text>
         ) : null}
 
-        <Field
-          error={errors.customer_name}
-          label={copy.customerName}
-          name="customer_name"
-          onChange={setField}
-          register={inputs}
-          required
-          value={values.customer_name}
-        />
+        {online ? (
+          <CustomerPicker
+            error={errors.customer_id ?? errors.customer_name}
+            onAdd={() => router.push({ pathname: "/customers/new", params: { returnTo: "job" } })}
+            onSelect={(id, name) => {
+              setField("customer_id", id);
+              setField("customer_name", name);
+            }}
+            selectedId={values.customer_id}
+            selectedName={values.customer_name}
+          />
+        ) : (
+          <Field
+            error={errors.customer_name}
+            label={copy.customerName}
+            name="customer_name"
+            onChange={setField}
+            register={inputs}
+            required
+            value={values.customer_name}
+          />
+        )}
         <Field
           error={errors.title}
           label={copy.jobTitle}
@@ -398,6 +420,78 @@ function Choice(props: { label: string; selected: boolean; onPress: () => void; 
     >
       <Text style={[styles.choiceLabel, props.selected ? styles.choiceLabelSelected : null]}>{props.label}</Text>
     </Pressable>
+  );
+}
+
+function firstParam(value: string | string[] | undefined): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value[0] ?? "";
+  return "";
+}
+
+function CustomerPicker(props: {
+  selectedId: string;
+  selectedName: string;
+  error?: string;
+  onSelect: (id: string, name: string) => void;
+  onAdd: () => void;
+}) {
+  const auth = useAuth();
+  const [search, setSearch] = useState("");
+  const [matches, setMatches] = useState<{ id: string; name: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setLoading(true);
+      const params = new URLSearchParams({ state: "active", limit: "25" });
+      if (search.trim()) params.set("search", search.trim());
+      void auth
+        .runOwnerRequest<{ customers: { id: string; name: string }[] }>({ path: `/v1/customers?${params.toString()}` })
+        .then((result) => {
+          setLoading(false);
+          setMatches(result.ok ? result.data.customers : []);
+        });
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [auth, search]);
+
+  return (
+    <View>
+      <Text style={styles.label}>{copy.customerChoose}</Text>
+      <TextInput
+        accessibilityLabel={copy.customerSearchJobs}
+        onChangeText={setSearch}
+        placeholder={copy.customerSearchJobs}
+        style={styles.input}
+        value={search}
+      />
+      {loading ? (
+        <Text accessibilityLiveRegion="polite" style={styles.banner}>
+          {copy.customersLoading}
+        </Text>
+      ) : null}
+      {props.selectedId ? <Text style={styles.banner}>{props.selectedName}</Text> : null}
+      {matches.map((customer) => (
+        <Pressable
+          accessibilityLabel={customer.name}
+          accessibilityRole="button"
+          key={customer.id}
+          onPress={() => props.onSelect(customer.id, customer.name)}
+          style={styles.choice}
+        >
+          <Text style={styles.choiceLabel}>{customer.name}</Text>
+        </Pressable>
+      ))}
+      <Pressable accessibilityLabel={copy.addCustomer} accessibilityRole="button" onPress={props.onAdd} style={styles.button}>
+        <Text style={styles.buttonLabel}>{copy.addCustomer}</Text>
+      </Pressable>
+      {props.error ? (
+        <Text accessibilityLiveRegion="polite" style={styles.error}>
+          {props.error}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 

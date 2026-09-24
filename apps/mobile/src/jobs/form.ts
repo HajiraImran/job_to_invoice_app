@@ -2,6 +2,7 @@ import type { JobListState, JobMode } from "@job-to-invoice/schemas";
 import { parseJobCreate } from "@job-to-invoice/schemas";
 
 export type JobFormValues = {
+  customer_id: string;
   customer_name: string;
   title: string;
   no_site: boolean;
@@ -16,6 +17,7 @@ export type JobFormValues = {
 
 export function emptyJobForm(): JobFormValues {
   return {
+    customer_id: "",
     customer_name: "",
     title: "",
     no_site: false,
@@ -33,15 +35,20 @@ export function jobRequestFromForm(
   values: JobFormValues,
   id: string,
   relatedJobId?: string,
+  options?: { savedCustomer?: boolean },
 ): ReturnType<typeof parseJobCreate> {
   const body: Record<string, unknown> = {
     id,
-    customer_name: values.customer_name,
     title: values.title,
     no_site: values.no_site,
     internal_notes: values.internal_notes,
     mode: values.mode,
   };
+  if (options?.savedCustomer) {
+    body.customer_id = values.customer_id;
+  } else {
+    body.customer_name = values.customer_name;
+  }
   if (relatedJobId) {
     body.related_job_id = relatedJobId;
   }
@@ -61,6 +68,7 @@ export function jobRequestFromForm(
 
 export function firstJobFieldError(errors: Record<string, string>): string | undefined {
   const order = [
+    "customer_id",
     "customer_name",
     "title",
     "mode",

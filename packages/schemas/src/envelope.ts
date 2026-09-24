@@ -32,11 +32,16 @@ export const API_ERROR_CODES = {
   RELATED_JOB_UNAVAILABLE: "RELATED_JOB_UNAVAILABLE",
   TRIAL_ALREADY_STARTED: "TRIAL_ALREADY_STARTED",
   EXPORT_LIMIT: "EXPORT_LIMIT",
+  DUPLICATE_CUSTOMER_EMAIL: "DUPLICATE_CUSTOMER_EMAIL",
+  CUSTOMER_REFERENCED: "CUSTOMER_REFERENCED",
+  CUSTOMER_ARCHIVED: "CUSTOMER_ARCHIVED",
 } as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];
 
 export type ApiFieldError = { field: string; message: string };
+
+export type CustomerDuplicateRef = { id: string; name: string; archived: boolean };
 
 export type ApiErrorBody = {
   error: {
@@ -44,6 +49,7 @@ export type ApiErrorBody = {
     message: string;
     field_errors: ApiFieldError[];
     retryable: boolean;
+    duplicates?: CustomerDuplicateRef[];
   };
   meta: { request_id: string; server_time?: string };
 };
@@ -88,6 +94,9 @@ export function httpStatusForCode(code: string): number {
     case API_ERROR_CODES.JOB_NOT_ARCHIVABLE:
     case API_ERROR_CODES.JOB_NOT_FINISHABLE:
     case API_ERROR_CODES.TRIAL_ALREADY_STARTED:
+    case API_ERROR_CODES.DUPLICATE_CUSTOMER_EMAIL:
+    case API_ERROR_CODES.CUSTOMER_REFERENCED:
+    case API_ERROR_CODES.CUSTOMER_ARCHIVED:
       return 409;
     case API_ERROR_CODES.EXPORT_LIMIT:
       return 429;

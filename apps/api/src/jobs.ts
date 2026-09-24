@@ -9,7 +9,6 @@ import {
   parseJobListQuery,
   parseOwnerEmail,
   parseWithdrawBody,
-  type JobListState,
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
 import { invoiceDraftSummary, quoteDraftSummary } from "./drafts.ts";
@@ -98,7 +97,7 @@ type JobListRow = {
   updated_at: Date | string;
 };
 
-type JobCursor = { u: string; i: string; s: string | null; t: JobListState };
+type JobCursor = { u: string; i: string; s: string | null; t: "open" | "finished" | "archived" | "all"; c: string | null };
 
 function sendFail(
   request: FastifyRequest,
@@ -139,8 +138,8 @@ function firstQuery(value: unknown): unknown {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export function encodeJobCursor(payload: JobCursor): string {
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+export function encodeJobCursor(payload: Omit<JobCursor, "c"> & { c?: string | null }): string {
+  return Buffer.from(JSON.stringify({ ...payload, c: payload.c ?? null }), "utf8").toString("base64url");
 }
 
 export function decodeJobCursor(raw: string): JobCursor | undefined {
@@ -156,10 +155,13 @@ export function decodeJobCursor(raw: string): JobCursor | undefined {
     if (record.s !== null && typeof record.s !== "string") {
       return undefined;
     }
-    if (record.t !== "open" && record.t !== "finished" && record.t !== "archived") {
+    if (record.t !== "open" && record.t !== "finished" && record.t !== "archived" && record.t !== "all") {
       return undefined;
     }
-    return { u: record.u, i: record.i, s: record.s, t: record.t };
+    if (record.c !== undefined && record.c !== null && !isClientUuid(record.c)) {
+      return undefined;
+    }
+    return { u: record.u, i: record.i, s: record.s, t: record.t, c: typeof record.c === "string" ? record.c : null };
   } catch {
     return undefined;
   }
@@ -512,7 +514,12 @@ export function registerJobRoutes(
     let cursor: JobCursor | undefined;
     if (parsed.value.cursor) {
       cursor = decodeJobCursor(parsed.value.cursor);
-      if (!cursor || cursor.s !== parsed.value.search || cursor.t !== parsed.value.state) {
+      if (
+        !cursor ||
+        cursor.s !== parsed.value.search ||
+        cursor.t !== parsed.value.state ||
+        cursor.c !== parsed.value.customer_id
+      ) {
         return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
           field_errors: [{ field: "cursor", message: "Enter a valid value." }],
         });
@@ -520,6 +527,15 @@ export function registerJobRoutes(
     }
     try {
       const rows = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
+        if (parsed.value.customer_id) {
+          const owned = await client.query(
+            `select id from commercial.customers where id = $1`,
+            [parsed.value.customer_id],
+          );
+          if (!owned.rows[0]) {
+            return undefined;
+          }
+        }
         const result = await client.query<JobListRow>(
           `select j.id, j.customer_id, c.name as customer_name, j.title, j.lifecycle, j.mode,
                   j.no_site, j.version, j.created_at, j.updated_at
@@ -527,10 +543,12 @@ export function registerJobRoutes(
            join commercial.customers c
              on c.workspace_id = j.workspace_id and c.id = j.customer_id
            where (
-             ($1 = 'finished' and j.lifecycle = 'finished')
+             ($1 = 'all')
+             or ($1 = 'finished' and j.lifecycle = 'finished')
              or ($1 = 'archived' and j.lifecycle = 'archived')
              or ($1 = 'open' and j.lifecycle in ('draft', 'active', 'invoiced', 'canceled'))
            )
+             and ($6::uuid is null or j.customer_id = $6::uuid)
              and (
                $2::text is null
                or j.title ilike '%' || $2 || '%' escape chr(92)
@@ -548,10 +566,14 @@ export function registerJobRoutes(
             cursor?.u ?? null,
             cursor?.i ?? null,
             parsed.value.limit + 1,
+            parsed.value.customer_id,
           ],
         );
         return result.rows;
       });
+      if (!rows) {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, "Customer was not found.");
+      }
       const hasMore = rows.length > parsed.value.limit;
       const page = hasMore ? rows.slice(0, parsed.value.limit) : rows;
       const last = page[page.length - 1];
@@ -562,6 +584,7 @@ export function registerJobRoutes(
               i: last.id,
               s: parsed.value.search,
               t: parsed.value.state,
+              c: parsed.value.customer_id,
             })
           : null;
       return success(request.id, { items: page.map(jobSummary), next_cursor });
@@ -628,7 +651,36 @@ export function registerJobRoutes(
         if (!provisioned.setup_completed) {
           return { kind: "setup" as const };
         }
-        const created = await client.query<JobRow>(
+        const created = parsed.value.customer_id
+          ? await (async () => {
+              await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+                provisioned.workspace_id,
+                provisioned.actor_id,
+              ]);
+              return client.query<JobRow>(
+                `select id, workspace_id, customer_id, customer_name, title, site_address_json, no_site,
+                        lifecycle, mode, internal_notes, related_job_id, version, created_at, updated_at, replayed
+                 from commercial.create_job_for_customer(
+                   $1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6::uuid,
+                   $7, $8::jsonb, $9::boolean, $10, $11, $12::uuid
+                 )`,
+                [
+                  provisioned.actor_id,
+                  key,
+                  hash,
+                  request.id,
+                  parsed.value.id,
+                  parsed.value.customer_id,
+                  parsed.value.title,
+                  parsed.value.site_address ? JSON.stringify(parsed.value.site_address) : null,
+                  parsed.value.no_site,
+                  parsed.value.internal_notes,
+                  parsed.value.mode,
+                  parsed.value.related_job_id,
+                ],
+              );
+            })()
+          : await client.query<JobRow>(
           `select id, workspace_id, customer_id, customer_name, title, site_address_json, no_site,
                   lifecycle, mode, internal_notes, related_job_id, version, created_at, updated_at, replayed
            from commercial.create_job(
@@ -707,6 +759,12 @@ export function registerJobRoutes(
       }
       if (code === "P0054") {
         return sendFail(request, reply, API_ERROR_CODES.RELATED_JOB_UNAVAILABLE, "Create a linked new job from a canceled job.");
+      }
+      if (code === "P0005") {
+        return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, "Customer was not found.");
+      }
+      if (code === "P0062") {
+        return sendFail(request, reply, API_ERROR_CODES.CUSTOMER_ARCHIVED, "Restore this customer before creating a job.");
       }
       if (code === "23514" || code === "22023") {
         return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.");

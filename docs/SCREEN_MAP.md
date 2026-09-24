@@ -101,7 +101,9 @@ Empty: first-job prompt. Offline: local/cached jobs, “Searching downloaded job
 
 ### S06 Create job
 
-Customer, site, title, Quote or Direct invoice. Customer sheet. No forced contacts permission.
+Customer, site, title, Quote or Direct invoice. Online active-customer search and Add customer. Offline keeps the customer name field. No forced contacts permission.
+
+Implemented route: `/(tabs)/jobs/new`.
 
 VAL01–VAL02. Explicit No site address. Direct invoice path is JRN06.
 
@@ -110,6 +112,8 @@ VAL01–VAL02. Explicit No site address. Direct invoice path is JRN06.
 Name, email, optional phone, billing address.
 
 Duplicate normalized-email warning; archived restore. Email mandatory for approval, optional for manual-share direct invoice (VAL01).
+
+Implemented routes: `/(tabs)/customers/new` and `/(tabs)/customers/[id]/edit`. Online only. Primary actions are at least 48 pt. Not VERIFIED on device or VoiceOver.
 
 ### S08 Job overview
 
@@ -182,6 +186,8 @@ Implemented route: `/(tabs)/jobs/[id]/credit`. Select invoice lines, net credits
 ### S19 Customers
 
 Search/list, create, detail with jobs. Archive not destructive when referenced.
+
+Implemented route: `/(tabs)/customers`. Filters: Search, Active, Archived, All. Detail: `/(tabs)/customers/[id]`. Not VERIFIED on device.
 
 ### S20 Items
 

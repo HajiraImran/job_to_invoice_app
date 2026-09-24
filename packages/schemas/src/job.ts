@@ -29,6 +29,7 @@ export type JobListState = (typeof JOB_LIST_STATES)[number];
 
 export const JOB_CREATE_FIELDS = [
   "id",
+  "customer_id",
   "customer_name",
   "title",
   "no_site",
@@ -40,7 +41,6 @@ export const JOB_CREATE_FIELDS = [
 
 export const FORBIDDEN_JOB_FIELDS = [
   "workspace_id",
-  "customer_id",
   "lifecycle",
   "version",
   "created_at",
@@ -61,7 +61,8 @@ export type FieldError = { field: string; message: string };
 
 export type JobCreateInput = {
   id: string;
-  customer_name: string;
+  customer_id: string | null;
+  customer_name: string | null;
   title: string;
   no_site: boolean;
   site_address: UsAddress | null;
@@ -74,11 +75,14 @@ export type JobCreateParseResult =
   | { ok: true; value: JobCreateInput }
   | { ok: false; field_errors: FieldError[] };
 
+export type JobListScope = JobListState | "all";
+
 export type JobListQuery = {
   cursor: string | null;
   limit: number;
   search: string | null;
-  state: JobListState;
+  state: JobListScope;
+  customer_id: string | null;
 };
 
 export type JobListQueryParseResult =
@@ -137,9 +141,27 @@ export function parseJobCreate(input: unknown): JobCreateParseResult {
     field_errors.push({ field: "id", message: "A client UUID is required." });
   }
 
-  const customer = parseBoundedText(record.customer_name, { min: 1, max: CUSTOMER_NAME_MAX });
-  if (!customer.ok) {
-    field_errors.push({ field: "customer_name", message: messageFor(customer.code) });
+  const hasCustomerId = record.customer_id !== undefined && record.customer_id !== null;
+  const hasCustomerName = record.customer_name !== undefined && record.customer_name !== null;
+  let customerId: string | null = null;
+  let customerName: string | null = null;
+  if (hasCustomerId && hasCustomerName) {
+    field_errors.push({ field: "customer_id", message: "Choose a saved customer or a customer name." });
+  } else if (hasCustomerId) {
+    if (!isClientUuid(record.customer_id)) {
+      field_errors.push({ field: "customer_id", message: "A customer UUID is required." });
+    } else {
+      customerId = record.customer_id;
+    }
+  } else if (hasCustomerName) {
+    const customer = parseBoundedText(record.customer_name, { min: 1, max: CUSTOMER_NAME_MAX });
+    if (!customer.ok) {
+      field_errors.push({ field: "customer_name", message: messageFor(customer.code) });
+    } else {
+      customerName = customer.value;
+    }
+  } else {
+    field_errors.push({ field: "customer_id", message: "Choose a customer." });
   }
 
   const title = parseBoundedText(record.title, { min: 1, max: JOB_TITLE_MAX });
@@ -199,7 +221,7 @@ export function parseJobCreate(input: unknown): JobCreateParseResult {
   if (
     field_errors.length > 0 ||
     !isClientUuid(record.id) ||
-    !customer.ok ||
+    (customerId === null && customerName === null) ||
     !title.ok ||
     typeof record.no_site !== "boolean" ||
     !notes.ok ||
@@ -212,7 +234,8 @@ export function parseJobCreate(input: unknown): JobCreateParseResult {
     ok: true,
     value: {
       id: record.id,
-      customer_name: customer.value,
+      customer_id: customerId,
+      customer_name: customerName,
       title: title.value,
       no_site: record.no_site,
       site_address: record.no_site ? null : site,
@@ -238,14 +261,14 @@ export function parseJobListQuery(input: unknown): JobListQueryParseResult {
   if (input === undefined || input === null) {
     return {
       ok: true,
-      value: { cursor: null, limit: JOB_LIST_DEFAULT_LIMIT, search: null, state: "open" },
+      value: { cursor: null, limit: JOB_LIST_DEFAULT_LIMIT, search: null, state: "open", customer_id: null },
     };
   }
   if (typeof input !== "object" || Array.isArray(input)) {
     return { ok: false, field_errors: [{ field: "query", message: "Invalid request." }] };
   }
   const record = input as Record<string, unknown>;
-  const allowed = new Set(["cursor", "limit", "search", "state"]);
+  const allowed = new Set(["cursor", "limit", "search", "state", "customer_id"]);
   const field_errors: FieldError[] = [];
   for (const key of Object.keys(record)) {
     if (!allowed.has(key)) {
@@ -273,8 +296,18 @@ export function parseJobListQuery(input: unknown): JobListQueryParseResult {
     field_errors.push({ field: "search", message: messageFor(searchParsed.code) });
   }
 
-  let state: JobListState = "open";
-  if (record.state !== undefined && record.state !== null && record.state !== "") {
+  let customerId: string | null = null;
+  if (record.customer_id !== undefined && record.customer_id !== null && record.customer_id !== "") {
+    if (!isClientUuid(record.customer_id)) {
+      field_errors.push({ field: "customer_id", message: "A customer UUID is required." });
+    } else {
+      customerId = record.customer_id;
+    }
+  }
+
+  const stateProvided = record.state !== undefined && record.state !== null && record.state !== "";
+  let state: JobListScope = customerId && !stateProvided ? "all" : "open";
+  if (stateProvided) {
     if (typeof record.state !== "string" || !isJobListState(record.state)) {
       field_errors.push({ field: "state", message: "Choose Active, Finished, or Archived." });
     } else {
@@ -293,6 +326,7 @@ export function parseJobListQuery(input: unknown): JobListQueryParseResult {
       limit,
       search: searchParsed.value,
       state,
+      customer_id: customerId,
     },
   };
 }

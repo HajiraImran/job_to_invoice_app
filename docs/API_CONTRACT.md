@@ -128,18 +128,18 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /workspace | Owner | Completes the already-provisioned workspace. Setup fields; Idempotency-Key UUID; If-Match current version. Does not create a second workspace. Creates `job_allowances` if missing. Server sets `setup_completed_at`. |
 | PATCH /workspace | Owner | Defaults with If-Match; future drafts only |
 | POST /account/email-change | Owner + X-Action-Grant email_change | New email; provider verification; revoke prior refresh tokens |
-| GET /customers | Owner | Search/filter/page |
-| POST /customers | Owner | Customer fields |
-| PATCH /customers/{id} | Owner | Mutable contacts, If-Match |
-| POST /customers/{id}/archive | Owner | archived boolean |
-| DELETE /customers/{id} | Owner | Unreferenced only; else 409 |
+| GET /customers | Owner | Search, state active/archived/all, cursor bound to state and search. **Implemented.** Response omits normalized_email and workspace_id. |
+| POST /customers | Owner | Name plus optional email, E.164 phone, and billing address. **Implemented.** Idempotency-Key. Duplicate email is 409 until confirm_duplicate_email. Failed 409 is not stored. |
+| PATCH /customers/{id} | Owner | Partial contact update. **Implemented.** If-Match. Version conflict 409. |
+| POST /customers/{id}/archive | Owner | archived boolean. **Implemented.** No If-Match. Version increments only when the archived state changes. |
+| DELETE /customers/{id} | Owner | Unreferenced only; referenced customers 409. **Implemented.** |
 | GET /items | Owner | Catalogue search/page. **Implemented.** Blank query lists most recently updated active items. |
 | POST /items | Owner | Catalogue fields. **Implemented.** Idempotency-Key; integer cents; client UUID. |
 | GET /items/{id} | Owner | Member read for S20 edit. **Implemented.** Cross-tenant 404. |
 | PATCH /items/{id} | Owner | Versioned defaults. **Implemented.** If-Match. |
 | POST /items/{id}/archive | Owner | archived boolean. **Implemented.** If-Match. |
-| GET /jobs | Owner | Search, state, archive, page |
-| POST /jobs | Owner | Client UUID, customer, title, site, mode; draft. Optional `related_job_id` when the source job is canceled (JOB02). **Implemented.** |
+| GET /jobs | Owner | Search, state, archive, page. Optional customer_id returns that customer's jobs across lifecycles when state is omitted. Unknown customer is 404. **Implemented.** |
+| POST /jobs | Owner | Client UUID, title, site, mode, and exactly one of customer_id or customer_name. **Implemented.** customer_id requires an active customer. customer_name remains for existing clients and offline create. Optional `related_job_id` when the source job is canceled (JOB02). |
 | GET /jobs/{id} | Owner | Overview, permitted_actions, scope, ledger summary |
 | PATCH /jobs/{id} | Owner | Title/notes; customer/site only before publication |
 | POST /jobs/{id}/archive | Owner | Archive/restore; no pending request. **Implemented:** `POST /v1/jobs/{jobId}/archive`; `{ archived: boolean }`; Idempotency-Key; APPROVAL_PENDING when a request is pending; does not change financial status. |

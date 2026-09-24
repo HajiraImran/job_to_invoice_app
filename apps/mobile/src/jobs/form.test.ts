@@ -44,6 +44,29 @@ describe("job form", () => {
     }
   });
 
+  it("sends a saved customer id online and a name offline", () => {
+    const saved = jobRequestFromForm(
+      { ...emptyJobForm(), customer_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", title: "Faucet", no_site: true, mode: "quote" },
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      undefined,
+      { savedCustomer: true },
+    );
+    expect(saved.ok).toBe(true);
+    if (saved.ok) {
+      expect(saved.value.customer_id).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+      expect(saved.value.customer_name).toBeNull();
+    }
+    const offline = jobRequestFromForm(
+      { ...emptyJobForm(), customer_name: "Riley", title: "Faucet", no_site: true, mode: "quote" },
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    );
+    expect(offline.ok).toBe(true);
+    if (offline.ok) {
+      expect(offline.value.customer_id).toBeNull();
+      expect(offline.value.customer_name).toBe("Riley");
+    }
+  });
+
   it("focuses the first invalid site field", () => {
     expect(jobFormFocusName("site_address.line1")).toBe("line1");
     expect(jobFormFocusName("site_address")).toBe("line1");
