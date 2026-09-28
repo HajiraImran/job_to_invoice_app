@@ -31,7 +31,7 @@ function namedSteps(job) {
 }
 
 test("hosted development migration workflow is dispatch-only and statically gated", () => {
-  const yaml = readFileSync(workflowPath, "utf8");
+  const yaml = readFileSync(workflowPath, "utf8").replace(/\r\n/g, "\n");
 
   assert.match(yaml, /^on:\n  workflow_dispatch:\n    inputs:\n      confirmation:/m);
   assert.match(yaml, /^\s+required: true$/m);
@@ -57,9 +57,10 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.equal(confirm.includes(confirmationExpr), true);
   assert.match(
     yaml,
-    /Type APPLY_0027 to apply pending hosted development migration 0027_customer_feature\.sql/,
+    /Type APPLY_0028_0029 to apply pending hosted development migrations 0028_purge_app_membership\.sql and 0029_change_order_pdf\.sql/,
   );
-  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0027" \]/);
+  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0028_0029" \]/);
+  assert.doesNotMatch(yaml, /APPLY_0027/);
   assert.doesNotMatch(yaml, /APPLY_0014/);
   assert.doesNotMatch(yaml, /APPLY_0015/);
   assert.doesNotMatch(yaml, /APPLY_0016/);
@@ -101,10 +102,14 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.equal([...apply.matchAll(/pnpm hosted:db-push/g)].length, 1);
   assert.equal([...apply.matchAll(/pnpm hosted:db-check/g)].length, 2);
   assert.equal([...apply.matchAll(/grep -qx 'ok: true'/g)].length, 2);
-  assert.match(apply, /grep -qx 'pending: 0027_customer_feature\.sql'/);
+  assert.match(
+    apply,
+    /grep -qx 'pending: 0028_purge_app_membership\.sql,0029_change_order_pdf\.sql'/,
+  );
   assert.match(apply, /grep -qx 'pending: \(none\)'/);
   assert.ok(
-    apply.indexOf("pending: 0027_customer_feature.sql") < apply.indexOf("pnpm hosted:db-push"),
+    apply.indexOf("pending: 0028_purge_app_membership.sql,0029_change_order_pdf.sql") <
+      apply.indexOf("pnpm hosted:db-push"),
   );
 
   assert.doesNotMatch(yaml, /^env:/m);
@@ -122,11 +127,11 @@ test("hosted development migration workflow is dispatch-only and statically gate
 
   const names = namedSteps(apply);
   assert.ok(
-    names.indexOf("Check pending hosted migration 0027") <
-      names.indexOf("Apply hosted migration 0027"),
+    names.indexOf("Check pending hosted migrations 0028 and 0029") <
+      names.indexOf("Apply hosted migrations 0028 and 0029"),
   );
   assert.ok(
-    names.indexOf("Apply hosted migration 0027") <
+    names.indexOf("Apply hosted migrations 0028 and 0029") <
       names.indexOf("Verify no pending hosted migrations"),
   );
   assert.ok(

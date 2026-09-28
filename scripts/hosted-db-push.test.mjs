@@ -5,9 +5,11 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  analyzeMigrationUrlEncoding,
   applyHostedMigrations,
   assertSafeHostedMigrationUrl,
   classifyHostedCliOutput,
+  detectCliSignals,
   extractPendingMigrationBasenames,
   formatSanitizedReport,
   hostedCliLaunch,
@@ -982,6 +984,135 @@ test("stage advances to the furthest observed banner", () => {
   assert.match(report, /^stage: listing_pending$/m);
   assert.doesNotMatch(report, /^migration:/m);
   assert.doesNotMatch(report, /^cli_tag:/m);
+});
+
+function assertNoCredentialEcho(report, extra = []) {
+  for (const forbidden of [PASSWORD, LINKED_REF, HOST, "aws-0-", "postgres://", "--db-url", "user=", ...extra]) {
+    assert.ok(!report.includes(forbidden), `report leaked ${forbidden.length} chars of sensitive text`);
+  }
+}
+
+test("static encoding analysis flags passwords the Go CLI rejects but Node accepts", () => {
+  const ok = analyzeMigrationUrlEncoding(sessionUrl());
+  assert.deepEqual(ok, {
+    passwordPresent: true,
+    passwordPercentEncoded: false,
+    nodeDecodes: true,
+    cliCompatible: true,
+    issues: [],
+  });
+  const encoded = analyzeMigrationUrlEncoding(sessionUrl({ password: ENCODED_SPECIAL }));
+  assert.equal(encoded.cliCompatible, true);
+  assert.equal(encoded.passwordPercentEncoded, true);
+
+  const cases = [
+    ["pa^ss|wo{rd}", "unencoded_unsafe_chars"],
+    ["pa ss", "whitespace_or_control"],
+    ["pa%zzss", "invalid_percent_escape"],
+    ["pässwörd", "non_ascii"],
+    ["pa`ss", "quote_chars"],
+    ["pa[ss]", "unencoded_unsafe_chars"],
+  ];
+  for (const [password, issue] of cases) {
+    const url = sessionUrl({ password });
+    assert.doesNotThrow(() => new URL(url), "Node accepts the URL");
+    const analysis = analyzeMigrationUrlEncoding(url);
+    assert.equal(analysis.cliCompatible, false, issue);
+    assert.ok(analysis.issues.includes(issue), `${issue} in ${analysis.issues.join(",")}`);
+  }
+  const rawAt = analyzeMigrationUrlEncoding(sessionUrl({ password: "p@ssword-ok" }));
+  assert.ok(rawAt.issues.includes("raw_at_sign"));
+  assert.equal(rawAt.cliCompatible, true);
+});
+
+test("maps pgx and Supavisor connect errors to specific categories and signals", () => {
+  const user = `postgres.${LINKED_REF}`;
+  const prefix = `failed to connect to postgres: failed to connect to \`user=${user} database=postgres\`: 1.2.3.4:5432 (${HOST}):`;
+  const cases = [
+    [`${prefix} server error: FATAL: Tenant or user not found (SQLSTATE XX000)`, "tenant_not_found", "tenant_or_user_not_found", "XX000"],
+    [`${prefix} failed SASL auth: FATAL: password authentication failed for user "${user}" (SQLSTATE 28P01)`, "authentication_failed", "password_rejected", "28P01"],
+    [`${prefix} server error: FATAL: Circuit breaker open: Too many authentication errors (SQLSTATE XX000)`, "pooler_circuit_breaker", "circuit_breaker", "XX000"],
+    [`${prefix} server error: FATAL: Max client connections reached (SQLSTATE XX000)`, "pooler_capacity", "pooler_capacity", "XX000"],
+    [`failed to connect to postgres: hostname resolving error: lookup ${HOST}: no such host`, "dns_failure", "hostname_resolve", null],
+    [`${prefix} dial error: dial tcp 1.2.3.4:5432: i/o timeout`, "connection_timeout", "timeout", null],
+    [`${prefix} dial error: dial tcp 1.2.3.4:5432: connectex: No connection could be made because the target machine actively refused it.`, "connection_refused", "connection_refused", null],
+    [`${prefix} tls error: remote error: tls: handshake failure`, "tls_failure", "tls", null],
+    [`${prefix} failed to receive message: unexpected EOF`, "connection_reset", "connection_reset", null],
+    [`failed to connect to postgres: cannot parse \`postgresql://${user}:xxxxx@${HOST}:5432/postgres\`: failed to parse as URL (parse "postgresql://${user}:xxxxx@${HOST}:5432/postgres": net/url: invalid userinfo)`, "url_parse_failure", "url_parse", null],
+    ["Remote migration versions not found in local migrations directory.\nMake sure your local git repo is up-to-date. If the error persists, try repairing the migration history table:\nsupabase migration repair --status reverted 0030", "migration_history_mismatch", "remote_history_not_local", null],
+    ["Found local migration files to be inserted before the last migration on remote database.", "migration_history_mismatch", "local_before_remote", null],
+  ];
+  for (const [stderr, category, signal, code] of cases) {
+    const classified = classifyHostedCliOutput({ status: 1, stdout: "Connecting to remote database...\n", stderr });
+    assert.equal(classified.category, category, stderr.slice(0, 60));
+    assert.ok(classified.signals.includes(signal), `${signal} in ${classified.signals.join(",")}`);
+    assert.equal(classified.code, code);
+    const report = formatSanitizedReport(classified);
+    assert.match(report, new RegExp(`^category: ${category}$`, "m"));
+    assert.match(report, /^cli_signals: [a-z_,]+$/m);
+    assert.match(report, /^hint: /m);
+    assertNoCredentialEcho(report, ["1.2.3.4", "Tenant", "FATAL", "xxxxx"]);
+  }
+  assert.deepEqual(detectCliSignals("Would push these migrations:\n • 0029_change_order_pdf.sql"), []);
+  const listed = classifyHostedCliOutput({
+    status: 0,
+    stdout: "Connecting to remote database...\nWould push these migrations:\n • 0029_change_order_pdf.sql\n",
+  });
+  assert.equal(listed.connectionSucceeded, true);
+  assert.equal(listed.stage, "listing_pending");
+  assert.deepEqual(listed.pending, ["0029_change_order_pdf.sql"]);
+});
+
+test("unmatched CLI text stays unknown with a signal-free report and a generic hint", () => {
+  const classified = classifyHostedCliOutput({ status: 1, stdout: "Connecting to remote database...\n", stderr: "zzz opaque" });
+  const report = formatSanitizedReport(classified);
+  assert.match(report, /^category: unknown_failure$/m);
+  assert.match(report, /^cli_signals: \(none\)$/m);
+  assert.match(report, /^cli_output: present$/m);
+  assert.doesNotMatch(report, /zzz/);
+});
+
+test("live push refuses a CLI-incompatible password without spawning; check still spawns once", async () => {
+  const url = sessionUrl({ password: "pa^ss|word-long" });
+  const live = captureWriters();
+  let spawned = 0;
+  const liveStatus = await applyHostedMigrations({
+    env: { DATABASE_URL_MIGRATIONS: url },
+    projectRefPath: writeRefFile(LINKED_REF),
+    platform: "linux",
+    spawn: () => {
+      spawned += 1;
+      return { status: 0, stdout: "", stderr: "" };
+    },
+    stdout: live.stdout,
+    stderr: live.stderr,
+  });
+  assert.equal(liveStatus, 1);
+  assert.equal(spawned, 0);
+  assert.match(live.stdoutText(), /^stage: preflight$/m);
+  assert.match(live.stdoutText(), /^category: url_encoding_failure$/m);
+  assert.match(live.stdoutText(), /^password_cli_compatible: false$/m);
+  assert.match(live.stdoutText(), /^password_issues: unencoded_unsafe_chars$/m);
+  assertNoCredentialEcho(live.stdoutText(), ["pa^ss", "word-long"]);
+
+  const check = captureWriters();
+  const checkStatus = await applyHostedMigrations({
+    env: { DATABASE_URL_MIGRATIONS: url },
+    projectRefPath: writeRefFile(LINKED_REF),
+    platform: "linux",
+    dryRun: true,
+    spawn: (_bin, argv) => {
+      spawned += 1;
+      assert.deepEqual(argv, expectedHostedArgv(url, { dryRun: true }));
+      return { status: 1, stdout: "Connecting to remote database...\n", stderr: "unrecognised" };
+    },
+    stdout: check.stdout,
+    stderr: check.stderr,
+  });
+  assert.equal(checkStatus, 1);
+  assert.equal(spawned, 1);
+  assert.match(check.stdoutText(), /^category: url_encoding_failure$/m);
+  assertNoCredentialEcho(check.stdoutText(), ["pa^ss", "word-long"]);
 });
 
 test("does not spawn debug or machine-readable CLI flags", () => {
