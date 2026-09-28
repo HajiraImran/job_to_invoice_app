@@ -289,6 +289,57 @@ try {
       await admin.query("rollback");
     }
   });
+  await test("0028 grants purge_app SET without inheritance or admin", async () => {
+    const attrs = await admin.query(`
+      select rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolreplication
+      from pg_roles
+      where rolname = 'purge_app'
+    `);
+    const role = attrs.rows[0];
+    assert(role, "purge_app must exist");
+    assert(role.rolcanlogin === false, "purge_app must remain nologin");
+    assert(role.rolsuper === false, "purge_app must not be superuser");
+    assert(role.rolbypassrls === false, "purge_app must not bypass RLS");
+    assert(role.rolcreatedb === false, "purge_app must not createdb");
+    assert(role.rolcreaterole === false, "purge_app must not createrole");
+    assert(role.rolreplication === false, "purge_app must not replicate");
+    const grantSql = "grant purge_app to current_user with inherit false, set true, admin false";
+    await admin.query(grantSql);
+    await admin.query(grantSql);
+    const membership = await admin.query(`
+      select
+        count(*)::int as memberships,
+        bool_and(membership.set_option) as set_option,
+        bool_or(membership.inherit_option) as inherit_option,
+        bool_or(membership.admin_option) as admin_option
+      from pg_auth_members membership
+      join pg_roles granted on granted.oid = membership.roleid
+      join pg_roles member on member.oid = membership.member
+      where granted.rolname = 'purge_app'
+        and member.rolname = current_user
+    `);
+    assert(membership.rows[0].memberships === 1, "purge_app membership must stay one row");
+    assert(membership.rows[0].set_option === true, "purge_app membership must allow SET");
+    assert(membership.rows[0].inherit_option === false, "purge_app membership must not inherit");
+    assert(membership.rows[0].admin_option === false, "purge_app membership must not be admin");
+    const session = await admin.query("select session_user as role");
+    await admin.query("begin");
+    try {
+      await admin.query("set local role purge_app");
+      const inside = await admin.query("select current_user as current_role, session_user as session_role");
+      assert(inside.rows[0].current_role === "purge_app", "SET LOCAL ROLE purge_app must succeed");
+      assert(inside.rows[0].session_role === session.rows[0].role, "session_user stays the runtime login");
+    } finally {
+      await admin.query("rollback");
+    }
+    const restored = await admin.query("select current_user as current_role, session_user as session_role");
+    assert(restored.rows[0].current_role === restored.rows[0].session_role, "rollback restores the runtime identity");
+    assert(restored.rows[0].current_role !== "purge_app", "rollback leaves purge_app");
+    for (const blocked of ["api_app", "worker_app", "anon", "authenticated"]) {
+      const assumed = await admin.query("select pg_has_role($1, 'purge_app', 'set') as can_set", [blocked]);
+      assert(assumed.rows[0].can_set === false, `${blocked} cannot assume purge_app`);
+    }
+  });
   await admin.query(
     "grant api_app, worker_app, purge_app, anon, authenticated, migrator to current_user",
   );
@@ -393,7 +444,7 @@ try {
       );
       assert(setRoleAt < resetAt, `${file} RESET ROLE must not precede SET ROLE`);
     }
-    assert(setRoleFiles === 24, "expected SET ROLE migrator in 0002–0008, 0010, 0011, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, and 0027");
+    assert(setRoleFiles === 25, "expected SET ROLE migrator in 0002–0008, 0010, 0011, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, and 0029");
   });
 
   await test("migration history inserts succeed as the restored bootstrap role", async () => {
@@ -402,8 +453,8 @@ try {
     );
     assert(
       recorded.rows.map((row) => row.version).join(",") ===
-        "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012,0013,0014,0015,0016,0017,0018,0019,0020,0021,0022,0023,0024,0025,0026,0027",
-      "bootstrap role must record 0001-0027 after RESET ROLE",
+        "0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012,0013,0014,0015,0016,0017,0018,0019,0020,0021,0022,0023,0024,0025,0026,0027,0028,0029",
+      "bootstrap role must record 0001-0029 after RESET ROLE",
     );
     await admin.query("set role migrator");
     try {

@@ -156,23 +156,145 @@ export function hostedCliLaunch(
 }
 
 const FAILURE_CATEGORIES = new Set([
+  "url_encoding_failure",
+  "url_parse_failure",
+  "pooler_circuit_breaker",
   "authentication_failed",
+  "tenant_not_found",
+  "pooler_capacity",
   "connection_timeout",
   "connection_refused",
+  "connection_reset",
   "dns_failure",
   "tls_failure",
   "login_role_failure",
+  "migration_history_mismatch",
   "migration_sql_error",
+  "cli_auth_required",
   "cli_start_failure",
   "unknown_failure",
 ]);
 const REPORT_STAGES = new Set([
+  "preflight",
   "login_role",
   "connecting",
   "listing_pending",
   "applying",
   "unknown",
 ]);
+
+// Fixed vocabulary only: names are printed, matched child text never is.
+// Phrases are the ones the pinned Go CLI (pgx/pgconn) and Supavisor emit.
+const CLI_SIGNALS = [
+  ["url_parse", /cannot parse `|failed to parse as (?:URL|DSN|keyword)|invalid userinfo|invalid URL escape|invalid port|invalid character .{0,40} in (?:host name|URL)|net\/url:/i],
+  ["circuit_breaker", /circuit breaker/i],
+  ["password_rejected", /password authentication failed|\b28P01\b/i],
+  ["sasl_failed", /failed SASL auth|SASL authentication|\bsasl\b|SCRAM/i],
+  ["tenant_or_user_not_found", /tenant or user not found/i],
+  ["pooler_capacity", /max client connections|EMAXCONN|too many (?:clients|connections)|\b53300\b|unable to check out/i],
+  ["hostname_resolve", /hostname resolving error|no such host|\bENOTFOUND\b|getaddrinfo|dns (?:look ?up|resolution) failed/i],
+  ["connection_refused", /\bECONNREFUSED\b|connection refused|actively refused/i],
+  ["tls", /\btls error\b|\btls:|x509:|\b(?:SSL|TLS)\b|certificate verify|self[- ]signed certificate|server refused TLS/i],
+  ["dial_error", /dial error|dial tcp/i],
+  ["timeout", /\bETIMEDOUT\b|i\/o timeout|context deadline exceeded|connection timed out|connect timed out|connection attempt failed|timeout:/i],
+  ["connection_reset", /unexpected EOF|connection reset|forcibly closed|broken pipe|\bECONNRESET\b|failed to receive message|failed to write startup message/i],
+  ["server_error", /server error/i],
+  ["connect_failed", /failed to connect to postgres|failed to connect to `|LegacyDbConnectError/i],
+  ["login_role", /permission denied to alter role|failed to connect as temp role|failed to initialise login role|LegacyDbConfigLoginRole|LegacyDbConfigConnectTempRole/i],
+  ["remote_history_not_local", /remote migration versions not found/i],
+  ["local_before_remote", /found local migration files to be inserted before/i],
+  ["migration_repair_suggested", /migration repair/i],
+  ["sqlstate", /SQLSTATE/i],
+  ["cli_access_token", /access token not provided|supabase login/i],
+  ["cli_project_ref", /cannot find project ref|supabase link/i],
+  ["cli_project_config", /failed to read project config|cannot read config|config\.toml/i],
+  ["cli_unknown_flag", /unknown (?:flag|shorthand flag|command)/i],
+  ["cli_binary_missing", /no matching supabase cli binary|unsupported (?:platform|architecture)/i],
+  ["cli_suggests_debug", /rerunning the command with --debug/i],
+  ["cli_update_notice", /new version of supabase cli is available/i],
+];
+
+const HINTS = {
+  url_encoding_failure:
+    "Percent-encode the password (encodeURIComponent) before setting DATABASE_URL_MIGRATIONS; the Go CLI rejects characters Node accepts.",
+  url_parse_failure:
+    "The CLI could not parse DATABASE_URL_MIGRATIONS. Percent-encode reserved or non-ASCII password characters.",
+  pooler_circuit_breaker:
+    "Supavisor blocked this user after repeated auth failures. Wait several minutes, fix the password, then retry once.",
+  authentication_failed:
+    "Password rejected. Reset the database password or recopy it; in PowerShell set the variable with single quotes so $ and ` are not interpolated.",
+  tenant_not_found:
+    "Supavisor does not know this user/region. Check the pooler region host and that the user is postgres.<linked-ref>.",
+  pooler_capacity: "Session pooler is at its client limit. Close other session-mode clients and retry.",
+  connection_timeout: "The CLI timed out dialing the pooler. Retry on a stable network or use the CI workflow (D-012).",
+  connection_refused: "The pooler refused the connection. Check the host and port 5432.",
+  connection_reset: "The pooler closed the connection mid-handshake. Retry once; if repeated, use the CI workflow (D-012).",
+  dns_failure: "The CLI could not resolve the pooler host.",
+  tls_failure: "TLS negotiation with the pooler failed in the CLI.",
+  login_role_failure: "The CLI login-role step failed; do not use --linked (D-012).",
+  migration_history_mismatch:
+    "Connected, but remote migration history differs from supabase/migrations. Do not repair history without review.",
+  migration_sql_error: "Connected and a migration statement failed.",
+  cli_auth_required: "The CLI wants a Supabase access token; --db-url should not need one.",
+  cli_start_failure: "The Supabase CLI could not start.",
+};
+
+// Go net/url validUserinfo: anything else makes the CLI reject the URL.
+const GO_USERINFO_OK = /^[A-Za-z0-9\-._:~!$&'()*+,;=%@]*$/;
+
+export function analyzeMigrationUrlEncoding(url) {
+  const raw = String(url ?? "");
+  const issues = [];
+  const schemeEnd = raw.indexOf("://");
+  const afterScheme = schemeEnd >= 0 ? raw.slice(schemeEnd + 3) : raw;
+  const authorityEnd = afterScheme.search(/[/?#]/);
+  const authority = authorityEnd >= 0 ? afterScheme.slice(0, authorityEnd) : afterScheme;
+  const at = authority.lastIndexOf("@");
+  const userinfo = at >= 0 ? authority.slice(0, at) : "";
+  const colon = userinfo.indexOf(":");
+  const password = colon >= 0 ? userinfo.slice(colon + 1) : "";
+  const beyondAuthority = afterScheme.slice(authority.length);
+  if (/[\s\u0000-\u001f\u007f]/.test(raw)) {
+    issues.push("whitespace_or_control");
+  }
+  if (/["`]/.test(raw)) {
+    issues.push("quote_chars");
+  }
+  if (/[^\u0000-\u007f]/.test(password)) {
+    issues.push("non_ascii");
+  }
+  if (password && !GO_USERINFO_OK.test(password)) {
+    issues.push("unencoded_unsafe_chars");
+  }
+  if (/%(?![0-9A-Fa-f]{2})/.test(password)) {
+    issues.push("invalid_percent_escape");
+  }
+  if (password.includes("@")) {
+    issues.push("raw_at_sign");
+  }
+  if (/@/.test(beyondAuthority.split(/[?#]/)[0] ?? "")) {
+    issues.push("raw_url_delimiter");
+  }
+  let nodeDecodes = true;
+  try {
+    decodeURIComponent(password);
+  } catch {
+    nodeDecodes = false;
+  }
+  const blocking = issues.filter((issue) => issue !== "raw_at_sign");
+  return {
+    passwordPresent: password.length > 0,
+    passwordPercentEncoded: /%[0-9A-Fa-f]{2}/.test(password),
+    nodeDecodes,
+    cliCompatible: password.length > 0 && blocking.length === 0 && nodeDecodes,
+    issues,
+  };
+}
+
+export function detectCliSignals(text) {
+  const source = String(text ?? "");
+  return CLI_SIGNALS.filter(([, pattern]) => pattern.test(source)).map(([name]) => name);
+}
 const SAFE_ERROR_CODES = new Set([
   "28P01",
   "08001",
@@ -251,7 +373,11 @@ function extractStage(text) {
   if (/connecting to remote database/i.test(source)) {
     stage = "connecting";
   }
-  if (/would apply the following|remote database is up to date/i.test(source)) {
+  if (
+    /would apply the following|would push these migrations|remote database is up to date|schema migrations are up to date|remote migration versions not found|found local migration files to be inserted before/i.test(
+      source,
+    )
+  ) {
     stage = "listing_pending";
   }
   if (/applying migration/i.test(source)) {
@@ -293,39 +419,55 @@ function extractFailedMigrationBasename(text) {
   return pending.length === 1 ? pending[0] : null;
 }
 
-function classifyFailureCategory(text, spawnError) {
+function classifyFailureCategory(text, spawnError, signals = detectCliSignals(text)) {
   if (spawnError) {
     return "cli_start_failure";
   }
   const source = String(text ?? "");
-  if (/password authentication failed|28P01|invalid (authorization|password)|sasl/i.test(source)) {
+  const has = (name) => signals.includes(name);
+  if (has("url_parse")) {
+    return "url_parse_failure";
+  }
+  if (has("circuit_breaker")) {
+    return "pooler_circuit_breaker";
+  }
+  if (has("password_rejected") || has("sasl_failed") || /invalid (authorization|password)/i.test(source)) {
     return "authentication_failed";
   }
-  if (/\bENOTFOUND\b|getaddrinfo|dns (look ?up|resolution) failed/i.test(source)) {
+  if (has("tenant_or_user_not_found")) {
+    return "tenant_not_found";
+  }
+  if (has("pooler_capacity")) {
+    return "pooler_capacity";
+  }
+  if (has("hostname_resolve")) {
     return "dns_failure";
   }
-  if (/\bECONNREFUSED\b|connection refused/i.test(source)) {
+  if (has("connection_refused")) {
     return "connection_refused";
   }
-  if (/\b(SSL|TLS)\b|certificate verify|self[- ]signed certificate/i.test(source)) {
+  if (has("tls")) {
     return "tls_failure";
   }
-  if (
-    /\bETIMEDOUT\b|connection timed out|connect timed out|LegacyDbConnectError/i.test(source)
-  ) {
+  if (has("timeout") || /LegacyDbConnectError/i.test(source)) {
     return "connection_timeout";
   }
-  if (
-    /permission denied to alter role|failed to connect as temp role|failed to initialise login role|LegacyDbConfigLoginRole|LegacyDbConfigConnectTempRole/i.test(
-      source,
-    )
-  ) {
+  if (has("connection_reset")) {
+    return "connection_reset";
+  }
+  if (has("login_role")) {
     return "login_role_failure";
+  }
+  if (has("remote_history_not_local") || has("local_before_remote")) {
+    return "migration_history_mismatch";
   }
   if (
     /LegacyDbPushApplyError|SQLSTATE|syntax error|at character \d+|permission denied/i.test(source)
   ) {
     return "migration_sql_error";
+  }
+  if (has("cli_access_token")) {
+    return "cli_auth_required";
   }
   return "unknown_failure";
 }
@@ -339,15 +481,18 @@ export function classifyHostedCliOutput({
   const text = `${stdout ?? ""}\n${stderr ?? ""}`;
   const exitCode = spawnError ? 1 : status === null || status === undefined ? 1 : status;
   const ok = !spawnError && exitCode === 0;
+  const signals = detectCliSignals(text);
   const connectionInit = /initialis(?:e|ing) login role|connecting to remote database/i.test(text);
   const connectionSucceeded =
-    /remote database is up to date|would apply the following|finished supabase db push|applying migration/i.test(
+    /remote database is up to date|schema migrations are up to date|would apply the following|would push these migrations|finished supabase db push|applying migration|remote migration versions not found|found local migration files to be inserted before/i.test(
       text,
-    ) && !/connection timed out|password authentication failed|econnrefused|enotfound/i.test(text);
+    ) && !/connection timed out|password authentication failed|econnrefused|enotfound|failed to connect to postgres/i.test(text);
   const pending = extractPendingMigrationBasenames(text);
-  const category = ok ? null : classifyFailureCategory(text, spawnError);
+  const category = ok ? null : classifyFailureCategory(text, spawnError, signals);
   const code = extractSafeErrorCode(text, spawnError);
   return {
+    signals,
+    outputPresent: String(stdout ?? "").trim() !== "" || String(stderr ?? "").trim() !== "",
     ok,
     exitCode,
     connectionInit,
@@ -390,6 +535,41 @@ export function formatSanitizedReport(result) {
     }
     if (typeof result.cliTag === "string" && /^LegacyDb[A-Za-z]{1,80}$/.test(result.cliTag)) {
       lines.push(`cli_tag: ${result.cliTag}`);
+    }
+  }
+  const known = new Set(CLI_SIGNALS.map(([name]) => name));
+  if (Array.isArray(result.signals)) {
+    const signals = result.signals.filter((name) => known.has(name));
+    lines.push(`cli_signals: ${signals.length > 0 ? signals.join(",") : "(none)"}`);
+  }
+  if (typeof result.outputPresent === "boolean") {
+    lines.push(`cli_output: ${result.outputPresent ? "present" : "empty"}`);
+  }
+  const encoding = result.encoding;
+  if (encoding && typeof encoding === "object") {
+    const allowed = new Set([
+      "whitespace_or_control",
+      "quote_chars",
+      "non_ascii",
+      "unencoded_unsafe_chars",
+      "invalid_percent_escape",
+      "raw_at_sign",
+      "raw_url_delimiter",
+    ]);
+    const issues = Array.isArray(encoding.issues) ? encoding.issues.filter((issue) => allowed.has(issue)) : [];
+    lines.push(`password_percent_encoded: ${encoding.passwordPercentEncoded ? "true" : "false"}`);
+    lines.push(`password_cli_compatible: ${encoding.cliCompatible ? "true" : "false"}`);
+    lines.push(`password_issues: ${issues.length > 0 ? issues.join(",") : "(none)"}`);
+  }
+  if (!result.ok) {
+    const category = FAILURE_CATEGORIES.has(result.category) ? result.category : "unknown_failure";
+    const hint =
+      HINTS[category] ??
+      (Array.isArray(result.signals) && result.signals.length === 0 && result.outputPresent
+        ? "CLI output matched no known phrase. Retry once; if repeated, use the CI workflow (D-012)."
+        : undefined);
+    if (hint) {
+      lines.push(`hint: ${hint}`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -570,8 +750,24 @@ export function runHostedDbPush(
     dryRun = false,
     stdout = process.stdout,
     stderr = process.stderr,
+    encoding = analyzeMigrationUrlEncoding(url),
   } = {},
 ) {
+  if (!encoding.cliCompatible && !dryRun) {
+    stdout.write(
+      formatSanitizedReport({
+        ok: false,
+        exitCode: 1,
+        connectionInit: false,
+        connectionSucceeded: false,
+        pending: [],
+        stage: "preflight",
+        category: "url_encoding_failure",
+        encoding,
+      }),
+    );
+    return 1;
+  }
   const launch = hostedCliLaunch(url, {
     platform,
     execPath,
@@ -587,7 +783,10 @@ export function runHostedDbPush(
     stderr: result.stderr,
     spawnError: result.error ?? null,
   });
-  stdout.write(formatSanitizedReport(classified));
+  if (!classified.ok && !encoding.cliCompatible && classified.category === "unknown_failure") {
+    classified.category = "url_encoding_failure";
+  }
+  stdout.write(formatSanitizedReport({ ...classified, encoding }));
   return classified.exitCode;
 }
 
