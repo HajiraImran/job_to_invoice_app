@@ -82,6 +82,13 @@ export type IssuedInvoiceRecord = {
     credited_net_cents: number;
     remaining_net_cents: number;
   }>;
+  issued_credits?: Array<{
+    id: string;
+    number: string;
+    revision_no: number;
+    total_cents: number;
+    pdf_state: string;
+  }>;
   voided?: boolean;
   void_reason?: string | null;
 };
@@ -532,4 +539,54 @@ export function invoiceDetailLoadKind(status: number, code?: string): "not_found
 
 export function invoicePdfPollContinues(state: string | undefined, ticks: number, limit = 20): boolean {
   return invoicePdfPhase(state) === "preparing" && ticks < limit;
+}
+
+export function presentIssuedCreditNotes(
+  credits: IssuedInvoiceRecord["issued_credits"],
+): NonNullable<IssuedInvoiceRecord["issued_credits"]> {
+  return (credits ?? []).filter(
+    (row) =>
+      typeof row.id === "string" &&
+      row.id.length >= 8 &&
+      typeof row.number === "string" &&
+      row.number.length >= 2 &&
+      Number.isInteger(row.total_cents),
+  );
+}
+
+export function presentInvoiceMoneyRows(invoice: {
+  credits_cents?: number;
+  net_received_cents?: number;
+  effective_refunds_cents?: number;
+  balance_cents?: number;
+}): Array<{
+  key: "credits" | "received" | "refunded" | "balance";
+  label: string;
+  cents: number;
+}> {
+  const rows: Array<{ key: "credits" | "received" | "refunded" | "balance"; label: string; cents: number | undefined }> = [
+    { key: "credits", label: copy.invoiceCredits, cents: invoice.credits_cents },
+    { key: "received", label: copy.invoiceReceived, cents: invoice.net_received_cents },
+    { key: "refunded", label: copy.invoiceRefunded, cents: invoice.effective_refunds_cents },
+    { key: "balance", label: copy.invoiceBalance, cents: invoice.balance_cents },
+  ];
+  return rows.filter((row): row is { key: "credits" | "received" | "refunded" | "balance"; label: string; cents: number } =>
+    Number.isInteger(row.cents),
+  );
+}
+
+export function creditNotePdfOpenKind(
+  pdfState: string | undefined,
+  offline: boolean,
+): "ready" | "preparing" | "failed" | "offline" {
+  if (offline) {
+    return "offline";
+  }
+  if (pdfState === "ready") {
+    return "ready";
+  }
+  if (pdfState === "failed") {
+    return "failed";
+  }
+  return "preparing";
 }

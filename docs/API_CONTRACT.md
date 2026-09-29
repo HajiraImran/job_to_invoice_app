@@ -141,7 +141,7 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /items/{id}/archive | Owner | archived boolean. **Implemented.** If-Match. |
 | GET /jobs | Owner | Search, state, archive, page. Optional customer_id returns that customer's jobs across lifecycles when state is omitted. Unknown customer is 404. **Implemented.** |
 | POST /jobs | Owner | Client UUID, title, site, mode, and exactly one of customer_id or customer_name. **Implemented.** customer_id requires an active customer. customer_name remains for existing clients and offline create. Optional `related_job_id` when the source job is canceled (JOB02). |
-| GET /jobs/{id} | Owner | Overview, permitted_actions, scope, ledger summary |
+| GET /jobs/{id} | Owner | Overview, permitted_actions, scope, ledger summary. **Implemented:** includes `issued_credits` for issued credit notes on the job (`id`, `number`, `revision_no`, `lifecycle`, `total_cents`, `pdf_state`, `invoice_id`). |
 | PATCH /jobs/{id} | Owner | Title/notes; customer/site only before publication |
 | POST /jobs/{id}/archive | Owner | Archive/restore; no pending request. **Implemented:** `POST /v1/jobs/{jobId}/archive`; `{ archived: boolean }`; Idempotency-Key; APPROVAL_PENDING when a request is pending; does not change financial status. |
 | POST /jobs/{id}/cancel | Owner | Reason; withdraw pending; retain receivable. **Implemented:** `POST /v1/jobs/{jobId}/cancel`; Idempotency-Key; EMAIL08 on pending approval withdraw only. |
@@ -154,8 +154,8 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | POST /drafts/{id}/discard | Owner | Discarded; audit kept |
 | POST /drafts/{id}/preview | Owner | preview_hash + rendered preview |
 | POST /drafts/{id}/publish | Owner | preview_hash, recipient, expiry, replace_pending_request_id?; 202 delivery |
-| GET /documents/{id} | Owner | Immutable snapshot + live status |
-| GET /documents/{id}/download | Owner | Artifact state or five-minute signed URL |
+| GET /documents/{id} | Owner | Immutable snapshot + live status. **Implemented** for quote, invoice, change, and credit. Invoice responses include `issued_credits`. |
+| GET /documents/{id}/download | Owner | Artifact state or five-minute signed URL. **Implemented** via `original_pdf_download` for quote, invoice, credit, and change (`0031_credit_note_pdf.sql`). |
 | POST /requests/{id}/resend | Owner | Bounded retry; no expiry extension. **Implemented:** `POST /v1/requests/{requestId}/resend`; Idempotency-Key; APR03 rotate; NTF04 caps + Retry-After. |
 | POST /requests/{id}/withdraw | Owner | Reason; terminal withdrawal. **Implemented:** `POST /v1/requests/{requestId}/withdraw`; Idempotency-Key; EMAIL08. |
 | POST /requests/{id}/replace-link | Owner + X-Action-Grant replace_link | Rotate token_hash and sessions; preserve decisions. **Implemented:** `POST /v1/requests/{requestId}/replace-link`; Idempotency-Key + X-Action-Grant. |
@@ -193,7 +193,7 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | GET /portal/document | Recipient | Bound snapshot and allowed_actions |
 | POST /portal/decision | Recipient + CSRF | decision, name, consent_version, snapshot_hash |
 | GET /portal/receipt | Recipient | Decision or view_only metadata (API05) |
-| GET /portal/download | Recipient | Authorized artifact link |
+| GET /portal/download | Recipient | Authorized artifact link. **Implemented** via `portal_pdf_download` → `original_pdf_download`, including credit notes after `0031_credit_note_pdf.sql`. Hosted APPLY_0031 is not dispatched. |
 | POST /portal/report | Scoped or preverified | Abuse reason |
 | GET /admin/cases | Staff | Metadata-only search |
 | POST /admin/cases/{id}/access | Supervisor | Owner grant + reason |
@@ -206,7 +206,7 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 
 ## API05 view_only
 
-Invoice/credit access uses the same request/session machinery with `purpose=view_only`. **Implemented for invoices (EMAIL06) and credit notes (EMAIL07):** issue inserts a 90-day `view_only` request; `pending` means access enabled; no decision. Do not expire via the approval-expiry worker; use access expiry (default 90 days). `GET /portal/document` returns `allowed_actions=[download,report]`. `POST /portal/decision` returns 403. Pending uniqueness for approvals excludes view_only. Must be in migration and OpenAPI, not inferred from UI. Live portal credit review is not device-verified.
+Invoice/credit access uses the same request/session machinery with `purpose=view_only`. **Implemented for invoices (EMAIL06) and credit notes (EMAIL07):** issue inserts a 90-day `view_only` request; `pending` means access enabled; no decision. Do not expire via the approval-expiry worker; use access expiry (default 90 days). `GET /portal/document` returns `allowed_actions=[download,report]`. `GET /portal/download` uses `original_pdf_download`, which includes credit after `0031_credit_note_pdf.sql`. `POST /portal/decision` returns 403. Pending uniqueness for approvals excludes view_only. Must be in migration and OpenAPI, not inferred from UI. Live portal credit review is not device-verified. Hosted APPLY_0031 is not dispatched.
 
 ## Transaction algorithms
 

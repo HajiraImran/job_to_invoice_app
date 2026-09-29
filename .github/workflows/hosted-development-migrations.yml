@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type APPLY_0030 to apply pending hosted development migration 0030_empty_leftover_change_draft.sql
+        description: Type APPLY_0031 to apply pending hosted development migration 0031_credit_note_pdf.sql
         required: true
         type: string
 
@@ -24,7 +24,7 @@ jobs:
           CONFIRMATION: ${{ github.event.inputs.confirmation }}
         run: |
           set -euo pipefail
-          if [ "$CONFIRMATION" != "APPLY_0030" ]; then
+          if [ "$CONFIRMATION" != "APPLY_0031" ]; then
             echo "Confirmation phrase did not match. Hosted apply aborted."
             exit 1
           fi
@@ -56,7 +56,7 @@ jobs:
           mkdir -p supabase/.temp
           printf '%s' 'fhgacxkpgjdcjuvanesv' > supabase/.temp/project-ref
 
-      - name: Check pending hosted migration 0030
+      - name: Check pending hosted migration 0031
         env:
           DATABASE_URL_MIGRATIONS: ${{ secrets.DATABASE_URL_MIGRATIONS }}
         run: |
@@ -69,9 +69,9 @@ jobs:
           report="$(pnpm hosted:db-check)"
           printf '%s\n' "$report"
           printf '%s\n' "$report" | grep -qx 'ok: true'
-          printf '%s\n' "$report" | grep -qx 'pending: 0030_empty_leftover_change_draft.sql'
+          printf '%s\n' "$report" | grep -qx 'pending: 0031_credit_note_pdf.sql'
 
-      - name: Apply hosted migration 0030
+      - name: Apply hosted migration 0031
         env:
           DATABASE_URL_MIGRATIONS: ${{ secrets.DATABASE_URL_MIGRATIONS }}
         run: |

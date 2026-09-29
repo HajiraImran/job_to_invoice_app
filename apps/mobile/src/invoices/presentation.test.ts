@@ -41,6 +41,9 @@ import {
   presentInvoicePdf,
   presentInvoicePreview,
   presentInvoiceStatus,
+  presentIssuedCreditNotes,
+  presentInvoiceMoneyRows,
+  creditNotePdfOpenKind,
 } from "./presentation.ts";
 
 describe("invoice presentation", () => {
@@ -317,6 +320,26 @@ describe("invoice detail contract", () => {
     ]);
     expect(invoiceDetailAfterRefresh(issued, undefined, false)).toBe(issued);
     expect(invoiceDetailVisible("access_expired", issued)).toBeUndefined();
+    expect(
+      presentIssuedCreditNotes([
+        { id: "11111111-1111-4111-8111-111111111111", number: "CN-000001", revision_no: 1, total_cents: 2165, pdf_state: "ready" },
+        { id: "bad", number: "CN", revision_no: 1, total_cents: 1, pdf_state: "ready" },
+      ]),
+    ).toEqual([
+      { id: "11111111-1111-4111-8111-111111111111", number: "CN-000001", revision_no: 1, total_cents: 2165, pdf_state: "ready" },
+    ]);
+    expect(creditNotePdfOpenKind("ready", false)).toBe("ready");
+    expect(creditNotePdfOpenKind("ready", true)).toBe("offline");
+    expect(creditNotePdfOpenKind("failed", false)).toBe("failed");
+    expect(creditNotePdfOpenKind("preparing", false)).toBe("preparing");
+    expect(
+      presentInvoiceMoneyRows({
+        credits_cents: 2165,
+        net_received_cents: 25980,
+        effective_refunds_cents: 0,
+        balance_cents: -2165,
+      }).map((row) => row.key),
+    ).toEqual(["credits", "received", "refunded", "balance"]);
     expect(invoiceDetailLoadKind(404, "NOT_FOUND")).toBe("not_found");
     expect(invoiceDetailLoadKind(403)).toBe("unauthorized");
     expect(invoiceDetailLoadKind(429, "RATE_LIMITED")).toBe("rate_limit");

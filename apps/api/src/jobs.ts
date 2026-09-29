@@ -10,9 +10,10 @@ import {
   parseOwnerEmail,
   parseWithdrawBody,
 } from "@job-to-invoice/schemas";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { invoiceDraftSummary, quoteDraftSummary } from "./drafts.ts";
 import { quoteDocumentSummary } from "./quotes.ts";
+import { loadIssuedCreditNotes, type IssuedCreditNoteSummary } from "./invoices.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { API_ERROR_CODES, fail, success } from "./envelope.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
@@ -220,7 +221,7 @@ function jobSummary(row: JobListRow) {
   };
 }
 
-function jobDetail(row: JobRow) {
+function jobDetail(row: JobRow, issuedCredits: IssuedCreditNoteSummary[] = []) {
   const canCreateInvoice =
     (row.lifecycle === "active" && row.current_quote_lifecycle === "accepted" && !row.active_invoice_id) ||
     (row.mode === "direct_invoice" && row.lifecycle === "draft" && !row.active_invoice_id);
@@ -356,6 +357,7 @@ function jobDetail(row: JobRow) {
             additions: changeAdditionLines(row.latest_change_additions),
           }
         : null,
+    issued_credits: issuedCredits,
   };
 }
 
@@ -464,6 +466,15 @@ const JOB_DETAIL_SQL = `select j.id, j.workspace_id, j.customer_id, c.name as cu
              limit 1
            ) latest_chg on true
            where j.id = $1`;
+
+async function presentedJobDetail(client: PoolClient, jobId: string) {
+  const detail = await client.query<JobRow>(JOB_DETAIL_SQL, [jobId]);
+  const job = detail.rows[0];
+  if (!job) {
+    return undefined;
+  }
+  return jobDetail(job, await loadIssuedCreditNotes(client, job.workspace_id, { jobId: job.id }));
+}
 
 export function registerJobRoutes(
   app: FastifyInstance,
@@ -817,7 +828,8 @@ export function registerJobRoutes(
       return;
     }
     const params = request.params as { jobId?: string };
-    if (!isClientUuid(params.jobId)) {
+    const jobId = params.jobId;
+    if (!isClientUuid(jobId)) {
       return sendFail(request, reply, API_ERROR_CODES.VALIDATION_FAILED, "Check the highlighted fields.", {
         field_errors: [{ field: "jobId", message: "A job UUID is required." }],
       });
@@ -826,15 +838,14 @@ export function registerJobRoutes(
       const row = await withTenant(deps.pool, owner.workspace_id, owner.actor_id, async (client) => {
         await client.query("select commercial.expire_due_job_approvals($1::uuid, $2::uuid)", [
           owner.workspace_id,
-          params.jobId,
+          jobId,
         ]);
-        const result = await client.query<JobRow>(JOB_DETAIL_SQL, [params.jobId]);
-        return result.rows[0];
+        return presentedJobDetail(client, jobId);
       });
       if (!row) {
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
       }
-      return success(request.id, jobDetail(row));
+      return success(request.id, row);
     } catch {
       return sendFail(request, reply, "UNAVAILABLE", "Service unavailable.");
     }
@@ -954,16 +965,12 @@ export function registerJobRoutes(
         if (!result) {
           return undefined;
         }
-        const detail = await client.query<JobRow>(JOB_DETAIL_SQL, [result.id]);
-        if (!detail.rows[0]) {
-          return undefined;
-        }
-        return { ...detail.rows[0], replayed: result.replayed };
+        return presentedJobDetail(client, result.id);
       });
       if (!row) {
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
       }
-      return success(request.id, jobDetail(row));
+      return success(request.id, row);
     } catch (error) {
       const code = pgCode(error);
       if (code === "P0005") {
@@ -1026,16 +1033,12 @@ export function registerJobRoutes(
         if (!result) {
           return undefined;
         }
-        const detail = await client.query<JobRow>(JOB_DETAIL_SQL, [result.id]);
-        if (!detail.rows[0]) {
-          return undefined;
-        }
-        return { ...detail.rows[0], replayed: result.replayed };
+        return presentedJobDetail(client, result.id);
       });
       if (!row) {
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
       }
-      return success(request.id, jobDetail(row));
+      return success(request.id, row);
     } catch (error) {
       const code = pgCode(error);
       if (code === "P0005") {
@@ -1095,16 +1098,12 @@ export function registerJobRoutes(
         if (!result) {
           return undefined;
         }
-        const detail = await client.query<JobRow>(JOB_DETAIL_SQL, [result.id]);
-        if (!detail.rows[0]) {
-          return undefined;
-        }
-        return { ...detail.rows[0], replayed: result.replayed };
+        return presentedJobDetail(client, result.id);
       });
       if (!row) {
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, JOB_NOT_FOUND);
       }
-      return success(request.id, jobDetail(row));
+      return success(request.id, row);
     } catch (error) {
       const code = pgCode(error);
       if (code === "P0005") {

@@ -63,7 +63,7 @@ Required URL shape:
 
 Passing `--db-url` still exposes the URI on the local process list while the CLI runs. That residual exposure is unavoidable with this CLI interface. Unset the variable after apply.
 
-Local Windows session-pooler live apply has been unreliable after a successful dry-run. Hosted development `0002`–`0004` were applied through the dispatch-only Ubuntu workflow `.github/workflows/hosted-development-migrations.yml` (confirmation `APPLY_0002_0004`, Environment `development`, secret `DATABASE_URL_MIGRATIONS`). Hosted development `0005`–`0009` were subsequently applied through that same workflow. The next authorized hosted apply is pending `0010_quote_approval_request.sql` only, gated by confirmation `APPLY_0010`. Extra pending files fail the pre-check. See `docs/ENV.md`.
+Local Windows session-pooler live apply has been unreliable after a successful dry-run. Hosted development `0002`–`0004` were applied through the dispatch-only Ubuntu workflow `.github/workflows/hosted-development-migrations.yml` (confirmation `APPLY_0002_0004`, Environment `development`, secret `DATABASE_URL_MIGRATIONS`). Hosted development later applied through `0030` on that same workflow. The next authorized hosted apply is pending `0031_credit_note_pdf.sql` only, gated by confirmation `APPLY_0031`. Extra pending files fail the pre-check. See `docs/ENV.md`.
 
 PowerShell (process environment only):
 

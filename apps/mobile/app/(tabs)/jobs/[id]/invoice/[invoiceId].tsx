@@ -1,7 +1,7 @@
 import { formatUsdCents } from "@job-to-invoice/schemas";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, BackHandler, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, BackHandler, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../../src/i18n/en.ts";
 import {
@@ -21,6 +21,9 @@ import {
   invoicePdfPhase,
   invoicePdfPollContinues,
   presentInvoiceStatus,
+  presentIssuedCreditNotes,
+  presentInvoiceMoneyRows,
+  creditNotePdfOpenKind,
   type IssuedInvoiceRecord,
 } from "../../../../../src/invoices/presentation.ts";
 import { normalizePermittedActions } from "../../../../../src/jobs/presentation.ts";
@@ -199,6 +202,8 @@ export default function InvoiceDetailScreen() {
       ? presentInvoiceStatus(visible.payment_status, false)
       : undefined;
   const loadKind = error ? invoiceDetailLoadKind(error.status, error.code) : undefined;
+  const issuedCredits = visible ? presentIssuedCreditNotes(visible.issued_credits) : [];
+  const moneyRows = visible ? presentInvoiceMoneyRows(visible) : [];
 
   function openOnce(path: string) {
     if (navigating.current || offline) {
@@ -216,6 +221,25 @@ export default function InvoiceDetailScreen() {
     }
     invoiceDetailAnalytics();
     void Linking.openURL(pdfUrl);
+  }
+
+  async function openCreditPdf(documentId: string) {
+    if (offline) {
+      Alert.alert(copy.creditPdfFailedTitle, copy.invoiceDetailOffline);
+      return;
+    }
+    const result = await runOwnerRequest<{ state: string; url: string | null }>({
+      path: `/v1/documents/${documentId}/download`,
+    });
+    if (result.ok && result.data.state === "ready" && result.data.url) {
+      await Linking.openURL(result.data.url);
+      return;
+    }
+    if (result.ok && result.data.state === "failed") {
+      Alert.alert(copy.creditPdfFailedTitle, copy.creditPdfFailed);
+      return;
+    }
+    Alert.alert(copy.creditPdfTitle, result.ok ? copy.creditPdfPreparing : result.error.message || copy.creditPdfFailed);
   }
 
   return (
@@ -293,6 +317,14 @@ export default function InvoiceDetailScreen() {
                   {formatUsdCents(totalCents)}
                 </Text>
               </View>
+              {moneyRows.map((row) => (
+                <View key={row.key} style={styles.totalRow}>
+                  <Text style={styles.cardLabel}>{row.label}</Text>
+                  <Text accessibilityLabel={`${row.label} ${formatUsdCents(row.cents)}`} style={styles.meta}>
+                    {formatUsdCents(row.cents)}
+                  </Text>
+                </View>
+              ))}
             </View>
             {badge === "delivery_failed" ? (
               <View style={styles.noticeWarn}>
@@ -349,6 +381,38 @@ export default function InvoiceDetailScreen() {
                     </View>
                   </View>
                 ))}
+              </>
+            ) : null}
+            {issuedCredits.length > 0 ? (
+              <>
+                <Text style={styles.section}>{copy.invoiceCreditNotes}</Text>
+                {issuedCredits.map((credit) => {
+                  const openKind = creditNotePdfOpenKind(credit.pdf_state, offline);
+                  return (
+                    <View key={credit.id} style={styles.card}>
+                      <Text style={styles.cardTitle}>{credit.number}</Text>
+                      <Text style={styles.meta}>{formatUsdCents(credit.total_cents)}</Text>
+                      {openKind === "ready" ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`${copy.invoiceDetailViewPdf} ${credit.number}`}
+                          onPress={() => void openCreditPdf(credit.id)}
+                          style={styles.secondary}
+                        >
+                          <Text style={styles.secondaryLabel}>{copy.invoiceDetailViewPdf}</Text>
+                        </Pressable>
+                      ) : (
+                        <Text style={styles.noticeBody}>
+                          {openKind === "offline"
+                            ? copy.invoiceDetailOffline
+                            : openKind === "failed"
+                              ? copy.creditPdfFailed
+                              : copy.creditPdfPreparing}
+                        </Text>
+                      )}
+                    </View>
+                  );
+                })}
               </>
             ) : null}
             {(visible.entries ?? []).length > 0 ? (

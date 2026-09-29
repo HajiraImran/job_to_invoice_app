@@ -827,6 +827,121 @@ describe("invoice issue API", () => {
       [JOB_CREDIT],
     );
     expect(Number(analytics.rows[0]?.n)).toBe(1);
+    const creditId = credit.json().data.id as string;
+    await completePdf(creditId);
+    const ownerCredit = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${creditId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ownerCredit.statusCode).toBe(200);
+    expect(ownerCredit.json().data.kind).toBe("credit");
+    expect(ownerCredit.json().data.number).toBe("CN-000001");
+    expect(ownerCredit.json().data.pdf_state).toBe("ready");
+    const ownerDownload = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${creditId}/download`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ownerDownload.statusCode).toBe(200);
+    expect(ownerDownload.json().data).toMatchObject({ document_id: creditId, state: "ready" });
+    expect(ownerDownload.json().data.url).toContain("X-Amz-Expires=300");
+    const jobWithCredits = await running().app.inject({
+      method: "GET",
+      url: `/v1/jobs/${JOB_CREDIT}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(jobWithCredits.statusCode).toBe(200);
+    expect(jobWithCredits.json().data.issued_credits).toEqual([
+      expect.objectContaining({
+        id: creditId,
+        number: "CN-000001",
+        invoice_id: invoiceId,
+        pdf_state: "ready",
+        total_cents: 2165,
+      }),
+    ]);
+    const invoiceWithCredits = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${invoiceId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(invoiceWithCredits.statusCode).toBe(200);
+    expect(invoiceWithCredits.json().data.issued_credits).toEqual([
+      expect.objectContaining({ id: creditId, number: "CN-000001", pdf_state: "ready", total_cents: 2165 }),
+    ]);
+    const packedCredit = await running().admin.query<{ nonce: Buffer; ciphertext: Buffer }>(
+      `select p.nonce, p.ciphertext
+       from commercial.encrypted_delivery_payloads p
+       join commercial.delivery_attempts a on a.id = p.delivery_attempt_id
+       where a.document_id = $1 and a.template_id = 'EMAIL07'`,
+      [creditId],
+    );
+    const packedCreditRow = packedCredit.rows[0];
+    if (!packedCreditRow) {
+      throw new Error("EMAIL07 payload was not found");
+    }
+    const creditFragment = encodeFragmentToken(
+      decryptDeliveryToken(
+        { algorithm: "aes-256-gcm", keyVersion: 1, nonce: packedCreditRow.nonce, ciphertext: packedCreditRow.ciphertext },
+        DELIVERY,
+      ),
+    );
+    const exchangedCredit = await running().app.inject({
+      method: "POST",
+      url: "/v1/portal/exchange",
+      payload: { token: creditFragment },
+    });
+    expect(exchangedCredit.statusCode).toBe(200);
+    expect(exchangedCredit.json().data.purpose).toBe("view_only");
+    const creditCookie = `jti_portal=${exchangedCredit.json().data.session as string}`;
+    const creditCsrf = exchangedCredit.json().data.csrf_token as string;
+    await running().app.inject({
+      method: "POST",
+      url: "/v1/portal/code/send",
+      headers: { cookie: creditCookie, "x-csrf-token": creditCsrf, "content-type": "application/json" },
+      payload: {},
+    });
+    const otpCredit = await running().admin.query<{ nonce: Buffer; ciphertext: Buffer }>(
+      `select p.nonce, p.ciphertext
+       from commercial.encrypted_delivery_payloads p
+       join commercial.delivery_attempts a on a.id = p.delivery_attempt_id
+       where a.template_id = 'EMAIL03'
+       order by a.created_at desc limit 1`,
+    );
+    const otpCreditRow = otpCredit.rows[0];
+    if (!otpCreditRow) {
+      throw new Error("EMAIL03 payload was not found");
+    }
+    const creditCode = decryptUtf8(
+      { algorithm: "aes-256-gcm", keyVersion: 1, nonce: otpCreditRow.nonce, ciphertext: otpCreditRow.ciphertext },
+      DELIVERY,
+    );
+    const verifiedCredit = await running().app.inject({
+      method: "POST",
+      url: "/v1/portal/code/verify",
+      headers: { cookie: creditCookie, "x-csrf-token": creditCsrf, "content-type": "application/json" },
+      payload: { code: creditCode },
+    });
+    expect(verifiedCredit.statusCode).toBe(200);
+    const portalCredit = await running().app.inject({
+      method: "GET",
+      url: "/v1/portal/document",
+      headers: { cookie: creditCookie },
+    });
+    expect(portalCredit.statusCode).toBe(200);
+    expect(portalCredit.json().data.number).toBe("CN-000001");
+    expect(portalCredit.json().data.revision_label).toBe("R1");
+    expect(portalCredit.json().data.pdf_state).toBe("ready");
+    expect(portalCredit.json().data.allowed_actions).toEqual(expect.arrayContaining(["download", "report"]));
+    const portalDownload = await running().app.inject({
+      method: "GET",
+      url: "/v1/portal/download",
+      headers: { cookie: creditCookie },
+    });
+    expect(portalDownload.statusCode).toBe(200);
+    expect(portalDownload.json().data).toMatchObject({ document_id: creditId, state: "ready" });
+    expect(portalDownload.json().data.url).toContain("X-Amz-Expires=300");
     const other = await sign({ sub: AUTH_B, email: "owner.b@example.com" });
     const stolen = await running().app.inject({
       method: "POST",
@@ -838,7 +953,7 @@ describe("invoice issue API", () => {
       },
     });
     expect(stolen.statusCode).toBe(404);
-  }, 60_000);
+  }, 90_000);
 
   it("reverses a payment once, replays after ephemeral expiry, and rejects a second reversal", async () => {
     const token = await sign({ sub: AUTH_B, email: "owner.b@example.com" });
