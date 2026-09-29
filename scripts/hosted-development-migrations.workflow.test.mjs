@@ -57,9 +57,10 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.equal(confirm.includes(confirmationExpr), true);
   assert.match(
     yaml,
-    /Type APPLY_0028_0029 to apply pending hosted development migrations 0028_purge_app_membership\.sql and 0029_change_order_pdf\.sql/,
+    /Type APPLY_0030 to apply pending hosted development migration 0030_empty_leftover_change_draft\.sql/,
   );
-  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0028_0029" \]/);
+  assert.match(confirm, /\[ "\$CONFIRMATION" != "APPLY_0030" \]/);
+  assert.doesNotMatch(yaml, /APPLY_0028_0029/);
   assert.doesNotMatch(yaml, /APPLY_0027/);
   assert.doesNotMatch(yaml, /APPLY_0014/);
   assert.doesNotMatch(yaml, /APPLY_0015/);
@@ -104,11 +105,11 @@ test("hosted development migration workflow is dispatch-only and statically gate
   assert.equal([...apply.matchAll(/grep -qx 'ok: true'/g)].length, 2);
   assert.match(
     apply,
-    /grep -qx 'pending: 0028_purge_app_membership\.sql,0029_change_order_pdf\.sql'/,
+    /grep -qx 'pending: 0030_empty_leftover_change_draft\.sql'/,
   );
   assert.match(apply, /grep -qx 'pending: \(none\)'/);
   assert.ok(
-    apply.indexOf("pending: 0028_purge_app_membership.sql,0029_change_order_pdf.sql") <
+    apply.indexOf("pending: 0030_empty_leftover_change_draft.sql") <
       apply.indexOf("pnpm hosted:db-push"),
   );
 
@@ -127,11 +128,11 @@ test("hosted development migration workflow is dispatch-only and statically gate
 
   const names = namedSteps(apply);
   assert.ok(
-    names.indexOf("Check pending hosted migrations 0028 and 0029") <
-      names.indexOf("Apply hosted migrations 0028 and 0029"),
+    names.indexOf("Check pending hosted migration 0030") <
+      names.indexOf("Apply hosted migration 0030"),
   );
   assert.ok(
-    names.indexOf("Apply hosted migrations 0028 and 0029") <
+    names.indexOf("Apply hosted migration 0030") <
       names.indexOf("Verify no pending hosted migrations"),
   );
   assert.ok(
