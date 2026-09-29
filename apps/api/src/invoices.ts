@@ -191,7 +191,7 @@ async function sendUnresolvedInvoice(
   owner: { workspace_id: string; actor_id: string },
   jobId: string,
 ) {
-  let blockers: InvoiceUnresolvedBlocker[] = [];
+  let blockers: InvoiceUnresolvedBlocker[];
   try {
     blockers = await loadInvoiceUnresolvedBlockers(pool, owner.workspace_id, owner.actor_id, jobId);
   } catch {
