@@ -42,8 +42,14 @@ export function jobInvoiceDetailPath(jobId: string, invoiceId: string): string {
   return `/(tabs)/jobs/${jobId}/invoice/${invoiceId}`;
 }
 
-export function jobLedgerEntryPath(jobId: string, invoiceId: string, kind: "payment" | "refund"): string {
-  return `/(tabs)/jobs/${jobId}/ledger/entry?invoiceId=${encodeURIComponent(invoiceId)}&kind=${kind}`;
+export function jobLedgerEntryPath(
+  jobId: string,
+  invoiceId: string,
+  kind: "payment" | "refund",
+  prefillDue = false,
+): string {
+  const base = `/(tabs)/jobs/${jobId}/ledger/entry?invoiceId=${encodeURIComponent(invoiceId)}&kind=${kind}`;
+  return prefillDue ? `${base}&prefill=due` : base;
 }
 
 export function jobCreditPath(jobId: string, invoiceId: string): string {

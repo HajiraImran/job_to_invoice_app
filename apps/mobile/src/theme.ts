@@ -1,9 +1,12 @@
 export const colors = {
   navy: "#17324D",
   background: "#F7F8FA",
+  surface: "#FFFFFF",
   text: "#17212B",
   secondary: "#52606D",
   border: "#D5DCE3",
+  success: "#1F7A4D",
+  infoTint: "#E8EEF4",
   danger: "#8A1F1F",
 } as const;
 

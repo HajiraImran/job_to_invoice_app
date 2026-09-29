@@ -114,7 +114,11 @@ export async function getLocalDraftByJob(
 ): Promise<LocalDraftRecord | null> {
   try {
     const row = await db.getFirstAsync<Record<string, unknown>>(
-      "select * from local_drafts where job_id = ? order by local_updated_at desc limit 1",
+      `select * from local_drafts where job_id = ?
+       order by case sync_state when 'conflict' then 0 else 1 end,
+         case when server_version is null then 1 else 0 end,
+         local_updated_at desc
+       limit 1`,
       [jobId],
     );
     return row ? mapDraft(row) : null;

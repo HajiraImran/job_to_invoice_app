@@ -80,7 +80,9 @@ describe("auth state", () => {
     expect(isOfflineReadPermitted("2026-09-01T12:00:00.000Z", now)).toBe(false);
     expect(OTP_MAX_FAILURES).toBe(5);
     expect(BOOTSTRAP_SUPPORT_CODES).toContain("BOOTSTRAP_NETWORK");
-    expect(BOOTSTRAP_SUPPORT_CODES).toHaveLength(5);
+    expect(BOOTSTRAP_SUPPORT_CODES).toContain("BOOTSTRAP_OFFLINE");
+    expect(BOOTSTRAP_SUPPORT_CODES).toContain("BOOTSTRAP_DATABASE");
+    expect(BOOTSTRAP_SUPPORT_CODES).toHaveLength(7);
   });
 
   it("lists session material that sign-out must clear", () => {
@@ -116,10 +118,14 @@ describe("redaction", () => {
   it("redacts nested sensitive keys and rejects unsafe analytics properties", () => {
     const redacted = redactRecord({
       authorization: "Bearer secret",
-      nested: { email: "a@b.co", note: "ok" },
+      nested: { email: "a@b.co", note: "private note", credit_reason: "scope", invoice_number: "INV-1", credit_note: "CN-1" },
     }) as Record<string, unknown>;
     expect(redacted.authorization).toBe("[REDACTED]");
     expect((redacted.nested as Record<string, unknown>).email).toBe("[REDACTED]");
+    expect((redacted.nested as Record<string, unknown>).note).toBe("[REDACTED]");
+    expect((redacted.nested as Record<string, unknown>).credit_reason).toBe("[REDACTED]");
+    expect((redacted.nested as Record<string, unknown>).invoice_number).toBe("[REDACTED]");
+    expect((redacted.nested as Record<string, unknown>).credit_note).toBe("[REDACTED]");
     expect(analyticsPropertiesAreSafe({ acquisition_source: "unknown" })).toBe(true);
     expect(analyticsPropertiesAreSafe({ email: "a@b.co" })).toBe(false);
   });

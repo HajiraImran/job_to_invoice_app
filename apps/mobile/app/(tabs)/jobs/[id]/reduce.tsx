@@ -1,8 +1,8 @@
 import { useLocalSearchParams } from "expo-router";
-import { ChangeEditorScreen } from "../../../../src/changes/editor.tsx";
+import { ReductionScreen } from "../../../../src/changes/reduction-screen.tsx";
 
 export default function ReduceScopeScreen() {
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const jobId = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? (params.id[0] ?? "") : "";
-  return <ChangeEditorScreen jobId={jobId} mode="reductions" />;
+  return <ReductionScreen jobId={jobId} />;
 }

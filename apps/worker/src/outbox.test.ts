@@ -1,4 +1,4 @@
-import { buildQuoteSnapshot, originalPdfObjectKey } from "@job-to-invoice/domain";
+import { buildQuoteSnapshot, originalPdfObjectKey, type ChangeSnapshotV1 } from "@job-to-invoice/domain";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,6 +73,67 @@ function f01Snapshot() {
       },
     ],
   }).snapshot;
+}
+
+function changeSnapshot(jobId: string): ChangeSnapshotV1 {
+  return {
+    schema_version: 1,
+    kind: "change",
+    currency: "USD",
+    business: {
+      business_name: "Quote Co",
+      legal_name: "Quote Co LLC",
+      contact_name: "Owner",
+      contact_email: "owner@example.com",
+      contact_phone: null,
+      address: null,
+      timezone: "America/Chicago",
+      default_tax_bp: 0,
+    },
+    customer: { name: "Riley Chen", email: null, phone: null, billing_address: null },
+    job: { id: jobId, title: "Change", site_address: null, no_site: true },
+    reason: "Customer requested a second handle",
+    notes: "",
+    terms: "Net 14.",
+    expiry_days: 14,
+    expiry_local_date: "2026-10-06",
+    expiry_timezone: "America/Chicago",
+    expires_at: "2026-10-07T04:59:59.000Z",
+    issue_date: "2026-09-22",
+    expected_scope_version: 1,
+    previous_net_cents: 24000,
+    previous_tax_cents: 1980,
+    previous_total_cents: 25980,
+    addition_net_cents: 10000,
+    addition_tax_cents: 825,
+    addition_total_cents: 10825,
+    reduction_net_cents: 0,
+    reduction_tax_cents: 0,
+    reduction_total_cents: 0,
+    change_including_tax_cents: 10825,
+    new_agreed_total_cents: 36805,
+    additions: [
+      {
+        position: 1,
+        client_line_id: "abab8888-abab-4888-8888-abababababab",
+        description: "Second handle",
+        unit: "item",
+        custom_unit_label: null,
+        quantity: "1.000",
+        unit_price_cents: 10000,
+        discount_cents: 0,
+        tax_bp: 825,
+        gross_cents: 10000,
+        net_cents: 10000,
+        tax_cents: 825,
+        total_cents: 10825,
+      },
+    ],
+    reductions: [],
+    net_cents: 34000,
+    tax_cents: 2805,
+    total_cents: 36805,
+  };
 }
 
 describe("generate original PDF outbox", () => {
@@ -200,7 +261,16 @@ describe("generate original PDF outbox", () => {
       onStage: (stage) => stages.push(stage),
     });
     expect(first).toBe("done");
-    expect(stages).toEqual(["claim_started", "claimed", "rendering", "uploading", "completed"]);
+    expect(stages).toEqual([
+      "claim_started",
+      "claimed",
+      "source_loading",
+      "rendering",
+      "storage_put",
+      "checksum",
+      "complete_pdf",
+      "completed",
+    ]);
     const reserved = await running().admin.query<{ payload_json: { artifact_id: string } }>(
       "select payload_json from commercial.outbox_tasks where id = $1",
       [TASK],
@@ -282,11 +352,17 @@ describe("generate original PDF outbox", () => {
       putObject: async ({ key }: { key: string }) => {
         keys.push(key);
         if (shouldFail) {
-          throw new Error("R2 unavailable");
+          throw Object.assign(new Error("connect ETIMEDOUT 192.0.2.10:9000 key=secret"), { code: "ETIMEDOUT" });
         }
       },
     };
     const render = async () => Buffer.from("%PDF-1.4 retry");
+    const logged: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((line?: unknown) => {
+      if (typeof line === "string") {
+        logged.push(line);
+      }
+    });
     expect(
       await processGenerateOriginalPdf({
         pool: running().pool,
@@ -295,18 +371,50 @@ describe("generate original PDF outbox", () => {
         onStage: (stage) => stages.push(stage),
       }),
     ).toBe("retry");
-    expect(stages).toEqual(["claim_started", "claimed", "rendering", "uploading", "retry_scheduled"]);
-    const reserved = await running().admin.query<{ payload_json: { artifact_id: string }; status: string }>(
-      "select payload_json, attempts, status from commercial.outbox_tasks where id = $1",
-      [retryTask],
-    );
+    logSpy.mockRestore();
+    expect(stages).toEqual([
+      "claim_started",
+      "claimed",
+      "source_loading",
+      "rendering",
+      "storage_put",
+      "fail_recording",
+      "retry_scheduled",
+    ]);
+    const failure = logged.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.category);
+    expect(failure).toEqual({
+      event: "worker_pdf",
+      stage: "storage_put",
+      category: "storage_unavailable",
+      attempt: 1,
+      networkCode: "ETIMEDOUT",
+    });
+    expect(logged.join("\n")).not.toMatch(/192\.0\.2\.10|secret|Riley|owner@example/);
+    const reserved = await running().admin.query<{
+      payload_json: { artifact_id: string };
+      status: string;
+      last_error_code: string;
+    }>("select payload_json, attempts, status, last_error_code from commercial.outbox_tasks where id = $1", [retryTask]);
     expect(reserved.rows[0]?.status).toBe("pending");
+    expect(reserved.rows[0]?.last_error_code).toBe("STORAGE_UNAVAILABLE");
     expect(reserved.rows[0]?.payload_json.artifact_id).toBeTruthy();
     await rewind(retryTask);
     shouldFail = false;
     expect(await processGenerateOriginalPdf({ pool: running().pool, store, render })).toBe("done");
     expect(keys).toHaveLength(2);
     expect(keys[0]).toBe(keys[1]);
+    const artifacts = await running().admin.query<{ object_key: string }>(
+      "select object_key from commercial.artifacts where document_id = $1 and type = 'original_pdf'",
+      [retryDoc],
+    );
+    expect(artifacts.rows).toEqual([{ object_key: keys[0] }]);
+    const done = await running().admin.query<{ status: string; last_error_code: string | null }>(
+      "select status, last_error_code from commercial.outbox_tasks where id = $1",
+      [retryTask],
+    );
+    expect(done.rows[0]).toEqual({ status: "done", last_error_code: null });
+    expect(await processGenerateOriginalPdf({ pool: running().pool, store, render })).toBe("idle");
+    expect(keys).toHaveLength(2);
   });
 
   it("fails permanent validation immediately and dead-letters the fifth transient failure", async () => {
@@ -321,7 +429,7 @@ describe("generate original PDF outbox", () => {
         onStage: (stage) => stages.push(stage),
       }),
     ).toBe("dead");
-    expect(stages).toEqual(["claim_started", "claimed", "dead"]);
+    expect(stages).toEqual(["claim_started", "claimed", "source_loading", "fail_recording", "dead"]);
     const empty = await running().admin.query("select status, attempts from commercial.outbox_tasks where id = $1", [
       EMPTY_TASK,
     ]);
@@ -389,6 +497,92 @@ describe("generate original PDF outbox", () => {
       failDoc,
     ]);
     expect(artifacts.rows).toHaveLength(0);
+  });
+
+  it("claims, renders, stores, and completes a published change order once", async () => {
+    const changeJob = "abab5555-abab-4555-8555-abababababab";
+    const changeDoc = "abab7777-abab-4777-8777-abababababab";
+    const changeTask = "bbbb1111-bbbb-4111-8bbb-bbbbbbbbbb60";
+    const changeEvent = "cccc1111-cccc-4111-8ccc-cccccccccc60";
+    const snapshot = changeSnapshot(changeJob);
+    const canonical = Buffer.from(JSON.stringify(snapshot));
+    await running().admin.query(
+      `insert into commercial.jobs (workspace_id, id, customer_id, title, no_site, lifecycle, mode)
+       values ($1, $2, $3, 'Change', true, 'draft', 'quote')`,
+      [WS, changeJob, CUSTOMER],
+    );
+    await running().admin.query(
+      `insert into commercial.documents (
+        workspace_id, id, created_by, job_id, kind, number, revision_no, lifecycle,
+        issued_at, issue_date, currency, net_cents, tax_cents, total_cents,
+        snapshot_json, canonical_snapshot_bytes, schema_version, snapshot_sha256
+      ) values ($1, $2, $3, $4, 'change', 'CO-000001', 1, 'issued', now(), date '2026-09-22', 'USD', $5, $6, $7, $8::jsonb, $9, 1, $10)`,
+      [
+        WS,
+        changeDoc,
+        USER,
+        changeJob,
+        snapshot.net_cents,
+        snapshot.tax_cents,
+        snapshot.total_cents,
+        JSON.stringify(snapshot),
+        canonical,
+        createHash("sha256").update(canonical).digest("hex"),
+      ],
+    );
+    await insertTask(changeTask, changeEvent, changeDoc, { document_id: changeDoc, kind: "change" });
+    const keys: string[] = [];
+    const stages: string[] = [];
+    const rendered: string[] = [];
+    const store = {
+      putObject: async ({ key }: { key: string }) => {
+        keys.push(key);
+      },
+    };
+    const render: Parameters<typeof processGenerateOriginalPdf>[0]["render"] = async (document) => {
+      rendered.push(`${document.snapshot.kind}:${document.number}:${document.total_cents}`);
+      return Buffer.from("%PDF-1.4 change");
+    };
+    expect(
+      await processGenerateOriginalPdf({
+        pool: running().pool,
+        store,
+        render,
+        onStage: (stage) => stages.push(stage),
+      }),
+    ).toBe("done");
+    expect(stages).toEqual([
+      "claim_started",
+      "claimed",
+      "source_loading",
+      "rendering",
+      "storage_put",
+      "checksum",
+      "complete_pdf",
+      "completed",
+    ]);
+    expect(rendered).toEqual(["change:CO-000001:36805"]);
+    const task = await running().admin.query<{
+      status: string;
+      attempts: number;
+      last_error_code: string | null;
+      payload_json: { artifact_id: string };
+    }>("select status, attempts, last_error_code, payload_json from commercial.outbox_tasks where id = $1", [changeTask]);
+    expect(task.rows[0]).toMatchObject({ status: "done", attempts: 1, last_error_code: null });
+    const artifactId = task.rows[0]?.payload_json.artifact_id;
+    if (!artifactId) {
+      throw new Error("expected reserved change artifact id");
+    }
+    expect(keys).toEqual([originalPdfObjectKey({ workspaceId: WS, documentId: changeDoc, revision: 1, artifactId })]);
+    const artifacts = await running().admin.query(
+      "select id, object_key, template_version, state from commercial.artifacts where document_id = $1 and type = 'original_pdf'",
+      [changeDoc],
+    );
+    expect(artifacts.rows).toEqual([
+      { id: artifactId, object_key: keys[0], template_version: "change-original-v1", state: "ready" },
+    ]);
+    expect(await processGenerateOriginalPdf({ pool: running().pool, store, render })).toBe("idle");
+    expect(keys).toHaveLength(1);
   });
 
   async function seedQuoteTask(ids: { job: string; doc: string; line: string; task: string; event: string; number: string }) {
@@ -497,7 +691,16 @@ describe("generate original PDF outbox", () => {
     const [left, right] = await Promise.all([first, second]);
     expect([left, right].sort()).toEqual(["done", "idle"]);
     expect(keys).toHaveLength(1);
-    expect(stages).toEqual(["claim_started", "claimed", "rendering", "uploading", "completed"]);
+    expect(stages).toEqual([
+      "claim_started",
+      "claimed",
+      "source_loading",
+      "rendering",
+      "storage_put",
+      "checksum",
+      "complete_pdf",
+      "completed",
+    ]);
     expect(stages).not.toContain("claim_timed_out");
     expect(counted.heartbeats.count).toBeGreaterThanOrEqual(2);
     const done = await running().admin.query("select status from commercial.outbox_tasks where id = $1", [ids.task]);
@@ -533,7 +736,7 @@ describe("generate original PDF outbox", () => {
       render: async () => Buffer.from("%PDF-1.4 slow-upload"),
       onStage: (stage) => {
         stages.push(stage);
-        if (stage === "uploading") {
+        if (stage === "storage_put") {
           sawUploading();
         }
       },
@@ -548,7 +751,16 @@ describe("generate original PDF outbox", () => {
     const [left, right] = await Promise.all([first, second]);
     expect([left, right].sort()).toEqual(["done", "idle"]);
     expect(keys).toHaveLength(1);
-    expect(stages).toEqual(["claim_started", "claimed", "rendering", "uploading", "completed"]);
+    expect(stages).toEqual([
+      "claim_started",
+      "claimed",
+      "source_loading",
+      "rendering",
+      "storage_put",
+      "checksum",
+      "complete_pdf",
+      "completed",
+    ]);
     expect(stages).not.toContain("claim_timed_out");
     expect(counted.heartbeats.count).toBeGreaterThanOrEqual(2);
     const done = await running().admin.query("select status from commercial.outbox_tasks where id = $1", [ids.task]);

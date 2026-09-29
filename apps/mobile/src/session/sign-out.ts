@@ -1,4 +1,5 @@
 import type { DraftSyncStatus } from "@job-to-invoice/schemas";
+import { copy } from "../i18n/en.ts";
 
 export type SignOutChoice = "stay" | "confirm" | "discard" | "synchronize";
 
@@ -26,6 +27,19 @@ export function signOutChoiceProceeds(
 }
 
 export type SignOutStage = "discard" | "sign_out" | "synchronize";
+
+export function signOutFailureCopy(
+  stage: SignOutStage,
+  synchronizeReason?: "conflict" | "failed" | "storage",
+): string {
+  if (stage === "discard") {
+    return copy.discardFailed;
+  }
+  if (stage === "synchronize") {
+    return synchronizeReason === "conflict" ? copy.synchronizeConflict : copy.synchronizeFailed;
+  }
+  return copy.signOutFailed;
+}
 
 export async function completeOwnerSignOut(options: {
   mode: "confirm" | "discard" | "synchronize";

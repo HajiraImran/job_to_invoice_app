@@ -60,6 +60,7 @@ describe("ownerRequest", () => {
         code: "UNAVAILABLE",
         message: "Could not reach the network. Try again.",
         retryable: true,
+        network: "unreachable",
       },
     });
   });

@@ -9,7 +9,21 @@ import { jobDetailPath } from "../jobs/routes.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../setup/idempotency.ts";
 import { useAuth } from "../session/AuthProvider.tsx";
 import { colors, space, type } from "../theme.ts";
-import { presentChangeEditor, type ChangeDraftRecord } from "./presentation.ts";
+import {
+  beginChangePreviewRequest,
+  beginChangePublishRequest,
+  changePreviewAfterFailure,
+  changeRecipientPlan,
+  presentChangeRecipient,
+  extraWorkIdempotencyAfterFailure,
+  presentBlockedChangePublish,
+  presentChangeEditor,
+  presentChangePreviewFailure,
+  presentChangePublishResponse,
+  type ChangeDraftRecord,
+  type ChangePreviewRecord,
+  type ChangePublishNotice,
+} from "./presentation.ts";
 
 type AdditionForm = {
   client_line_id: string;
@@ -37,9 +51,14 @@ export function ChangeEditorScreen(props: { jobId: string; mode: "additions" | "
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number; code?: string }>();
+  const [preview, setPreview] = useState<ChangePreviewRecord | undefined>();
+  const [confirming, setConfirming] = useState(false);
+  const [operationNotice, setOperationNotice] = useState<ChangePublishNotice | undefined>();
   const openKey = useRef<string | undefined>(undefined);
   const saveKey = useRef<string | undefined>(undefined);
   const publishKey = useRef<string | undefined>(undefined);
+  const previewInFlight = useRef(false);
+  const publishInFlight = useRef(false);
   const offline = auth.snapshot.status === "offline_cached";
 
   const applyDraft = useCallback((next: ChangeDraftRecord) => {
@@ -134,73 +153,127 @@ export function ChangeEditorScreen(props: { jobId: string; mode: "additions" | "
     if (!draft || offline || busy) {
       return;
     }
+    const started = beginChangePreviewRequest({
+      draftId: draft.id,
+      version: draft.version,
+      allowed: !offline,
+      inFlight: previewInFlight,
+    });
+    if (started.kind === "ignored") {
+      return;
+    }
     setBusy(true);
     setError(undefined);
-    saveKey.current = retainOrCreateSetupIdempotencyKey(saveKey.current);
-    const saved = await runOwnerRequest<ChangeDraftRecord>({
-      path: `/v1/drafts/${draft.id}`,
-      method: "PATCH",
-      idempotencyKey: saveKey.current,
-      ifMatch: draft.version,
-      body: payload(),
-    });
-    if (!saved.ok) {
-      setBusy(false);
-      if (saved.error.code === "IDEMPOTENCY_MISMATCH" || saved.error.code === "VERSION_CONFLICT") {
-        saveKey.current = retainOrCreateSetupIdempotencyKey(undefined);
+    setOperationNotice(undefined);
+    try {
+      saveKey.current = retainOrCreateSetupIdempotencyKey(saveKey.current);
+      const saved = await runOwnerRequest<ChangeDraftRecord>({
+        path: `/v1/drafts/${draft.id}`,
+        method: "PATCH",
+        idempotencyKey: saveKey.current,
+        ifMatch: draft.version,
+        body: payload(),
+      });
+      if (!saved.ok) {
+        if (saved.error.code === "IDEMPOTENCY_MISMATCH" || saved.error.code === "VERSION_CONFLICT") {
+          saveKey.current = retainOrCreateSetupIdempotencyKey(undefined);
+        }
+        setError({
+          message: saved.error.message || copy.changeLoadError,
+          retryable: saved.error.retryable || saved.error.status === 0,
+          status: saved.error.status,
+          code: saved.error.code,
+        });
+        return;
       }
-      setError({
-        message: saved.error.message || copy.changeLoadError,
-        retryable: saved.error.retryable || saved.error.status === 0,
-        status: saved.error.status,
-        code: saved.error.code,
+      applyDraft(saved.data);
+      const previewed = await runOwnerRequest<ChangePreviewRecord>({
+        path: `/v1/drafts/${saved.data.id}/preview`,
+        method: "POST",
+        ifMatch: saved.data.version,
       });
-      return;
-    }
-    applyDraft(saved.data);
-    const previewed = await runOwnerRequest<{ preview_hash: string; snapshot: { customer?: { email?: string | null } } }>({
-      path: `/v1/drafts/${saved.data.id}/preview`,
-      method: "POST",
-      ifMatch: saved.data.version,
-    });
-    if (!previewed.ok) {
+      if (!previewed.ok) {
+        setOperationNotice(presentChangePreviewFailure(previewed.error));
+        return;
+      }
+      if (!recipient && previewed.data.snapshot.customer.email) {
+        setRecipient(previewed.data.snapshot.customer.email);
+      }
+      setPreview(previewed.data);
+      setConfirming(false);
+    } finally {
+      previewInFlight.current = false;
       setBusy(false);
-      setError({
-        message: previewed.error.message || copy.changeLoadError,
-        retryable: previewed.error.retryable || previewed.error.status === 0,
-        status: previewed.error.status,
-        code: previewed.error.code,
-      });
+    }
+  }
+
+  async function publishChange() {
+    const plan = changeRecipientPlan({
+      previewEmail: preview?.snapshot.customer.email,
+      enteredEmail: recipient || preview?.snapshot.customer.email || "",
+    });
+    if (plan.kind !== "ready") {
+      const blocked = presentChangeRecipient(plan);
+      if (blocked) {
+        setOperationNotice(blocked);
+      }
+      setConfirming(false);
       return;
     }
-    if (!recipient && previewed.data.snapshot.customer?.email) {
-      setRecipient(previewed.data.snapshot.customer.email);
-    }
-    publishKey.current = retainOrCreateSetupIdempotencyKey(publishKey.current);
-    const published = await runOwnerRequest({
-      path: `/v1/drafts/${saved.data.id}/publish`,
-      method: "POST",
+    const started = beginChangePublishRequest({
+      confirming,
+      preview,
+      inFlight: publishInFlight,
       idempotencyKey: publishKey.current,
-      ifMatch: saved.data.version,
-      body: {
-        preview_hash: previewed.data.preview_hash,
-        recipient_email: recipient || previewed.data.snapshot.customer?.email,
-      },
     });
-    setBusy(false);
-    if (!published.ok) {
-      if (published.error.code === "IDEMPOTENCY_MISMATCH") {
-        publishKey.current = retainOrCreateSetupIdempotencyKey(undefined);
-      }
-      setError({
-        message: published.error.message || copy.changeLoadError,
-        retryable: published.error.retryable || published.error.status === 0,
-        status: published.error.status,
-        code: published.error.code,
-      });
+    if (started.kind === "ignored") {
       return;
     }
-    router.replace(jobDetailPath(props.jobId));
+    if (started.kind !== "request") {
+      setOperationNotice(presentBlockedChangePublish(started.kind));
+      setConfirming(false);
+      return;
+    }
+    publishKey.current = started.idempotencyKey;
+    setBusy(true);
+    setOperationNotice(undefined);
+    try {
+      const published = await runOwnerRequest<{ id?: string }>({
+        path: started.path,
+        method: started.method,
+        idempotencyKey: started.idempotencyKey,
+        ifMatch: started.ifMatch,
+        body: started.body,
+      });
+      if (!published.ok) {
+        const notice = presentChangePublishResponse({
+          ok: false,
+          status: published.error.status,
+          code: published.error.code,
+          message: published.error.message,
+          retryable: published.error.retryable,
+        });
+        if (notice.recovery !== "check_draft") {
+          publishKey.current = extraWorkIdempotencyAfterFailure(publishKey.current, published.error.code);
+        }
+        if (notice.recovery === "refresh_preview") {
+          setPreview((current) => changePreviewAfterFailure(current, published.error.code));
+        }
+        setOperationNotice(notice);
+        setConfirming(false);
+        return;
+      }
+      const publishedId = typeof published.data?.id === "string" ? published.data.id : "";
+      if (!publishedId) {
+        setOperationNotice(presentChangePublishResponse({ ok: true, status: 202 }));
+        setConfirming(false);
+        return;
+      }
+      router.replace(jobDetailPath(props.jobId));
+    } finally {
+      publishInFlight.current = false;
+      setBusy(false);
+    }
   }
 
   const view = presentChangeEditor({
@@ -328,6 +401,12 @@ export function ChangeEditorScreen(props: { jobId: string; mode: "additions" | "
               style={styles.input}
               editable={!offline && !busy}
             />
+            {operationNotice ? (
+              <Text accessibilityLiveRegion="polite" style={styles.error}>
+                {operationNotice.message}
+              </Text>
+            ) : null}
+            {preview ? <Text style={styles.body}>{copy.previewNotPublished}</Text> : null}
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ disabled: offline || busy }}
@@ -335,8 +414,30 @@ export function ChangeEditorScreen(props: { jobId: string; mode: "additions" | "
               onPress={() => void saveAndPreview()}
               style={styles.primary}
             >
-              <Text style={styles.primaryLabel}>{busy ? copy.changePublishing : copy.changePublish}</Text>
+              <Text style={styles.primaryLabel}>{busy && !confirming ? copy.changePreviewOpening : copy.extraWorkContinue}</Text>
             </Pressable>
+            {preview ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: offline || busy, busy: confirming && busy }}
+                disabled={offline || busy}
+                onPress={() => {
+                  if (operationNotice?.recovery === "check_draft") {
+                    return;
+                  }
+                  if (!confirming) {
+                    setConfirming(true);
+                    return;
+                  }
+                  void publishChange();
+                }}
+                style={styles.secondary}
+              >
+                <Text style={styles.secondaryLabel}>
+                  {confirming ? (busy ? copy.changePublishing : copy.changePublishConfirm) : copy.changePublish}
+                </Text>
+              </Pressable>
+            ) : null}
           </>
         ) : null}
         <Pressable accessibilityRole="button" onPress={() => router.replace(jobDetailPath(props.jobId))} style={styles.secondary}>

@@ -1,5 +1,11 @@
 import type { Pool } from "pg";
-import { withWorkerRole, WORKER_CLAIM_TIMEOUT_MS, WORKER_STATEMENT_TIMEOUT_MS } from "./db.ts";
+import {
+  enterWorkerRoleOperation,
+  withWorkerRole,
+  workerRoleOperationIs,
+  WORKER_CLAIM_TIMEOUT_MS,
+  WORKER_STATEMENT_TIMEOUT_MS,
+} from "./db.ts";
 
 export type PurgeObjectStore = {
   deleteObject: (key: string) => Promise<void>;
@@ -16,6 +22,9 @@ export async function processPurgeAccount(input: {
   pool: Pool;
   store: PurgeObjectStore;
 }): Promise<"idle" | "done" | "retry" | "failed"> {
+  if (!workerRoleOperationIs("purge")) {
+    return enterWorkerRoleOperation("purge", () => processPurgeAccount(input));
+  }
   const claimed = await withWorkerRole(
     input.pool,
     async (client) => {

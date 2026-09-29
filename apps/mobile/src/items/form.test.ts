@@ -27,6 +27,13 @@ describe("catalogue item form", () => {
     expect(line.tax_percent).toBe("8.25");
     expect(itemHasCatalogueId(line)).toBe(false);
     expect(JSON.stringify(line)).not.toContain("catalogue_item_id");
+    const source = { ...ITEM, unit_price_cents: 10000, description: "Labour hour" };
+    const copied = lineFromCatalogueItem(source, "22222222-2222-4222-8222-222222222222");
+    source.unit_price_cents = 20000;
+    source.description = "Changed later";
+    expect(copied.unit_price).toBe("100");
+    expect(copied.description).toBe("Labour hour");
+    expect(lineFromCatalogueItem(source, "33333333-3333-4333-8333-333333333333").unit_price).toBe("200");
   });
 
   it("rejects float prices and unknown live-link fields", () => {
@@ -66,5 +73,15 @@ describe("items list states", () => {
     expect(presentItemsList({ authStatus: "access_expired", loading: false, loadedOnce: true, items: [] }).kind).toBe(
       "access_expired",
     );
+    const expired = presentItemsList({
+      authStatus: "access_expired",
+      loading: false,
+      loadedOnce: true,
+      items: [ITEM],
+    });
+    expect(expired.kind).toBe("access_expired");
+    expect(expired.items).toEqual([]);
+    expect(expired.showAdd).toBe(false);
+    expect(expired.showRetry).toBe(false);
   });
 });

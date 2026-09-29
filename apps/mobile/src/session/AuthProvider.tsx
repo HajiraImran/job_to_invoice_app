@@ -1,8 +1,27 @@
-import { OTP_MAX_FAILURES, remainingResendSeconds, type AuthSnapshot } from "@job-to-invoice/schemas";
-import type { Session } from "@supabase/supabase-js";
+import {
+  OTP_MAX_FAILURES,
+  parseOwnerEmail,
+  remainingResendSeconds,
+  resendAvailableAt,
+  type AuthSnapshot,
+} from "@job-to-invoice/schemas";
+import { isAuthRetryableFetchError, type Session } from "@supabase/supabase-js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppState } from "react-native";
-import { ownerRequest, type OwnerBootstrap, type OwnerRequestOptions } from "../api/client.ts";
+import {
+  createClientRequestId,
+  ownerRequest,
+  type ApiError,
+  type OwnerBootstrap,
+  type OwnerRequestOptions,
+} from "../api/client.ts";
+import {
+  authHealthUrl,
+  createReachabilityCheck,
+  probeInternet,
+  refineNetworkFailure,
+  requestFailureMessage,
+} from "../api/reachability.ts";
 import { publicConfig } from "../config.ts";
 import {
   bindDraftSyncController,
@@ -10,14 +29,18 @@ import {
   getDraftSyncStatus,
   synchronizeLocalDrafts,
 } from "../drafts/sync.ts";
-import { completeOwnerSignOut } from "./sign-out.ts";
-import { mapAuthError } from "../auth/errors.ts";
+import { completeOwnerSignOut, signOutFailureCopy } from "./sign-out.ts";
+import { mapAuthError, otpErrorCopy } from "../auth/errors.ts";
 import { copy } from "../i18n/en.ts";
 import {
+  backgroundBootstrapRetryDelay,
   bootstrapErrorCopy,
   classifyOwnerMeError,
   fetchOwnerMe,
   fetchOwnerMeWithOneRefresh,
+  fetchOwnerMeWithTransientRetry,
+  sessionReadOutcome,
+  shouldAutoRetryBootstrap,
   type OwnerMeResponse,
 } from "./bootstrap.ts";
 import { awaitingCodeSnapshot } from "./logic.ts";
@@ -56,8 +79,10 @@ type AuthContextValue = {
   submitting: boolean;
   resendSeconds: number;
   configured: boolean;
-  sendCode: () => Promise<void>;
+  sendCode: () => Promise<{ ok: true } | { ok: false }>;
+  sendFreshGrantCode: () => Promise<{ ok: true } | { ok: false }>;
   verifyCode: () => Promise<void>;
+  verifyFreshGrantCode: () => Promise<boolean>;
   changeEmail: () => void;
   signOut: (mode: "confirm" | "discard" | "synchronize") => Promise<void>;
   draftStatus: () => ReturnType<typeof getDraftSyncStatus>;
@@ -95,6 +120,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const bootstrapInFlightRef = useRef<Promise<void> | null>(null);
   const snapshotRef = useRef<AuthSnapshot>(snapshot);
   snapshotRef.current = snapshot;
+  const backgroundRetryAttemptRef = useRef(0);
+  const checkReachability = useMemo(
+    () => createReachabilityCheck(() => probeInternet({ url: authHealthUrl(config.authProjectUrl) })),
+    [config.authProjectUrl],
+  );
 
   const ensureSyncController = useCallback(async () => {
     const capability = defaultEncryptedStorageCapability();
@@ -261,11 +291,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const requestMe = useCallback(
-    (accessToken: string) =>
-      fetchOwnerMe({
+    async (accessToken: string) => {
+      const clientRequestId = createClientRequestId();
+      const startedAt = Date.now();
+      const result = await fetchOwnerMe({
         apiBaseUrl: config.apiBaseUrl,
         accessToken,
-      }),
+        clientRequestId,
+      });
+      if (__DEV__) {
+        console.info(
+          JSON.stringify({
+            event: "owner_me_client",
+            status: result.ok ? 200 : result.error.status,
+            ...(result.ok ? {} : { code: result.error.code, network: result.error.network }),
+            ms: Date.now() - startedAt,
+            client_request_id: clientRequestId,
+            ...(!result.ok && result.error.requestId ? { request_id: result.error.requestId } : {}),
+          }),
+        );
+      }
+      return result;
+    },
     [config.apiBaseUrl],
   );
 
@@ -274,21 +321,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessionTokenRef.current = session.access_token;
       const run = (async () => {
         const generation = bootstrapGateRef.current.begin();
-        const result = await fetchOwnerMeWithOneRefresh({
-          accessToken: session.access_token,
-          fetchMe: requestMe,
-          refresh: async () => {
-            if (!client) {
-              return undefined;
-            }
-            const refreshed = await client.auth.refreshSession();
-            const next = refreshed.data.session?.access_token;
-            if (next) {
-              sessionTokenRef.current = next;
-            }
-            return next;
-          },
+        const retried = await fetchOwnerMeWithTransientRetry({
+          attempt: () =>
+            fetchOwnerMeWithOneRefresh({
+              accessToken: sessionTokenRef.current ?? session.access_token,
+              fetchMe: requestMe,
+              refresh: async () => {
+                if (!client) {
+                  return undefined;
+                }
+                const refreshed = await client.auth.refreshSession();
+                const next = refreshed.data.session?.access_token;
+                if (next) {
+                  sessionTokenRef.current = next;
+                }
+                return next;
+              },
+            }),
+          shouldContinue: () => bootstrapGateRef.current.canApplyFailure(generation),
         });
+        const result: OwnerMeResponse = retried.ok
+          ? retried
+          : { ok: false, error: await refineNetworkFailure(retried.error, checkReachability) };
         await applyMeResult(result, emailHint, generation);
       })();
       const tracked = run.finally(() => {
@@ -297,24 +351,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       bootstrapInFlightRef.current = tracked;
       await tracked;
     },
-    [applyMeResult, client, requestMe],
+    [applyMeResult, checkReachability, client, requestMe],
   );
 
+  /** A session-read failure caused by the network must not look like a sign-out. */
+  const applySessionReadNetworkFailure = useCallback(async () => {
+    const generation = bootstrapGateRef.current.begin();
+    const error = await refineNetworkFailure(
+      {
+        status: 0,
+        code: "UNAVAILABLE",
+        message: copy.networkError,
+        retryable: true,
+        network: "unreachable",
+      } satisfies ApiError,
+      checkReachability,
+    );
+    await applyMeResult({ ok: false, error }, snapshotRef.current.emailDisplay, generation);
+  }, [applyMeResult, checkReachability]);
+
   const recoverBootstrapIfNeeded = useCallback(async () => {
-    if (!client) {
+    if (!client || bootstrapInFlightRef.current) {
       return;
     }
-    const status = snapshotRef.current.status;
-    // Re-authorize when stale offline, or refresh online session on foreground.
-    if (status !== "offline_cached" && status !== "authenticated") {
+    const current = snapshotRef.current;
+    // Re-authorize when stale offline, refresh online session, or retry a transient bootstrap failure.
+    if (
+      current.status !== "offline_cached" &&
+      current.status !== "authenticated" &&
+      !shouldAutoRetryBootstrap(current)
+    ) {
       return;
     }
     const existing = await client.auth.getSession();
     if (!existing.data.session) {
+      const outcome = sessionReadOutcome({
+        hasSession: false,
+        error: existing.error,
+        isRetryableFetchError: isAuthRetryableFetchError,
+      });
+      if (outcome === "network_failure" && current.status !== "authenticated") {
+        await applySessionReadNetworkFailure();
+      }
       return;
     }
     await loadMe(existing.data.session, existing.data.session.user.email);
-  }, [client, loadMe]);
+  }, [applySessionReadNetworkFailure, client, loadMe]);
 
   useEffect(() => {
     let cancelled = false;
@@ -342,6 +424,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setError(copy.bootstrapUnavailable);
           }
         }
+      } else if (
+        sessionReadOutcome({
+          hasSession: false,
+          error: existing.error,
+          isRetryableFetchError: isAuthRetryableFetchError,
+        }) === "network_failure"
+      ) {
+        await applySessionReadNetworkFailure();
       } else {
         setSnapshot({ status: "signed_out" });
       }
@@ -353,12 +443,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [client, loadMe]);
+  }, [applySessionReadNetworkFailure, client, loadMe]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         setNow(Date.now());
+        backgroundRetryAttemptRef.current = 0;
         void recoverBootstrapIfNeeded();
       }
     });
@@ -366,40 +457,98 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [recoverBootstrapIfNeeded]);
 
   useEffect(() => {
-    if (snapshot.status !== "awaiting_code") {
+    if (snapshot.status === "authenticated") {
+      backgroundRetryAttemptRef.current = 0;
+      return undefined;
+    }
+    if (!shouldAutoRetryBootstrap(snapshot)) {
+      return undefined;
+    }
+    const delay = backgroundBootstrapRetryDelay(backgroundRetryAttemptRef.current);
+    const timer = setTimeout(() => {
+      if (AppState.currentState !== "active") {
+        return;
+      }
+      backgroundRetryAttemptRef.current += 1;
+      void recoverBootstrapIfNeeded();
+    }, delay);
+    return () => clearTimeout(timer);
+    // A failed retry applies a new snapshot object, which schedules the next attempt.
+  }, [recoverBootstrapIfNeeded, snapshot]);
+
+  useEffect(() => {
+    if (snapshot.status !== "awaiting_code" && snapshot.resendAvailableAt === undefined) {
       return undefined;
     }
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [snapshot.status]);
+  }, [snapshot.resendAvailableAt, snapshot.status]);
 
-  const sendCode = useCallback(async () => {
+  const sendCode = useCallback(async (): Promise<{ ok: true } | { ok: false }> => {
     setError(undefined);
+    const parsed = parseOwnerEmail(emailDisplay);
+    if (!parsed.ok) {
+      setError(parsed.code === "too_long" ? copy.emailTooLong : copy.invalidEmail);
+      return { ok: false };
+    }
     if (!client) {
       setError("Authentication is not configured on this build.");
-      return;
+      return { ok: false };
     }
     setSubmitting(true);
     try {
       const { error: sendError } = await client.auth.signInWithOtp({
-        email: emailDisplay.trim(),
+        email: parsed.display,
         options: ownerSignInOtpOptions(),
       });
       if (sendError) {
         const kind = mapAuthError(sendError);
-        if (kind === "throttled") {
-          setError("Wait before requesting another code.");
-          return;
-        }
-        if (kind === "network") {
-          setError("Could not reach the network. Try again.");
-          return;
+        if (kind === "throttled" || kind === "network") {
+          setError(otpErrorCopy(kind));
+          return { ok: false };
         }
       }
       if (pendingReplaceRef.current) {
         emitReplaceResumeDiagnostic({ stage: "step_up_started", outcome: "otp_sent" });
       }
-      setSnapshot(awaitingCodeSnapshot(emailDisplay.trim(), Date.now()));
+      setSnapshot(awaitingCodeSnapshot(parsed.display, Date.now()));
+      return { ok: true };
+    } finally {
+      setSubmitting(false);
+    }
+  }, [client, emailDisplay]);
+
+  const sendFreshGrantCode = useCallback(async (): Promise<{ ok: true } | { ok: false }> => {
+    setError(undefined);
+    const parsed = parseOwnerEmail(emailDisplay);
+    if (!parsed.ok) {
+      setError(parsed.code === "too_long" ? copy.emailTooLong : copy.invalidEmail);
+      return { ok: false };
+    }
+    if (!client) {
+      setError("Authentication is not configured on this build.");
+      return { ok: false };
+    }
+    setSubmitting(true);
+    try {
+      const { error: sendError } = await client.auth.signInWithOtp({
+        email: parsed.display,
+        options: ownerSignInOtpOptions(),
+      });
+      if (sendError) {
+        const kind = mapAuthError(sendError);
+        if (kind === "throttled" || kind === "network") {
+          setError(otpErrorCopy(kind));
+          return { ok: false };
+        }
+      }
+      setSnapshot((current) => ({
+        ...current,
+        emailDisplay: current.emailDisplay ?? parsed.display,
+        resendAvailableAt: resendAvailableAt(Date.now()),
+        verifyFailures: 0,
+      }));
+      return { ok: true };
     } finally {
       setSubmitting(false);
     }
@@ -407,7 +556,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const verifyCode = useCallback(async () => {
     if (!client || (snapshot.verifyFailures !== undefined && snapshot.verifyFailures >= OTP_MAX_FAILURES)) {
-      setError("Too many attempts. Request a new code.");
+      setError(otpErrorCopy("attempts"));
       return;
     }
     setSubmitting(true);
@@ -428,13 +577,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           resendAvailableAt: snapshot.resendAvailableAt,
         });
         if (failures >= OTP_MAX_FAILURES || kind === "attempts") {
-          setError("Too many attempts. Request a new code.");
+          setError(otpErrorCopy("attempts"));
         } else if (kind === "expired") {
-          setError("That code has expired. Request a new one.");
+          setError(otpErrorCopy("expired"));
         } else if (kind === "network") {
-          setError("Could not reach the network. Try again.");
+          setError(otpErrorCopy("network"));
         } else {
-          setError("That code didn't work. Try again.");
+          setError(otpErrorCopy("incorrect"));
         }
         return;
       }
@@ -475,6 +624,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [client, code, emailDisplay, loadMe, snapshot.resendAvailableAt, snapshot.verifyFailures]);
 
+  const verifyFreshGrantCode = useCallback(async (): Promise<boolean> => {
+    if (!client || (snapshot.verifyFailures !== undefined && snapshot.verifyFailures >= OTP_MAX_FAILURES)) {
+      setError(otpErrorCopy("attempts"));
+      return false;
+    }
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      const { data, error: verifyError } = await client.auth.verifyOtp(ownerVerifyOtpParams(emailDisplay, code));
+      if (verifyError || !data.session) {
+        const kind = mapAuthError(verifyError ?? {});
+        const failures = (snapshot.verifyFailures ?? 0) + 1;
+        setSnapshot((current) => ({ ...current, verifyFailures: failures }));
+        if (failures >= OTP_MAX_FAILURES || kind === "attempts") {
+          setError(otpErrorCopy("attempts"));
+        } else if (kind === "expired") {
+          setError(otpErrorCopy("expired"));
+        } else if (kind === "network") {
+          setError(otpErrorCopy("network"));
+        } else {
+          setError(otpErrorCopy("incorrect"));
+        }
+        return false;
+      }
+      setCode("");
+      sessionTokenRef.current = data.session.access_token;
+      try {
+        await client.auth.setSession({
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+        });
+      } catch {
+        // verifyOtp already persisted the session.
+      }
+      try {
+        await loadMe(data.session, emailDisplay.trim());
+      } catch {
+        setError(copy.bootstrapUnavailable);
+        return false;
+      }
+      return true;
+    } finally {
+      setSubmitting(false);
+    }
+  }, [client, code, emailDisplay, loadMe, snapshot.verifyFailures]);
+
   const rememberPendingReplace = useCallback(async (intent: PendingReplaceIntent) => {
     pendingReplaceRef.current = intent;
     await savePendingReplace(secureKv, intent);
@@ -509,20 +704,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return unavailable;
       }
       const existing = await client.auth.getSession();
-      const accessToken = sessionTokenRef.current ?? existing.data.session?.access_token;
+      // getSession returns the auto-refreshed token; the ref alone can hold an expired one.
+      const accessToken = existing.data.session?.access_token ?? sessionTokenRef.current;
+      if (existing.data.session?.access_token) {
+        sessionTokenRef.current = existing.data.session.access_token;
+      }
       if (!accessToken) {
         return {
           ok: false as const,
           error: { status: 401, code: "AUTHENTICATION_REQUIRED", message: "Sign in required.", retryable: false },
         };
       }
+      const explain = async <R extends { ok: true; data: T } | { ok: false; error: ApiError }>(result: R) => {
+        if (result.ok) {
+          return result;
+        }
+        const refined = await refineNetworkFailure(result.error, checkReachability);
+        const message =
+          refined.status === 0 || refined.code === "DATABASE_TIMEOUT" || refined.code === "DATABASE_UNAVAILABLE"
+            ? requestFailureMessage(refined)
+            : refined.message;
+        return { ok: false as const, error: { ...refined, message } };
+      };
       const first = await ownerRequest<T>({
         ...options,
         apiBaseUrl: config.apiBaseUrl,
         accessToken,
       });
       if (first.ok || first.error.status !== 401) {
-        return first;
+        return explain(first);
       }
       const refreshed = await client.auth.refreshSession();
       const next = refreshed.data.session?.access_token;
@@ -530,18 +740,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return first;
       }
       sessionTokenRef.current = next;
-      return ownerRequest<T>({
-        ...options,
-        apiBaseUrl: config.apiBaseUrl,
-        accessToken: next,
-      });
+      return explain(
+        await ownerRequest<T>({
+          ...options,
+          apiBaseUrl: config.apiBaseUrl,
+          accessToken: next,
+        }),
+      );
     },
-    [client, config.apiBaseUrl],
+    [checkReachability, client, config.apiBaseUrl],
   );
 
   const signOut = useCallback(
     async (mode: "confirm" | "discard" | "synchronize") => {
       setError(undefined);
+      let synchronizeReason: "conflict" | "failed" | "storage" | undefined;
       const result = await completeOwnerSignOut({
         mode,
         discardDrafts: discardLocalDrafts,
@@ -563,7 +776,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             },
             { forceImmediate: true },
           );
-          return synced.ok ? { ok: true as const } : { ok: false as const };
+          if (!synced.ok) {
+            synchronizeReason = synced.reason;
+            return { ok: false as const };
+          }
+          return { ok: true as const };
         },
         providerSignOut: async () => {
           if (client) {
@@ -585,13 +802,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       });
       if (!result.ok) {
-        if (result.stage === "discard") {
-          setError(copy.discardFailed);
-        } else if (result.stage === "synchronize") {
-          setError(copy.synchronizeFailed);
-        } else {
-          setError(copy.signOutFailed);
-        }
+        setError(signOutFailureCopy(result.stage, synchronizeReason));
       }
     },
     [client, runOwnerRequest],
@@ -642,30 +853,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [client, loadMe]);
 
-  const value: AuthContextValue = {
-    snapshot,
-    bootstrap,
-    emailDisplay,
-    code,
-    setEmailDisplay,
-    setCode,
-    error,
-    submitting,
-    resendSeconds: remainingResendSeconds(now, snapshot.resendAvailableAt),
-    configured,
-    sendCode,
-    verifyCode,
-    changeEmail,
-    signOut,
-    draftStatus: getDraftSyncStatus,
-    synchronizeNow,
-    refreshBootstrap,
-    runOwnerRequest,
-    getSyncSessionDb: () => syncControllerRef.current?.getSession() ?? null,
-    pendingReplace,
-    rememberPendingReplace,
-    forgetPendingReplace,
-  };
+  const getSyncSessionDb = useCallback(() => syncControllerRef.current?.getSession() ?? null, []);
+  const resendSeconds = remainingResendSeconds(now, snapshot.resendAvailableAt);
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      snapshot,
+      bootstrap,
+      emailDisplay,
+      code,
+      setEmailDisplay,
+      setCode,
+      error,
+      submitting,
+      resendSeconds,
+      configured,
+      sendCode,
+      sendFreshGrantCode,
+      verifyCode,
+      verifyFreshGrantCode,
+      changeEmail,
+      signOut,
+      draftStatus: getDraftSyncStatus,
+      synchronizeNow,
+      refreshBootstrap,
+      runOwnerRequest,
+      getSyncSessionDb,
+      pendingReplace,
+      rememberPendingReplace,
+      forgetPendingReplace,
+    }),
+    [
+      snapshot,
+      bootstrap,
+      emailDisplay,
+      code,
+      error,
+      submitting,
+      resendSeconds,
+      configured,
+      sendCode,
+      sendFreshGrantCode,
+      verifyCode,
+      verifyFreshGrantCode,
+      changeEmail,
+      signOut,
+      synchronizeNow,
+      refreshBootstrap,
+      runOwnerRequest,
+      getSyncSessionDb,
+      pendingReplace,
+      rememberPendingReplace,
+      forgetPendingReplace,
+    ],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -60,12 +60,22 @@ function contactBody(values: CustomerFormValues): Record<string, unknown> {
   return body;
 }
 
+export const CUSTOMER_EMAIL_REQUIRED = "Enter an email address.";
+
 export function customerCreateFromForm(values: CustomerFormValues, id?: string) {
   const body = contactBody(values);
   if (id) {
     body.id = id;
   }
-  return parseCustomerCreate(body);
+  const parsed = parseCustomerCreate(body);
+  if (values.email.trim()) {
+    return parsed;
+  }
+  const field_errors = parsed.ok ? [] : parsed.field_errors.filter((item) => item.field !== "email");
+  return {
+    ok: false as const,
+    field_errors: [{ field: "email", message: CUSTOMER_EMAIL_REQUIRED }, ...field_errors],
+  };
 }
 
 export function customerPatchFromForm(values: CustomerFormValues, original: CustomerFormValues) {

@@ -1,11 +1,17 @@
-import { loadWorkerEnv, type LoadedEnv, type LoadedWorkerEnv } from "@job-to-invoice/config";
+import { networkInterfaces } from "node:os";
+import {
+  alignDevelopmentStorageEnv,
+  loadWorkerEnv,
+  type LoadedEnv,
+  type LoadedWorkerEnv,
+} from "@job-to-invoice/config";
 import { processGenerateOriginalPdf } from "./outbox.ts";
 import { processSendEmail } from "./email.ts";
 import { processBuildExport, processPurgeExports } from "./export.ts";
 import { processPurgeAccount } from "./purge.ts";
 import { renderQuoteOriginalPdf } from "./pdf.ts";
 import { createDocumentsObjectStore } from "./documents-store.ts";
-import { createWorkerPool, workerStageFromError } from "./db.ts";
+import { createWorkerPool, startWorkerPoolHeartbeat, warmWorkerPool, workerStageFromError } from "./db.ts";
 import { writeWorkerPdfEvent, type WorkerPdfStage } from "./worker-log.ts";
 
 export const WORKER_POLL_MS = 2_000;
@@ -91,7 +97,17 @@ function workerStore(env: LoadedWorkerEnv) {
   return createDocumentsObjectStore(env.documentsStorage);
 }
 
+export function localIPv4Addresses(): string[] {
+  return Object.values(networkInterfaces())
+    .flatMap((entries) => entries ?? [])
+    .filter((entry) => entry.family === "IPv4")
+    .map((entry) => entry.address);
+}
+
 export async function startWorker(): Promise<string> {
+  if (alignDevelopmentStorageEnv(process.env, { localAddresses: localIPv4Addresses() }).includes("endpoint_loopback")) {
+    console.info("worker storage endpoint uses loopback: configured private address is not assigned to this machine");
+  }
   const env = loadWorkerEnv();
   const status = workerStatus(env);
   if (process.env.WORKER_ONCE === "true") {
@@ -122,6 +138,11 @@ export async function startWorker(): Promise<string> {
         deadlineMs: env.databaseConnectDeadlineMs,
       })
     : undefined;
+  await Promise.all([warmWorkerPool(pool), purgePool ? warmWorkerPool(purgePool) : Promise.resolve(true)]);
+  startWorkerPoolHeartbeat(pool);
+  if (purgePool) {
+    startWorkerPoolHeartbeat(purgePool);
+  }
   const writeStage = (stage: WorkerPdfStage, sqlstate?: string) => writeWorkerPdfEvent({ stage, sqlstate });
   const apiKey = env.EMAIL_API_KEY;
   const fromDomain = env.EMAIL_FROM_DOMAIN;

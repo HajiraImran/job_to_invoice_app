@@ -5,6 +5,7 @@ import { copy } from "../i18n/en.ts";
 import { useAuth } from "../session/AuthProvider.tsx";
 import { colors, space, type } from "../theme.ts";
 import { type CatalogueItemRecord } from "./form.ts";
+import { activePickerItems, itemPickerPath } from "./presentation.ts";
 
 export function CatalogueItemPicker({
   visible,
@@ -30,16 +31,16 @@ export function CatalogueItemPicker({
     }
     setLoading(true);
     setError(undefined);
-    const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : "";
     const result = await runOwnerRequest<{ items: CatalogueItemRecord[] }>({
-      path: `/v1/items${query}`,
+      path: itemPickerPath(search),
     });
     setLoading(false);
     if (!result.ok) {
       setError(result.error.message);
+      setItems([]);
       return;
     }
-    setItems(result.data.items);
+    setItems(activePickerItems(result.data.items));
   }, [auth.snapshot.status, runOwnerRequest, search]);
 
   useEffect(() => {

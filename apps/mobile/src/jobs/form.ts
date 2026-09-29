@@ -20,14 +20,14 @@ export function emptyJobForm(): JobFormValues {
     customer_id: "",
     customer_name: "",
     title: "",
-    no_site: false,
+    no_site: true,
     line1: "",
     line2: "",
     city: "",
     state: "",
     postal_code: "",
     internal_notes: "",
-    mode: "",
+    mode: "quote",
   };
 }
 

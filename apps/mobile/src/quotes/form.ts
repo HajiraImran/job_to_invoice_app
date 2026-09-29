@@ -162,6 +162,28 @@ export function liveTotals(values: QuoteFormValues) {
   }
 }
 
+export function quoteTotalsBreakdown(values: QuoteFormValues) {
+  const live = liveTotals(values);
+  if (!live.ok) {
+    return live;
+  }
+  let grossCents = 0;
+  let discountCents = 0;
+  for (const line of live.totals.lines) {
+    grossCents += line.gross_cents;
+    discountCents += line.discount_cents;
+  }
+  return {
+    ok: true as const,
+    grossCents,
+    discountCents,
+    netCents: live.totals.net_cents,
+    taxCents: live.totals.tax_cents,
+    totalCents: live.totals.total_cents,
+    lines: live.totals.lines,
+  };
+}
+
 export function moveLine(lines: QuoteLineForm[], index: number, direction: -1 | 1): QuoteLineForm[] {
   const next = index + direction;
   if (next < 0 || next >= lines.length) {

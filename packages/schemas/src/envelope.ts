@@ -35,6 +35,8 @@ export const API_ERROR_CODES = {
   DUPLICATE_CUSTOMER_EMAIL: "DUPLICATE_CUSTOMER_EMAIL",
   CUSTOMER_REFERENCED: "CUSTOMER_REFERENCED",
   CUSTOMER_ARCHIVED: "CUSTOMER_ARCHIVED",
+  DATABASE_TIMEOUT: "DATABASE_TIMEOUT",
+  DATABASE_UNAVAILABLE: "DATABASE_UNAVAILABLE",
 } as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[keyof typeof API_ERROR_CODES];
@@ -106,6 +108,9 @@ export function httpStatusForCode(code: string): number {
       return 403;
     case API_ERROR_CODES.RATE_LIMITED:
       return 429;
+    case API_ERROR_CODES.DATABASE_TIMEOUT:
+    case API_ERROR_CODES.DATABASE_UNAVAILABLE:
+      return 503;
     default:
       return 500;
   }

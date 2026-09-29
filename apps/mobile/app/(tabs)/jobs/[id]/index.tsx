@@ -1,16 +1,29 @@
-import { formatUsdCents } from "@job-to-invoice/schemas";
+﻿import { formatUsdCents } from "@job-to-invoice/schemas";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
-import { changeStatusLabel } from "../../../../src/changes/presentation.ts";
-import { jobLifecycleActions, nextActionCopy, presentJobDetail, quoteLifecycleLabel, type JobDetail } from "../../../../src/jobs/presentation.ts";
+import { getCachedJob, upsertCachedJob } from "../../../../src/jobs/cache.ts";
+import {
+  jobLifecycleActions,
+  jobPermitsAction,
+  nextActionCopy,
+  presentCurrentStep,
+  presentJobActivity,
+  presentJobDetail,
+  presentJobDocuments,
+  presentModePill,
+  presentReceivableCents,
+  presentScopeTotalCents,
+  presentUpdatedLabel,
+  type JobDetail,
+} from "../../../../src/jobs/presentation.ts";
 import { createLinkedJobPath, jobQuotePath, jobPublishPath, jobRequestPath, jobInvoicePath, jobInvoiceDetailPath, jobInvoiceReplacePath, jobChangePath, jobReducePath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
 import { quoteActionLabel } from "../../../../src/quotes/presentation.ts";
 import { retainOrCreateSetupIdempotencyKey } from "../../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../../src/session/AuthProvider.tsx";
-import { colors, space, type } from "../../../../src/theme.ts";
+import { colors, type } from "../../../../src/theme.ts";
 
 export default function JobDetailScreen() {
   const auth = useAuth();
@@ -24,9 +37,19 @@ export default function JobDetailScreen() {
   const [opening, setOpening] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<{ message: string; retryable: boolean; status: number } | undefined>();
+  const [actionError, setActionError] = useState<{ message: string; retryable: boolean; status: number } | undefined>();
   const openKey = useRef<string | undefined>(undefined);
   const mutateKey = useRef<string | undefined>(undefined);
+  const jobRef = useRef<JobDetail | undefined>(undefined);
+  const authRef = useRef(auth);
+  authRef.current = auth;
+
+  const rememberJob = useCallback((next?: JobDetail) => {
+    jobRef.current = next;
+    setJob(next);
+  }, []);
 
   const load = useCallback(async () => {
     if (!jobId) {
@@ -34,20 +57,71 @@ export default function JobDetailScreen() {
       setError({ message: copy.jobNotFound, retryable: false, status: 404 });
       return;
     }
-    setLoading(true);
-    setError(undefined);
+    if (!jobRef.current) {
+      const session = authRef.current.getSyncSessionDb();
+      if (session) {
+        try {
+          const cached = await getCachedJob(session.db, jobId);
+          if (cached) {
+            rememberJob(JSON.parse(cached.payloadJson) as JobDetail);
+          }
+        } catch {
+          // A cache miss still falls through to the network load.
+        }
+      }
+    }
+    const refreshing = Boolean(jobRef.current);
+    if (!refreshing) {
+      setLoading(true);
+    }
     const result = await runOwnerRequest<JobDetail>({ path: `/v1/jobs/${jobId}` });
     if (result.ok) {
-      setJob(result.data);
-    } else {
-      setError({
-        message: result.error.status === 404 ? copy.jobNotFound : result.error.message || copy.jobLoadError,
-        retryable: result.error.retryable || result.error.status === 0,
-        status: result.error.status,
-      });
+      rememberJob(result.data);
+      setError(undefined);
+      setActionError(undefined);
+      setLoading(false);
+      const session = authRef.current.getSyncSessionDb();
+      if (session) {
+        void upsertCachedJob(session.db, {
+          jobId,
+          payloadJson: JSON.stringify(result.data),
+          listState: result.data.lifecycle,
+        }).catch(() => undefined);
+      }
+      return;
     }
+    if (!jobRef.current) {
+      const session = authRef.current.getSyncSessionDb();
+      if (session && (result.error.status === 0 || authRef.current.snapshot.status === "offline_cached")) {
+        try {
+          const cached = await getCachedJob(session.db, jobId);
+          if (cached) {
+            rememberJob(JSON.parse(cached.payloadJson) as JobDetail);
+            setError({
+              message: copy.offlineCached,
+              retryable: true,
+              status: 0,
+            });
+            setLoading(false);
+            return;
+          }
+        } catch {
+          // Fall through to the network error when the cache cannot be read.
+        }
+      }
+    }
+    setError({
+      message:
+        result.error.status === 404
+          ? copy.jobNotFound
+          : jobRef.current
+            ? copy.jobRefreshFailed
+            : result.error.message || copy.jobLoadError,
+      retryable: result.error.retryable || result.error.status === 0,
+      status: result.error.status,
+    });
     setLoading(false);
-  }, [jobId, runOwnerRequest]);
+  }, [jobId, rememberJob, runOwnerRequest]);
 
   useFocusEffect(
     useCallback(() => {
@@ -92,7 +166,7 @@ export default function JobDetailScreen() {
     if (result.error.code === "IDEMPOTENCY_MISMATCH") {
       openKey.current = retainOrCreateSetupIdempotencyKey(undefined);
     }
-    setError({
+    setActionError({
       message: result.error.message || copy.quoteLoadError,
       retryable: result.error.retryable || result.error.status === 0,
       status: result.error.status,
@@ -118,7 +192,7 @@ export default function JobDetailScreen() {
     if (result.error.code === "IDEMPOTENCY_MISMATCH") {
       mutateKey.current = retainOrCreateSetupIdempotencyKey(undefined);
     }
-    setError({
+    setActionError({
       message: result.error.message || copy.jobLifecycleActionError,
       retryable: result.error.retryable || result.error.status === 0,
       status: result.error.status,
@@ -131,7 +205,7 @@ export default function JobDetailScreen() {
     }
     const reason = cancelReason.trim();
     if (!reason) {
-      setError({ message: copy.cancelJobReason, retryable: false, status: 422 });
+      setActionError({ message: copy.cancelJobReason, retryable: false, status: 422 });
       return;
     }
     setMutating(true);
@@ -144,14 +218,15 @@ export default function JobDetailScreen() {
     });
     setMutating(false);
     if (result.ok) {
-      setJob(result.data);
+      rememberJob(result.data);
       setCancelReason("");
+      setMenuOpen(false);
       return;
     }
     if (result.error.code === "IDEMPOTENCY_MISMATCH") {
       mutateKey.current = retainOrCreateSetupIdempotencyKey(undefined);
     }
-    setError({
+    setActionError({
       message: result.error.message || copy.jobLifecycleActionError,
       retryable: result.error.retryable || result.error.status === 0,
       status: result.error.status,
@@ -163,7 +238,7 @@ export default function JobDetailScreen() {
       return;
     }
     if (auth.snapshot.status === "offline_cached") {
-      setError({ message: copy.archiveJobOffline, retryable: false, status: 0 });
+      setActionError({ message: copy.archiveJobOffline, retryable: false, status: 0 });
       return;
     }
     setMutating(true);
@@ -176,13 +251,13 @@ export default function JobDetailScreen() {
     });
     setMutating(false);
     if (result.ok) {
-      setJob(result.data);
+      rememberJob(result.data);
       return;
     }
     if (result.error.code === "IDEMPOTENCY_MISMATCH") {
       mutateKey.current = retainOrCreateSetupIdempotencyKey(undefined);
     }
-    setError({
+    setActionError({
       message: result.error.message || copy.jobLifecycleActionError,
       retryable: result.error.retryable || result.error.status === 0,
       status: result.error.status,
@@ -194,7 +269,7 @@ export default function JobDetailScreen() {
       return;
     }
     if (auth.snapshot.status === "offline_cached") {
-      setError({ message: copy.finishJobOffline, retryable: false, status: 0 });
+      setActionError({ message: copy.finishJobOffline, retryable: false, status: 0 });
       return;
     }
     setMutating(true);
@@ -207,169 +282,282 @@ export default function JobDetailScreen() {
     });
     setMutating(false);
     if (result.ok) {
-      setJob(result.data);
+      rememberJob(result.data);
       return;
     }
     if (result.error.code === "IDEMPOTENCY_MISMATCH") {
       mutateKey.current = retainOrCreateSetupIdempotencyKey(undefined);
     }
-    setError({
+    setActionError({
       message: result.error.message || copy.jobLifecycleActionError,
       retryable: result.error.retryable || result.error.status === 0,
       status: result.error.status,
     });
   }
 
-  return (
-    <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Text accessibilityRole="header" style={styles.title}>
-          {view.job?.title ?? copy.jobDetailTitle}
-        </Text>
-        {auth.snapshot.status === "offline_cached" ? (
-          <Text accessibilityLiveRegion="polite" style={styles.banner}>
-            {copy.offlineCached}
-          </Text>
-        ) : null}
+  const detail = view.job;
+  const step = detail ? presentCurrentStep(detail) : undefined;
+  const scopeCents = detail ? presentScopeTotalCents(detail) : null;
+  const receivableCents = detail ? presentReceivableCents(detail) : null;
+  const documents = detail ? presentJobDocuments(detail) : [];
+  const activity = detail ? presentJobActivity(detail) : [];
+  const quoteLabel =
+    opening
+      ? copy.quoteSaving
+      : detail?.current_quote && detail.current_quote.lifecycle !== "issued"
+        ? copy.createRevision
+        : quoteAction === "open"
+          ? copy.openQuote
+          : copy.createQuote;
+  const overflow = [
+    actions?.canDelete ? "delete" : "",
+    actions?.canCancel ? "cancel" : "",
+    actions?.canFinish ? "finish" : "",
+    actions?.canArchive ? "archive" : "",
+    actions?.canRestore ? "restore" : "",
+    actions?.canCreateLinked && next !== "none" ? "linked" : "",
+  ].filter(Boolean);
+  const siteLines = detail
+    ? detail.no_site || !detail.site_address
+      ? null
+      : [
+          detail.site_address.line1,
+          detail.site_address.line2,
+          `${detail.site_address.city}, ${detail.site_address.state} ${detail.site_address.postal_code}`,
+        ].filter(Boolean)
+    : null;
 
-        {view.kind === "loading" ? <ActivityIndicator color={colors.navy} /> : null}
+  function goBack() {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace(jobsIndexPath());
+  }
+
+  function openDocument(action: "quote" | "request" | "invoice" | "change", targetId?: string) {
+    if (action === "quote") {
+      router.push(jobPublishPath(jobId));
+      return;
+    }
+    if (action === "request") {
+      router.push(jobRequestPath(jobId));
+      return;
+    }
+    if (action === "change") {
+      router.push(jobChangePath(jobId));
+      return;
+    }
+    if (targetId) {
+      router.push(jobInvoiceDetailPath(jobId, targetId));
+    }
+  }
+
+  return (
+    <View style={[styles.screen, { paddingTop: insets.top }]}>
+      <View pointerEvents="none" style={styles.atmosphere} />
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <View style={styles.headerRow}>
+          <Pressable
+            accessibilityLabel={copy.jobBack}
+            accessibilityRole="button"
+            hitSlop={4}
+            onPress={goBack}
+            style={styles.iconButton}
+          >
+            <Text style={styles.iconGlyph}>{"\u2039"}</Text>
+          </Pressable>
+          {overflow.length > 0 ? (
+            <Pressable
+              accessibilityLabel={copy.jobMoreActions}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: mutating, expanded: menuOpen }}
+              disabled={mutating}
+              hitSlop={4}
+              onPress={() => setMenuOpen(true)}
+              style={styles.iconButton}
+            >
+              <Text style={styles.moreGlyph}>...</Text>
+            </Pressable>
+          ) : (
+            <View style={styles.iconSpacer} />
+          )}
+        </View>
+
+        {view.kind === "loading" ? (
+          <View accessibilityLabel={copy.jobDetailTitle} accessibilityRole="progressbar">
+            <View style={styles.skeletonLine} />
+            <View style={styles.skeletonTitle} />
+            <View style={styles.skeletonCard} />
+            <View style={styles.skeletonCard} />
+          </View>
+        ) : null}
 
         {view.kind === "error" || view.kind === "offline" ? (
-          <>
-            <Text accessibilityLiveRegion="polite" style={styles.error}>
-              {view.message ?? copy.jobLoadError}
-            </Text>
-            {view.showRetry ? (
-              <Pressable accessibilityRole="button" onPress={() => void load()} style={styles.secondary}>
-                <Text style={styles.secondaryLabel}>{copy.retry}</Text>
-              </Pressable>
-            ) : null}
-          </>
+          <Text accessibilityLiveRegion="polite" style={styles.error}>
+            {view.message ?? copy.jobLoadError}
+          </Text>
         ) : null}
-
         {view.kind === "missing" || view.kind === "access_expired" ? (
           <Text accessibilityLiveRegion="polite" style={styles.error}>
             {view.kind === "access_expired" ? copy.accessExpired : copy.jobNotFound}
           </Text>
         ) : null}
+        {(view.kind === "error" || view.kind === "offline") && view.showRetry ? (
+          <Pressable accessibilityRole="button" onPress={() => void load()} style={styles.secondary}>
+            <Text style={styles.secondaryLabel}>{copy.retry}</Text>
+          </Pressable>
+        ) : null}
 
-        {view.job ? (
+        {detail && step ? (
           <>
-            <Text style={styles.section}>{copy.jobCurrentStep}</Text>
-            <Text style={styles.body}>{lifecycleLabel(view.job.lifecycle)}</Text>
-            <Text style={styles.section}>{copy.customerName}</Text>
-            <Text style={styles.body}>{view.job.customer_name}</Text>
-            <Text style={styles.section}>{copy.jobSite}</Text>
-            <Text style={styles.body}>
-              {view.job.no_site || !view.job.site_address
-                ? copy.noSiteAddress
-                : [
-                    view.job.site_address.line1,
-                    view.job.site_address.line2,
-                    `${view.job.site_address.city}, ${view.job.site_address.state} ${view.job.site_address.postal_code}`,
-                  ]
-                    .filter(Boolean)
-                    .join("\n")}
+            <Text style={styles.eyebrow}>{copy.jobOverviewEyebrow}</Text>
+            <Text accessibilityRole="header" style={styles.title}>
+              {detail.title}
             </Text>
-            <Text style={styles.section}>{copy.jobMode}</Text>
-            <Text style={styles.body}>{view.job.mode === "direct_invoice" ? copy.modeDirect : copy.modeQuote}</Text>
-            {view.job.quote_draft ? (
+            <View style={styles.metaRow}>
+              <View style={styles.pills}>
+                <Text style={[styles.pill, pillTone(detail.lifecycle)]}>{lifecycleLabel(detail.lifecycle)}</Text>
+                <Text style={styles.modePill}>{presentModePill(detail)}</Text>
+              </View>
+              <Text style={styles.updated}>{presentUpdatedLabel(detail.updated_at)}</Text>
+            </View>
+            {auth.snapshot.status === "offline_cached" ? (
+              <Text accessibilityLiveRegion="polite" style={styles.banner}>
+                {copy.offlineCached}
+              </Text>
+            ) : null}
+            {loading ? (
+              <Text accessibilityLiveRegion="polite" style={styles.updated}>
+                {copy.jobRefreshing}
+              </Text>
+            ) : null}
+            {view.refreshFailed ? (
+              <View accessibilityLiveRegion="polite">
+                <Text style={styles.error}>{view.message}</Text>
+                {view.showRetry ? (
+                  <Pressable accessibilityRole="button" onPress={() => void load()} style={styles.secondary}>
+                    <Text style={styles.secondaryLabel}>{copy.retry}</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
+            {actionError ? (
+              <Text accessibilityLiveRegion="assertive" style={styles.error}>
+                {actionError.message}
+              </Text>
+            ) : null}
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={detail.customer_name}
+              onPress={() => router.push(`/(tabs)/customers/${detail.customer_id}`)}
+              style={styles.infoCard}
+            >
+              <View style={styles.infoIcon}>
+                <View style={styles.personMark} />
+              </View>
+              <View style={styles.infoCopy}>
+                <Text style={styles.infoTitle}>{detail.customer_name}</Text>
+              </View>
+              <Text style={styles.chevron}>{"\u203A"}</Text>
+            </Pressable>
+            <View accessibilityLabel={copy.jobSite} style={styles.infoCard}>
+              <View style={styles.infoIcon}>
+                <View style={styles.siteMark} />
+              </View>
+              <View style={styles.infoCopy}>
+                <Text style={styles.infoTitle}>{siteLines ? siteLines[0] : copy.noSiteAddress}</Text>
+                <Text style={styles.infoMeta}>{siteLines ? siteLines.slice(1).join("\n") : copy.jobNoSiteHint}</Text>
+              </View>
+            </View>
+
+            <Text accessibilityRole="header" style={styles.section}>
+              {copy.jobOverview}
+            </Text>
+            <View style={styles.metricRow}>
+              {scopeCents === null ? null : (
+                <View style={styles.metricCard}>
+                  <Text style={styles.metricLabel}>{copy.jobScopeTotal}</Text>
+                  <Text style={styles.metricValue}>{formatUsdCents(scopeCents)}</Text>
+                </View>
+              )}
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>{copy.jobCurrentStep}</Text>
+                <Text style={[styles.stepValue, stepTone(step.tone)]}>{step.label}</Text>
+              </View>
+            </View>
+            {receivableCents !== null ? (
+              <View style={styles.metricCard}>
+                <Text style={styles.metricLabel}>{copy.canceledReceivable}</Text>
+                <Text style={styles.metricValue}>{formatUsdCents(receivableCents)}</Text>
+              </View>
+            ) : null}
+            {detail.lifecycle === "canceled" ? <Text style={styles.banner}>{copy.linkedJobHint}</Text> : null}
+            {detail.internal_notes ? (
               <>
-                <Text style={styles.section}>{copy.quoteTotal}</Text>
-                <Text style={styles.body}>{formatUsdCents(view.job.quote_draft.total_cents)}</Text>
+                <Text style={styles.metricLabel}>{copy.internalNotes}</Text>
+                <Text style={styles.infoMeta}>{detail.internal_notes}</Text>
               </>
             ) : null}
-            {view.job.invoice_draft ? (
-              <>
-                <Text style={styles.section}>{copy.quoteTotal}</Text>
-                <Text style={styles.body}>{formatUsdCents(view.job.invoice_draft.total_cents)}</Text>
-              </>
-            ) : null}
-            {view.job.internal_notes ? (
-              <>
-                <Text style={styles.section}>{copy.internalNotes}</Text>
-                <Text style={styles.body}>{view.job.internal_notes}</Text>
-              </>
-            ) : null}
-            {next === "quote" ? <Text style={styles.banner}>{copy.jobNextDraftQuote}</Text> : null}
-            {next === "direct" ? <Text style={styles.banner}>{copy.jobNextDraftDirect}</Text> : null}
-            {next === "published" ? <Text style={styles.banner}>{copy.jobNextPublished}</Text> : null}
-            {next === "invoice" ? <Text style={styles.banner}>{copy.jobNextInvoice}</Text> : null}
-            {next === "view_invoice" ? <Text style={styles.banner}>{copy.jobNextViewInvoice}</Text> : null}
-            {next === "replace_invoice" ? <Text style={styles.banner}>{copy.jobNextReplaceInvoice}</Text> : null}
+
             {next === "quote" ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ disabled: quoteDisabled }}
-                disabled={quoteDisabled}
-                onPress={() => void openQuote()}
-                style={styles.primary}
-              >
-                <Text style={styles.primaryLabel}>
-                  {opening
-                    ? copy.quoteSaving
-                    : view.job?.current_quote && view.job.current_quote.lifecycle !== "issued"
-                      ? copy.createRevision
-                      : quoteAction === "open"
-                        ? copy.openQuote
-                        : copy.createQuote}
-                </Text>
-              </Pressable>
-            ) : null}
-            {next === "invoice" && view.job?.permitted_actions.includes("create_change") ? (
-              <>
+              <View style={styles.actionPanel}>
+                <Text style={styles.actionTitle}>{quoteAction === "open" ? copy.openQuote : copy.jobCreateTheQuote}</Text>
+                <Text style={styles.actionHint}>{copy.jobCreateQuoteHint}</Text>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={copy.extraWork}
-                  onPress={() => router.push(jobChangePath(jobId))}
-                  style={styles.secondary}
+                  accessibilityState={{ disabled: quoteDisabled, busy: opening }}
+                  disabled={quoteDisabled}
+                  onPress={() => void openQuote()}
+                  style={[styles.primary, quoteDisabled ? styles.disabled : null]}
                 >
-                  <Text style={styles.secondaryLabel}>{copy.extraWork}</Text>
+                  <Text style={styles.primaryLabel}>{quoteLabel}</Text>
                 </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={copy.reduceScope}
-                  onPress={() => router.push(jobReducePath(jobId))}
-                  style={styles.secondary}
-                >
-                  <Text style={styles.secondaryLabel}>{copy.reduceScope}</Text>
-                </Pressable>
-              </>
-            ) : null}
-            {view.job?.latest_change ? (
-              <>
-                <Text style={styles.section}>{view.job.latest_change.number}</Text>
-                <Text style={styles.body}>
-                  {changeStatusLabel(view.job.latest_change.lifecycle, view.job.latest_change.request_state)}
-                </Text>
-              </>
+              </View>
             ) : null}
             {next === "direct" ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={copy.createInvoice}
-                accessibilityState={{ disabled: quoteDisabled }}
-                disabled={quoteDisabled}
-                onPress={() => router.push(jobInvoicePath(jobId))}
-                style={styles.primary}
-              >
-                <Text style={styles.primaryLabel}>{copy.createInvoice}</Text>
-              </Pressable>
+              <View style={styles.actionPanel}>
+                <Text style={styles.actionTitle}>{copy.createInvoice}</Text>
+                <Text style={styles.actionHint}>{copy.jobCreateInvoiceHint}</Text>
+                <Pressable
+                  accessibilityLabel={copy.createInvoice}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: quoteDisabled }}
+                  disabled={quoteDisabled}
+                  onPress={() => router.push(jobInvoicePath(jobId))}
+                  style={[styles.primary, quoteDisabled ? styles.disabled : null]}
+                >
+                  <Text style={styles.primaryLabel}>{copy.createInvoice}</Text>
+                </Pressable>
+              </View>
             ) : null}
             {next === "invoice" ? (
               <Pressable
-                accessibilityRole="button"
                 accessibilityLabel={copy.createInvoice}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: quoteDisabled }}
+                disabled={quoteDisabled}
                 onPress={() => router.push(jobInvoicePath(jobId))}
-                style={styles.primary}
+                style={[styles.primary, quoteDisabled ? styles.disabled : null]}
               >
                 <Text style={styles.primaryLabel}>{copy.createInvoice}</Text>
               </Pressable>
             ) : null}
+            {next === "invoice" && jobPermitsAction(detail, "create_change") ? (
+              <View style={styles.pair}>
+                <Pressable accessibilityRole="button" onPress={() => router.push(jobChangePath(jobId))} style={styles.secondary}>
+                  <Text style={styles.secondaryLabel}>{copy.extraWork}</Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" onPress={() => router.push(jobReducePath(jobId))} style={styles.secondary}>
+                  <Text style={styles.secondaryLabel}>{copy.reduceScope}</Text>
+                </Pressable>
+              </View>
+            ) : null}
             {next === "view_invoice" && activeInvoice ? (
               <Pressable
-                accessibilityRole="button"
                 accessibilityLabel={copy.viewInvoice}
+                accessibilityRole="button"
                 onPress={() => router.push(jobInvoiceDetailPath(jobId, activeInvoice.id))}
                 style={styles.primary}
               >
@@ -379,52 +567,112 @@ export default function JobDetailScreen() {
             {next === "replace_invoice" && latestInvoice ? (
               <>
                 <Pressable
-                  accessibilityRole="button"
                   accessibilityLabel={copy.viewInvoice}
+                  accessibilityRole="button"
                   onPress={() => router.push(jobInvoiceDetailPath(jobId, latestInvoice.id))}
                   style={styles.secondary}
                 >
                   <Text style={styles.secondaryLabel}>{copy.viewInvoice}</Text>
                 </Pressable>
                 <Pressable
-                  accessibilityRole="button"
                   accessibilityLabel={copy.invoiceReplace}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: quoteDisabled }}
+                  disabled={quoteDisabled}
                   onPress={() => router.push(jobInvoiceReplacePath(jobId, latestInvoice.id))}
-                  style={styles.primary}
+                  style={[styles.primary, quoteDisabled ? styles.disabled : null]}
                 >
                   <Text style={styles.primaryLabel}>{copy.invoiceReplace}</Text>
                 </Pressable>
               </>
             ) : null}
-            {actions?.showReceivable ? <Text style={styles.banner}>{copy.canceledReceivable}</Text> : null}
-            {view.job?.lifecycle === "canceled" ? <Text style={styles.banner}>{copy.linkedJobHint}</Text> : null}
+            {actions?.canCreateLinked && next === "none" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: quoteDisabled }}
+                disabled={quoteDisabled}
+                onPress={() => router.push(createLinkedJobPath(jobId))}
+                style={[styles.primary, quoteDisabled ? styles.disabled : null]}
+              >
+                <Text style={styles.primaryLabel}>{copy.createLinkedJob}</Text>
+              </Pressable>
+            ) : null}
+
+            <Text accessibilityRole="header" style={styles.section}>
+              {copy.jobDocuments}
+            </Text>
+            {documents.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Text style={styles.infoTitle}>{copy.jobDocumentsEmpty}</Text>
+                <Text style={styles.infoMeta}>
+                  {detail.mode === "direct_invoice" ? copy.jobDocumentsEmptyDirect : copy.jobDocumentsEmptyHint}
+                </Text>
+              </View>
+            ) : (
+              documents.map((row) => (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${row.title}. ${row.subtitle}`}
+                  key={row.key}
+                  onPress={() => openDocument(row.action, row.targetId)}
+                  style={styles.docCard}
+                >
+                  <View style={styles.infoCopy}>
+                    <Text style={styles.infoTitle}>{row.title}</Text>
+                    <Text style={styles.infoMeta}>{row.subtitle}</Text>
+                  </View>
+                  <Text style={styles.chevron}>{"\u203A"}</Text>
+                </Pressable>
+              ))
+            )}
+
+            <Text accessibilityRole="header" style={styles.section}>
+              {copy.jobActivity}
+            </Text>
+            {activity.map((row) => (
+              <View key={row.key} style={styles.activityRow}>
+                <View style={styles.activityDot} />
+                <View style={styles.infoCopy}>
+                  <Text style={styles.infoTitle}>{row.title}</Text>
+                  <Text style={styles.infoMeta}>{new Date(row.at).toLocaleString()}</Text>
+                </View>
+              </View>
+            ))}
+          </>
+        ) : null}
+      </ScrollView>
+
+      <Modal animationType="slide" onRequestClose={() => setMenuOpen(false)} transparent visible={menuOpen}>
+        <Pressable accessibilityLabel={copy.jobCloseActions} onPress={() => setMenuOpen(false)} style={styles.scrim}>
+          <Pressable accessibilityViewIsModal style={styles.sheet} onPress={() => undefined}>
+            <Text accessibilityRole="header" style={styles.actionTitle}>
+              {copy.jobMoreActions}
+            </Text>
+            {actionError ? (
+              <Text accessibilityLiveRegion="assertive" style={styles.error}>
+                {actionError.message}
+              </Text>
+            ) : null}
             {actions?.canDelete ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityState={{ disabled: lifecycleDisabled }}
                 disabled={lifecycleDisabled}
                 onPress={() => {
-                  if (auth.snapshot.status === "offline_cached") {
-                    setError({ message: copy.deleteJobOffline, retryable: false, status: 0 });
-                    return;
-                  }
+                  setMenuOpen(false);
                   Alert.alert(copy.deleteDraftTitle, copy.deleteDraftConfirm, [
                     { text: copy.keepJob, style: "cancel" },
                     { text: copy.deleteDraft, style: "destructive", onPress: () => void deleteDraft() },
                   ]);
                 }}
-                style={styles.secondary}
+                style={styles.sheetAction}
               >
-                <Text style={styles.secondaryLabel}>{mutating ? copy.jobWorking : copy.deleteDraft}</Text>
+                <Text style={styles.destructive}>{copy.deleteDraft}</Text>
               </Pressable>
             ) : null}
             {actions?.canCancel ? (
-              <>
+              <View>
                 <Text style={styles.banner}>{copy.cancelJobNotice}</Text>
-                {auth.snapshot.status === "offline_cached" ? (
-                  <Text style={styles.banner}>{copy.cancelJobOffline}</Text>
-                ) : null}
-                <Text style={styles.section}>{copy.cancelJobReason}</Text>
                 <TextInput
                   accessibilityLabel={copy.cancelJobReason}
                   editable={!lifecycleDisabled}
@@ -435,112 +683,82 @@ export default function JobDetailScreen() {
                 />
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityState={{ disabled: lifecycleDisabled }}
+                  accessibilityState={{ disabled: lifecycleDisabled, busy: mutating }}
                   disabled={lifecycleDisabled}
                   onPress={() => void cancelJob()}
-                  style={styles.secondary}
+                  style={styles.sheetAction}
                 >
-                  <Text style={styles.secondaryLabel}>{mutating ? copy.jobWorking : copy.cancelJobConfirm}</Text>
+                  <Text style={styles.destructive}>{mutating ? copy.jobWorking : copy.cancelJobConfirm}</Text>
                 </Pressable>
-              </>
-            ) : null}
-            {actions?.canCreateLinked ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => router.push(createLinkedJobPath(jobId))}
-                style={styles.primary}
-              >
-                <Text style={styles.primaryLabel}>{copy.createLinkedJob}</Text>
-              </Pressable>
+              </View>
             ) : null}
             {actions?.canFinish ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityState={{ disabled: lifecycleDisabled }}
+                accessibilityState={{ disabled: lifecycleDisabled, busy: mutating }}
                 disabled={lifecycleDisabled}
                 onPress={() => {
-                  if (auth.snapshot.status === "offline_cached") {
-                    setError({ message: copy.finishJobOffline, retryable: false, status: 0 });
-                    return;
-                  }
+                  setMenuOpen(false);
                   Alert.alert(copy.finishJobTitle, copy.finishJobConfirm, [
                     { text: copy.keepJob, style: "cancel" },
                     { text: copy.finishJob, onPress: () => void finishJob() },
                   ]);
                 }}
-                style={styles.primary}
+                style={styles.sheetAction}
               >
-                <Text style={styles.primaryLabel}>{mutating ? copy.jobWorking : copy.finishJob}</Text>
+                <Text style={styles.sheetLabel}>{copy.finishJob}</Text>
               </Pressable>
             ) : null}
             {actions?.canArchive ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityState={{ disabled: lifecycleDisabled }}
                 disabled={lifecycleDisabled}
                 onPress={() => {
-                  if (auth.snapshot.status === "offline_cached") {
-                    setError({ message: copy.archiveJobOffline, retryable: false, status: 0 });
-                    return;
-                  }
+                  setMenuOpen(false);
                   Alert.alert(copy.archiveJobTitle, copy.archiveJobConfirm, [
                     { text: copy.keepJob, style: "cancel" },
                     { text: copy.archiveJob, onPress: () => void archiveJob(true) },
                   ]);
                 }}
-                style={styles.secondary}
+                style={styles.sheetAction}
               >
-                <Text style={styles.secondaryLabel}>{mutating ? copy.jobWorking : copy.archiveJob}</Text>
+                <Text style={styles.sheetLabel}>{copy.archiveJob}</Text>
               </Pressable>
             ) : null}
             {actions?.canRestore ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityState={{ disabled: lifecycleDisabled }}
                 disabled={lifecycleDisabled}
                 onPress={() => {
-                  if (auth.snapshot.status === "offline_cached") {
-                    setError({ message: copy.archiveJobOffline, retryable: false, status: 0 });
-                    return;
-                  }
+                  setMenuOpen(false);
                   Alert.alert(copy.restoreJobTitle, copy.restoreJobConfirm, [
                     { text: copy.keepJob, style: "cancel" },
                     { text: copy.restoreJob, onPress: () => void archiveJob(false) },
                   ]);
                 }}
-                style={styles.primary}
+                style={styles.sheetAction}
               >
-                <Text style={styles.primaryLabel}>{mutating ? copy.jobWorking : copy.restoreJob}</Text>
+                <Text style={styles.sheetLabel}>{copy.restoreJob}</Text>
               </Pressable>
             ) : null}
-            {view.job?.current_quote ? (
-              <>
-                <Text style={styles.section}>{copy.quoteNumber}</Text>
-                <Text style={styles.body}>{view.job.current_quote.number}</Text>
-                <Text style={styles.body}>{quoteLifecycleLabel(view.job.current_quote.lifecycle)}</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => router.push(jobPublishPath(jobId))}
-                  style={styles.primary}
-                >
-                  <Text style={styles.primaryLabel}>{copy.viewPublishedQuote}</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => router.push(jobRequestPath(jobId))}
-                  style={styles.secondary}
-                >
-                  <Text style={styles.secondaryLabel}>{copy.viewRequestStatus}</Text>
-                </Pressable>
-              </>
+            {actions?.canCreateLinked && next !== "none" ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setMenuOpen(false);
+                  router.push(createLinkedJobPath(jobId));
+                }}
+                style={styles.sheetAction}
+              >
+                <Text style={styles.sheetLabel}>{copy.createLinkedJob}</Text>
+              </Pressable>
             ) : null}
-          </>
-        ) : null}
-
-        <Pressable accessibilityRole="button" onPress={() => router.replace(jobsIndexPath())} style={styles.secondary}>
-          <Text style={styles.secondaryLabel}>{copy.back}</Text>
+            <Pressable accessibilityRole="button" onPress={() => setMenuOpen(false)} style={styles.secondary}>
+              <Text style={styles.secondaryLabel}>{copy.keepJob}</Text>
+            </Pressable>
+          </Pressable>
         </Pressable>
-      </ScrollView>
+      </Modal>
     </View>
   );
 }
@@ -562,39 +780,185 @@ function lifecycleLabel(lifecycle: string): string {
   }
 }
 
+function pillTone(lifecycle: string) {
+  if (lifecycle === "canceled") {
+    return { backgroundColor: "#F8E8E8", color: colors.danger };
+  }
+  if (lifecycle === "finished" || lifecycle === "invoiced") {
+    return { backgroundColor: "#E7F8F3", color: "#1FBC96" };
+  }
+  if (lifecycle === "active") {
+    return { backgroundColor: "#E7F8F3", color: "#1FBC96" };
+  }
+  return { backgroundColor: "#FFF7E6", color: "#C58427" };
+}
+
+function stepTone(tone: "draft" | "ready" | "attention" | "neutral") {
+  if (tone === "ready") {
+    return { color: "#1FBC96" };
+  }
+  if (tone === "attention") {
+    return { color: colors.danger };
+  }
+  if (tone === "draft") {
+    return { color: "#464B71" };
+  }
+  return { color: colors.text };
+}
+
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
-  content: { padding: space.gutter, gap: space.scale, paddingBottom: 48 },
-  title: { color: colors.text, fontSize: type.screen, fontWeight: "700" },
-  section: { color: colors.text, fontSize: type.section, fontWeight: "600", marginTop: space.scale },
-  body: { color: colors.text, fontSize: type.body },
-  banner: { color: colors.navy, fontSize: type.secondary },
-  error: { color: colors.danger, fontSize: type.secondary },
-  primary: {
-    minHeight: 48,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: space.radius,
-    backgroundColor: colors.navy,
-    marginTop: space.gutter,
+  screen: { flex: 1, backgroundColor: "#F7F8FA" },
+  atmosphere: {
+    position: "absolute",
+    top: -80,
+    right: -70,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    backgroundColor: "#E4EAF6",
   },
-  primaryLabel: { color: "#FFFFFF", fontSize: type.body, fontWeight: "700" },
-  secondary: {
-    minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: space.radius,
+  content: { padding: 20, gap: 12, paddingBottom: 48 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  iconButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: colors.navy,
-    marginTop: space.gutter,
+    borderColor: "#D5DCE3",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  secondaryLabel: { color: colors.navy, fontSize: type.body, fontWeight: "600" },
+  iconSpacer: { width: 48, height: 48 },
+  iconGlyph: { color: colors.text, fontSize: 28, lineHeight: 32, marginTop: -2 },
+  moreGlyph: { color: colors.text, fontSize: 18, letterSpacing: 1, fontWeight: "700" },
+  eyebrow: { color: "#464B71", fontSize: 11, fontWeight: "600", letterSpacing: 0.6, marginTop: 8 },
+  title: { color: "#17212B", fontSize: 27, lineHeight: 34, fontWeight: "700" },
+  metaRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  pills: { flexDirection: "row", flexWrap: "wrap", gap: 8, flex: 1 },
+  pill: { overflow: "hidden", borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6, fontSize: 12, fontWeight: "600" },
+  modePill: {
+    overflow: "hidden",
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 12,
+    fontWeight: "600",
+    backgroundColor: "#EDEEF6",
+    color: "#464B71",
+  },
+  updated: { color: "#52606D", fontSize: 11, flexShrink: 1, textAlign: "right" },
+  infoCard: {
+    minHeight: 66,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#D5DCE3",
+    backgroundColor: "#FFFFFF",
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  infoIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#EDEEF6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  personMark: { width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: "#464B71" },
+  siteMark: { width: 12, height: 12, borderRadius: 2, backgroundColor: "#464B71" },
+  infoCopy: { flex: 1, gap: 2 },
+  infoTitle: { color: "#17212B", fontSize: 14, fontWeight: "600" },
+  infoMeta: { color: "#52606D", fontSize: 12 },
+  chevron: { color: "#52606D", fontSize: 22 },
+  section: { color: "#17212B", fontSize: 16, fontWeight: "600", marginTop: 8 },
+  metricRow: { flexDirection: "row", gap: 12 },
+  metricCard: {
+    flex: 1,
+    minHeight: 76,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#D5DCE3",
+    backgroundColor: "#FFFFFF",
+    padding: 12,
+    justifyContent: "center",
+    gap: 4,
+  },
+  metricLabel: { color: "#52606D", fontSize: 11, fontWeight: "500" },
+  metricValue: { color: "#17212B", fontSize: 20, fontWeight: "700" },
+  stepValue: { fontSize: 16, fontWeight: "600" },
+  actionPanel: { backgroundColor: "#EDEEF6", borderRadius: 18, padding: 14, gap: 8 },
+  actionTitle: { color: "#17212B", fontSize: 16, fontWeight: "600" },
+  actionHint: { color: "#52606D", fontSize: 12 },
+  primary: {
+    minHeight: 56,
+    borderRadius: 16,
+    backgroundColor: "#464B71",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  primaryLabel: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  secondary: {
+    minHeight: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#D5DCE3",
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  secondaryLabel: { color: "#464B71", fontSize: 15, fontWeight: "600" },
+  pair: { gap: 8 },
+  disabled: { opacity: 0.5 },
+  emptyCard: {
+    minHeight: 70,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#D5DCE3",
+    backgroundColor: "#FFFFFF",
+    padding: 14,
+    gap: 4,
+  },
+  docCard: {
+    minHeight: 64,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#D5DCE3",
+    backgroundColor: "#FFFFFF",
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  activityRow: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 44 },
+  activityDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#1FBC96" },
+  banner: { color: "#464B71", fontSize: type.secondary },
+  error: { color: colors.danger, fontSize: type.secondary },
+  skeletonLine: { height: 14, width: 120, borderRadius: 7, backgroundColor: "#E6EAF0" },
+  skeletonTitle: { height: 28, width: "70%", borderRadius: 8, backgroundColor: "#E6EAF0", marginTop: 12 },
+  skeletonCard: { height: 72, borderRadius: 16, backgroundColor: "#E6EAF0", marginTop: 12 },
+  scrim: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(18,30,43,0.38)" },
+  sheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    gap: 8,
+    paddingBottom: 32,
+  },
+  sheetAction: { minHeight: 48, justifyContent: "center" },
+  sheetLabel: { color: "#17212B", fontSize: 16, fontWeight: "600" },
+  destructive: { color: colors.danger, fontSize: 16, fontWeight: "700" },
   input: {
     minHeight: 88,
     borderWidth: 1,
-    borderColor: colors.navy,
-    borderRadius: space.radius,
-    padding: space.scale,
+    borderColor: "#D5DCE3",
+    borderRadius: 16,
+    padding: 12,
     color: colors.text,
     fontSize: type.body,
     textAlignVertical: "top",

@@ -135,3 +135,126 @@ export function endOfLocalDateUtc(isoDate: string, timeZone: string): Date {
   const parts = isoDate.split("-");
   return wallTimeToUtc(timeZone, Number(parts[0]), Number(parts[1]), Number(parts[2]), 23, 59, 59);
 }
+
+/** Curated IANA identifiers for runtimes without `Intl.supportedValuesOf`. */
+export const CURATED_TIMEZONES = [
+  ...US_TIMEZONES,
+  "UTC",
+  "America/Toronto",
+  "America/Vancouver",
+  "America/Mexico_City",
+  "America/Sao_Paulo",
+  "America/Argentina/Buenos_Aires",
+  "Atlantic/Reykjavik",
+  "Europe/London",
+  "Europe/Dublin",
+  "Europe/Lisbon",
+  "Europe/Paris",
+  "Europe/Berlin",
+  "Europe/Madrid",
+  "Europe/Rome",
+  "Europe/Amsterdam",
+  "Europe/Warsaw",
+  "Europe/Athens",
+  "Europe/Istanbul",
+  "Africa/Cairo",
+  "Africa/Johannesburg",
+  "Africa/Lagos",
+  "Asia/Jerusalem",
+  "Asia/Riyadh",
+  "Asia/Dubai",
+  "Asia/Karachi",
+  "Asia/Kolkata",
+  "Asia/Dhaka",
+  "Asia/Bangkok",
+  "Asia/Singapore",
+  "Asia/Hong_Kong",
+  "Asia/Shanghai",
+  "Asia/Taipei",
+  "Asia/Seoul",
+  "Asia/Tokyo",
+  "Australia/Perth",
+  "Australia/Adelaide",
+  "Australia/Sydney",
+  "Pacific/Auckland",
+  "Pacific/Fiji",
+] as const;
+
+function readIntlTimeZones(): string[] {
+  const supported = (Intl as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf;
+  if (typeof supported !== "function") {
+    return [];
+  }
+  try {
+    return supported.call(Intl, "timeZone").filter((zone) => isValidIanaTimeZone(zone));
+  } catch {
+    return [];
+  }
+}
+
+export function listTimeZones(extra: readonly string[] = []): string[] {
+  const runtime = readIntlTimeZones();
+  const merged = new Set<string>(runtime.length > 0 ? runtime : CURATED_TIMEZONES);
+  for (const zone of extra) {
+    if (zone && isValidIanaTimeZone(zone)) {
+      merged.add(zone);
+    }
+  }
+  return [...merged].sort((left, right) => left.localeCompare(right));
+}
+
+export function timeZoneCityLabel(timeZone: string): string {
+  const city = timeZone.split("/").pop() ?? timeZone;
+  return city.replace(/_/g, " ");
+}
+
+export function formatUtcOffset(timeZone: string, at: Date = new Date()): string {
+  if (!isValidIanaTimeZone(timeZone)) {
+    return "UTC+00:00";
+  }
+  const parts = zoneParts(at, timeZone);
+  const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  const totalMinutes = Math.round((asUtc - at.getTime()) / 60_000);
+  const sign = totalMinutes >= 0 ? "+" : "-";
+  const absolute = Math.abs(totalMinutes);
+  const hours = String(Math.trunc(absolute / 60)).padStart(2, "0");
+  const minutes = String(absolute % 60).padStart(2, "0");
+  return `UTC${sign}${hours}:${minutes}`;
+}
+
+export function formatTimeZoneOption(timeZone: string, at: Date = new Date()): string {
+  return `${timeZone} (${formatUtcOffset(timeZone, at)})`;
+}
+
+export function filterTimeZones(zones: readonly string[], query: string, at: Date = new Date()): string[] {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) {
+    return [...zones];
+  }
+  return zones.filter((zone) => {
+    return (
+      zone.toLowerCase().includes(needle) ||
+      timeZoneCityLabel(zone).toLowerCase().includes(needle) ||
+      formatUtcOffset(zone, at).toLowerCase().includes(needle)
+    );
+  });
+}
+
+export function suggestedBusinessTimeZone(saved?: string, detected?: string | null): string {
+  const trimmed = saved?.trim() ?? "";
+  if (trimmed && isValidIanaTimeZone(trimmed)) {
+    return trimmed;
+  }
+  const resolved = detected === undefined ? deviceTimeZone() : detected;
+  if (resolved && isValidIanaTimeZone(resolved)) {
+    return resolved;
+  }
+  return "America/New_York";
+}
+
+export function confirmTimeZoneSelection(provisional: string | undefined, committed: string): string {
+  if (provisional && isValidIanaTimeZone(provisional)) {
+    return provisional;
+  }
+  return committed;
+}

@@ -22,6 +22,7 @@ const FORBIDDEN_PATH_PATTERNS: RegExp[] = [
   /\/subscription\b/i,
   /\/trial\b/i,
   /\/exports?\b/i,
+  /\/action-grants\b/i,
   /\/customers\b/i,
 ];
 

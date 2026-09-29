@@ -114,6 +114,7 @@ export function decideBootstrapApply(input: {
         ...nextSnap,
         setupCompleted: input.cachedBootstrap.workspace.setup_completed,
         emailDisplay: input.cachedBootstrap.user.display_email,
+        supportCode: input.supportCode,
       },
       bootstrap: input.cachedBootstrap,
       supportCode: input.supportCode,

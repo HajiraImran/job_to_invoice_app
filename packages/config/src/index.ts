@@ -47,6 +47,7 @@ export {
   verifyResendWebhook,
 } from "./resend-webhook.ts";
 export {
+  alignDevelopmentStorageEnv,
   API_CREDENTIAL_FIELDS,
   apiClientOptions,
   assertNoPublicStorageSecrets,
@@ -59,10 +60,14 @@ export {
   resolveApiDocumentsStorage,
   resolveWorkerDocumentsStorage,
   WORKER_CREDENTIAL_FIELDS,
+  WORKER_STORAGE_CONNECT_TIMEOUT_MS,
+  WORKER_STORAGE_MAX_ATTEMPTS,
+  WORKER_STORAGE_REQUEST_TIMEOUT_MS,
   workerClientOptions,
 } from "./storage.ts";
 export type {
   ApiDocumentsStorageConfig,
+  DevelopmentStorageAlignment,
   DocumentsCredentialPair,
   DocumentsStorageBase,
   S3CompatibleClientOptions,

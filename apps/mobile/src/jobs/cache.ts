@@ -29,47 +29,65 @@ function mapJob(row: Record<string, unknown>): CachedJobRow {
   };
 }
 
-export async function upsertCachedJob(
-  db: EncryptedSqliteHandle,
-  input: {
-    jobId: string;
-    payloadJson: string;
-    listState: string;
-    syncBadge?: JobCacheBadge;
-    serverConfirmed?: boolean;
-    pinned?: boolean;
-    nowIso?: string;
-  },
-): Promise<void> {
-  const nowIso = input.nowIso ?? new Date().toISOString();
+type CachedJobInput = {
+  jobId: string;
+  payloadJson: string;
+  listState: string;
+  syncBadge?: JobCacheBadge;
+  serverConfirmed?: boolean;
+  pinned?: boolean;
+  nowIso?: string;
+};
+
+export async function upsertCachedJob(db: EncryptedSqliteHandle, input: CachedJobInput): Promise<void> {
   try {
-    await db.runAsync(
-      `insert into jobs_cache (
-        job_id, payload_json, list_state, sync_badge, server_confirmed, pinned, updated_at, last_accessed_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?)
-      on conflict(job_id) do update set
-        payload_json = excluded.payload_json,
-        list_state = excluded.list_state,
-        sync_badge = excluded.sync_badge,
-        server_confirmed = excluded.server_confirmed,
-        pinned = excluded.pinned,
-        updated_at = excluded.updated_at,
-        last_accessed_at = excluded.last_accessed_at`,
-      [
-        input.jobId,
-        input.payloadJson,
-        input.listState,
-        input.syncBadge ?? "synced",
-        input.serverConfirmed === false ? 0 : 1,
-        input.pinned ? 1 : 0,
-        nowIso,
-        nowIso,
-      ],
-    );
+    await writeCachedJob(db, input);
     await evictConfirmedJobsIfNeeded(db);
   } catch {
     throw new StorageError("DATABASE_UNAVAILABLE");
   }
+}
+
+/** Writes a page of server-confirmed jobs with a single eviction pass. */
+export async function upsertCachedJobs(db: EncryptedSqliteHandle, inputs: CachedJobInput[]): Promise<void> {
+  if (inputs.length === 0) {
+    return;
+  }
+  try {
+    for (const input of inputs) {
+      await writeCachedJob(db, input);
+    }
+    await evictConfirmedJobsIfNeeded(db);
+  } catch {
+    throw new StorageError("DATABASE_UNAVAILABLE");
+  }
+}
+
+async function writeCachedJob(db: EncryptedSqliteHandle, input: CachedJobInput): Promise<void> {
+  const nowIso = input.nowIso ?? new Date().toISOString();
+  await db.runAsync(
+    `insert into jobs_cache (
+      job_id, payload_json, list_state, sync_badge, server_confirmed, pinned, updated_at, last_accessed_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(job_id) do update set
+      payload_json = excluded.payload_json,
+      list_state = excluded.list_state,
+      sync_badge = excluded.sync_badge,
+      server_confirmed = excluded.server_confirmed,
+      pinned = excluded.pinned,
+      updated_at = excluded.updated_at,
+      last_accessed_at = excluded.last_accessed_at`,
+    [
+      input.jobId,
+      input.payloadJson,
+      input.listState,
+      input.syncBadge ?? "synced",
+      input.serverConfirmed === false ? 0 : 1,
+      input.pinned ? 1 : 0,
+      nowIso,
+      nowIso,
+    ],
+  );
 }
 
 export async function getCachedJob(db: EncryptedSqliteHandle, jobId: string): Promise<CachedJobRow | null> {

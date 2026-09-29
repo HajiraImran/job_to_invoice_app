@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Pool, type PoolClient } from "pg";
 import { allowlistedSqlstate, type WorkerPdfStage } from "./worker-log.ts";
 
@@ -9,9 +10,21 @@ export const CONNECT_MAX_ATTEMPTS = 3;
 export const CONNECT_DEADLINE_MS = 5_500;
 export const CONNECT_BACKOFF_MIN_MS = 50;
 export const CONNECT_BACKOFF_MAX_MS = 150;
+export const WORKER_POOL_MAX_CLIENTS = 4;
+export const WORKER_POOL_MIN_CLIENTS = 1;
+export const WORKER_POOL_IDLE_TIMEOUT_MS = 300_000;
+export const WORKER_KEEPALIVE_DELAY_MS = 10_000;
+// Above every worker statement_timeout so the server cancels first; this only
+// catches a socket that stopped answering.
+export const WORKER_QUERY_TIMEOUT_MS = 30_000;
+// The Supabase session pooler drops a connection after about 20 s idle, and a
+// cold connect on a lossy link costs several seconds, so idle connections are
+// pinged below that window.
+export const WORKER_POOL_HEARTBEAT_MS = 10_000;
 
 export const WORKER_TRANSACTION_STAGES = [
   "database_connect_failed",
+  "connect_timed_out",
   "transaction_start_failed",
   "set_role_failed",
   "claim_query_failed",
@@ -139,13 +152,105 @@ export function connectTimeoutsFor(
   };
 }
 
-export function workerPoolOptions(
-  timeouts?: Partial<WorkerConnectTimeouts>,
-): { max: number; connectionTimeoutMillis: number } {
+export type WorkerPoolOptions = {
+  max: number;
+  min: number;
+  connectionTimeoutMillis: number;
+  idleTimeoutMillis: number;
+  keepAlive: boolean;
+  keepAliveInitialDelayMillis: number;
+  query_timeout: number;
+};
+
+export function workerPoolOptions(timeouts?: Partial<WorkerConnectTimeouts>): WorkerPoolOptions {
   return {
-    max: 4,
+    max: WORKER_POOL_MAX_CLIENTS,
+    min: WORKER_POOL_MIN_CLIENTS,
     connectionTimeoutMillis: timeouts?.attemptTimeoutMs ?? CONNECT_ATTEMPT_TIMEOUT_MS,
+    idleTimeoutMillis: WORKER_POOL_IDLE_TIMEOUT_MS,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: WORKER_KEEPALIVE_DELAY_MS,
+    query_timeout: WORKER_QUERY_TIMEOUT_MS,
   };
+}
+
+export type WorkerDatabaseClientEvent = {
+  event: "db_client_error";
+  scope: "pool" | "client";
+  sqlstate?: string;
+};
+
+function writeDatabaseClientEvent(event: WorkerDatabaseClientEvent): void {
+  try {
+    console.log(JSON.stringify(event));
+  } catch {
+    /* diagnostics must not throw */
+  }
+}
+
+/**
+ * node-postgres emits `error` on an idle or checked-out client when the pooler
+ * or network closes it. Without a listener Node treats that as an uncaught
+ * exception and the worker process exits.
+ */
+export function observeWorkerPoolErrors(
+  pool: Pick<Pool, "on">,
+  log: (event: WorkerDatabaseClientEvent) => void = writeDatabaseClientEvent,
+): void {
+  pool.on("error", (error) => {
+    log({ event: "db_client_error", scope: "pool", sqlstate: connectErrorSqlstate(error) });
+  });
+  pool.on("connect", (client) => {
+    client.on("error", (error) => {
+      log({ event: "db_client_error", scope: "client", sqlstate: connectErrorSqlstate(error) });
+    });
+  });
+}
+
+type HeartbeatPool = Pick<Pool, "connect" | "idleCount" | "totalCount">;
+
+export async function heartbeatWorkerPool(pool: HeartbeatPool): Promise<{ pinged: number; failed: number }> {
+  const idle = pool.idleCount;
+  const targets = idle > 0 ? idle : pool.totalCount === 0 ? WORKER_POOL_MIN_CLIENTS : 0;
+  let failed = 0;
+  await Promise.all(
+    Array.from({ length: targets }, async () => {
+      let client: PoolClient | undefined;
+      try {
+        client = await pool.connect();
+        await client.query("select 1");
+        client.release();
+      } catch {
+        failed += 1;
+        client?.release(true);
+      }
+    }),
+  );
+  return { pinged: targets - failed, failed };
+}
+
+export function startWorkerPoolHeartbeat(
+  pool: HeartbeatPool,
+  options: {
+    intervalMs?: number;
+    schedule?: (tick: () => void, ms: number) => { unref?: () => void };
+    cancel?: (handle: { unref?: () => void }) => void;
+  } = {},
+): () => void {
+  const schedule = options.schedule ?? ((tick, ms) => setInterval(tick, ms));
+  const cancel = options.cancel ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
+  let running = false;
+  const handle = schedule(() => {
+    if (running) {
+      return;
+    }
+    running = true;
+    void heartbeatWorkerPool(pool).finally(() => {
+      running = false;
+    });
+  }, options.intervalMs ?? WORKER_POOL_HEARTBEAT_MS);
+  handle.unref?.();
+  return () => cancel(handle);
 }
 
 export async function acquirePooledClient(
@@ -204,7 +309,7 @@ function stageError(stage: WorkerTransactionStage, error: unknown): WorkerTransa
 export async function withClaimBudget<T>(
   work: Promise<T>,
   timeoutMs: number,
-  onTimeout?: () => void,
+  onTimeout?: () => WorkerTransactionStage | undefined,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -212,8 +317,8 @@ export async function withClaimBudget<T>(
       work,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          onTimeout?.();
-          reject(new WorkerTransactionError("claim_timed_out"));
+          const stage = onTimeout?.();
+          reject(new WorkerTransactionError(stage ?? "claim_timed_out"));
         }, timeoutMs);
       }),
     ]);
@@ -222,6 +327,102 @@ export async function withClaimBudget<T>(
       clearTimeout(timer);
     }
   }
+}
+
+export const WORKER_ROLE_OPERATIONS = ["worker_pdf", "export", "email", "purge"] as const;
+export type WorkerRoleOperation = (typeof WORKER_ROLE_OPERATIONS)[number];
+
+const workerRoleOperation = new AsyncLocalStorage<WorkerRoleOperation>();
+
+export function workerRoleOperationIs(operation: WorkerRoleOperation): boolean {
+  return workerRoleOperation.getStore() === operation;
+}
+
+export function enterWorkerRoleOperation<T>(operation: WorkerRoleOperation, work: () => Promise<T>): Promise<T> {
+  if (workerRoleOperationIs(operation)) {
+    return work();
+  }
+  return workerRoleOperation.run(operation, work);
+}
+
+const SAFE_DB_TOKEN = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+const ROLE_SWITCH_CONTEXT_SQL =
+  "select current_user as current_user, session_user as session_user, pg_has_role(session_user, $1, 'member') as session_member, pg_has_role(current_user, $1, 'member') as current_member, current_database() as database_name, inet_server_port() as server_port, current_setting('transaction_read_only') as transaction_read_only";
+
+export type WorkerRoleDiagnostic = {
+  event: "worker_role_diagnostic";
+  operation: WorkerRoleOperation | "unspecified";
+  target_role: "worker_app" | "purge_app";
+  current_user: string | null;
+  session_user: string | null;
+  session_member: boolean | null;
+  current_member: boolean | null;
+  database: string | null;
+  server_port: number | null;
+  transaction: "read-write" | "read-only" | null;
+  sqlstate: string | null;
+};
+
+function safeDbToken(value: unknown): string | null {
+  return typeof value === "string" && SAFE_DB_TOKEN.test(value) ? value : null;
+}
+
+function safeMember(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function safePort(value: unknown): number | null {
+  const port = typeof value === "number" ? value : typeof value === "string" && /^\d{1,5}$/.test(value) ? Number(value) : Number.NaN;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return null;
+  }
+  return port;
+}
+
+function transactionMode(value: unknown): "read-write" | "read-only" | null {
+  if (value === true || value === "on" || value === "true") {
+    return "read-only";
+  }
+  if (value === false || value === "off" || value === "false") {
+    return "read-write";
+  }
+  return null;
+}
+
+export function workerRoleDiagnostic(input: {
+  operation: WorkerRoleOperation | "unspecified";
+  targetRole: "worker_app" | "purge_app";
+  row?: Record<string, unknown>;
+  sqlstate?: string;
+}): WorkerRoleDiagnostic {
+  return {
+    event: "worker_role_diagnostic",
+    operation: input.operation,
+    target_role: input.targetRole,
+    current_user: safeDbToken(input.row?.current_user),
+    session_user: safeDbToken(input.row?.session_user),
+    session_member: safeMember(input.row?.session_member),
+    current_member: safeMember(input.row?.current_member),
+    database: safeDbToken(input.row?.database_name),
+    server_port: safePort(input.row?.server_port),
+    transaction: transactionMode(input.row?.transaction_read_only),
+    sqlstate: allowlistedSqlstate(input.sqlstate) ?? null,
+  };
+}
+
+function writeRoleSwitchDiagnostic(
+  operation: WorkerRoleOperation | "unspecified",
+  targetRole: "worker_app" | "purge_app",
+  row: Record<string, unknown> | undefined,
+  error: unknown,
+): void {
+  const diagnostic = workerRoleDiagnostic({
+    operation,
+    targetRole,
+    row,
+    sqlstate: sqlstateFromUnknown(error),
+  });
+  console.log(JSON.stringify(diagnostic));
 }
 
 export function createWorkerPool(connectionString: string, timeouts?: Partial<WorkerConnectTimeouts>): Pool {
@@ -233,19 +434,58 @@ export function createWorkerPool(connectionString: string, timeouts?: Partial<Wo
     connectionString,
     ...workerPoolOptions(resolved),
   });
+  observeWorkerPoolErrors(pool);
   bindConnectTimeouts(pool, resolved);
   return pool;
+}
+
+export async function warmWorkerPool(pool: Pool, options?: AcquireConnectOptions): Promise<boolean> {
+  try {
+    const client = await acquirePooledClient(pool, options);
+    try {
+      await client.query("select 1");
+      client.release();
+    } catch (error) {
+      client.release(true);
+      throw error;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const ROLE_SWITCH_SQLSTATES = new Set(["42501", "42704"]);
+
+async function roleSwitchContext(
+  client: PoolClient,
+  targetRole: "worker_app" | "purge_app",
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    await client.query("rollback");
+    const context = await client.query<Record<string, unknown>>(ROLE_SWITCH_CONTEXT_SQL, [targetRole]);
+    return context.rows[0];
+  } catch {
+    return undefined;
+  }
 }
 
 export async function withWorkerRole<T>(
   pool: Pool,
   fn: (client: PoolClient) => Promise<T>,
-  options?: { timeoutMs?: number; statementTimeoutMs?: number; role?: "worker_app" | "purge_app" } & AcquireConnectOptions,
+  options?: {
+    timeoutMs?: number;
+    statementTimeoutMs?: number;
+    role?: "worker_app" | "purge_app";
+    operation?: WorkerRoleOperation;
+  } & AcquireConnectOptions,
 ): Promise<T> {
   const claimTimeoutMs = options?.timeoutMs;
   const statementTimeoutMs = options?.statementTimeoutMs ?? WORKER_STATEMENT_TIMEOUT_MS;
   let client: PoolClient | undefined;
+  let acquiring = true;
   let timedOut = false;
+  let timedOutWhileConnecting = false;
   let released = false;
   let destroy = false;
 
@@ -262,15 +502,22 @@ export async function withWorkerRole<T>(
     client = undefined;
   };
 
-  const abortClaim = () => {
+  const abortClaim = (): WorkerTransactionStage => {
     timedOut = true;
+    if (acquiring) {
+      // A slow connect is not a broken one. Keep it for the next tick instead
+      // of forcing another cold connect.
+      timedOutWhileConnecting = true;
+      return "connect_timed_out";
+    }
     destroy = true;
     releaseClient(true);
+    return "claim_timed_out";
   };
 
   const throwIfClaimTimedOut = () => {
     if (timedOut) {
-      throw new WorkerTransactionError("claim_timed_out");
+      throw new WorkerTransactionError(timedOutWhileConnecting ? "connect_timed_out" : "claim_timed_out");
     }
   };
 
@@ -281,22 +528,29 @@ export async function withWorkerRole<T>(
       } catch (error) {
         destroyFailedClient(error);
         throw stageError("database_connect_failed", error);
+      } finally {
+        acquiring = false;
+      }
+      if (timedOutWhileConnecting) {
+        releaseClient(false);
       }
       throwIfClaimTimedOut();
+      const targetRole = options?.role === "purge_app" ? "purge_app" : "worker_app";
+      const operation =
+        options?.operation ?? workerRoleOperation.getStore() ?? (targetRole === "purge_app" ? "purge" : "unspecified");
+      const timeout = Math.max(1, Math.floor(statementTimeoutMs));
       try {
-        await client.query("begin");
-        const timeout = Math.max(1, Math.floor(statementTimeoutMs));
-        await client.query(`set local statement_timeout = ${timeout}`);
+        // One round trip. BEGIN still precedes SET LOCAL in the same transaction.
+        await client.query(`begin; set local statement_timeout = ${timeout}; set local role ${targetRole}`);
       } catch (error) {
-        destroy = isRetryableConnectError(error);
+        const code = errorCode(error);
+        if (code && ROLE_SWITCH_SQLSTATES.has(code)) {
+          destroy = true;
+          writeRoleSwitchDiagnostic(operation, targetRole, await roleSwitchContext(client, targetRole), error);
+          throw stageError("set_role_failed", error);
+        }
+        destroy = true;
         throw stageError("transaction_start_failed", error);
-      }
-      throwIfClaimTimedOut();
-      try {
-        await client.query(`set local role ${options?.role === "purge_app" ? "purge_app" : "worker_app"}`);
-      } catch (error) {
-        destroy = isRetryableConnectError(error);
-        throw stageError("set_role_failed", error);
       }
       throwIfClaimTimedOut();
       try {
@@ -314,16 +568,18 @@ export async function withWorkerRole<T>(
         throw stageError("claim_query_failed", error);
       }
     } catch (error) {
-      if (client && !released) {
+      // Destroying the connection discards the open transaction server-side;
+      // a rollback on a broken socket would only wait for query_timeout.
+      if (client && !released && !destroy) {
         try {
           await client.query("rollback");
         } catch {
-          /* already aborted */
+          destroy = true;
         }
       }
       throw error;
     } finally {
-      releaseClient(timedOut || destroy);
+      releaseClient((timedOut && !timedOutWhileConnecting) || destroy);
     }
   };
 

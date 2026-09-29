@@ -13,12 +13,20 @@ export type AuthStatus =
   | "offline_cached"
   | "access_expired";
 
+/**
+ * BOOTSTRAP_NETWORK: the device is online but the Job to Invoice API did not answer.
+ * BOOTSTRAP_OFFLINE: the device could not reach the internet at all.
+ * BOOTSTRAP_SERVICE: the API answered with a server failure.
+ * BOOTSTRAP_DATABASE: the API answered but its database timed out or was unavailable.
+ */
 export const BOOTSTRAP_SUPPORT_CODES = [
   "BOOTSTRAP_NETWORK",
   "BOOTSTRAP_SESSION",
   "BOOTSTRAP_SERVICE",
   "BOOTSTRAP_RESPONSE",
   "BOOTSTRAP_UNKNOWN",
+  "BOOTSTRAP_OFFLINE",
+  "BOOTSTRAP_DATABASE",
 ] as const;
 
 export type BootstrapSupportCode = (typeof BOOTSTRAP_SUPPORT_CODES)[number];

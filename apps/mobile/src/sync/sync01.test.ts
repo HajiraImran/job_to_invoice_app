@@ -71,6 +71,8 @@ describe("SYNC01 outbox rules and retry", () => {
     expect(isForbiddenOutboxPath("/v1/jobs/x/finish")).toBe(true);
     expect(isForbiddenOutboxPath("/v1/subscription/trial")).toBe(true);
     expect(isForbiddenOutboxPath("/v1/exports")).toBe(true);
+    expect(isForbiddenOutboxPath("/v1/account/deletion")).toBe(true);
+    expect(isForbiddenOutboxPath("/v1/account/action-grants")).toBe(true);
     expect(isForbiddenOutboxPath("/v1/jobs/x/quote")).toBe(false);
     expect(isForbiddenOutboxPath("/v1/customers")).toBe(true);
     expect(() =>
@@ -297,18 +299,20 @@ describe("SYNC01 offline gate, jobs cache, analytics safety", () => {
       throw new Error("expected outbox row");
     }
     first.state = "in_flight";
-    await expect(
-      enqueueOutboxOperation(db, {
-        operationId: "b",
-        resourceKind: "draft",
-        resourceId: "draft-x",
-        method: "PATCH",
-        path: "/v1/drafts/draft-x",
-        bodyJson: "{}",
-        baseVersion: 1,
-        idempotencyKey: "k2",
-      }),
-    ).rejects.toMatchObject({ code: "SYNC_PAUSED" });
+    const successor = await enqueueOutboxOperation(db, {
+      operationId: "b",
+      resourceKind: "draft",
+      resourceId: "draft-x",
+      method: "PATCH",
+      path: "/v1/drafts/draft-x",
+      bodyJson: "{\"notes\":\"later\"}",
+      baseVersion: 1,
+      idempotencyKey: "k2",
+    });
+    expect(successor.operationId).toBe("b");
+    expect(successor.state).toBe("pending");
+    expect(db.tables.outbox_ops?.find((row) => row.operation_id === "a")?.state).toBe("in_flight");
+    expect(db.tables.outbox_ops?.filter((row) => row.state === "in_flight")).toHaveLength(1);
   });
 });
 

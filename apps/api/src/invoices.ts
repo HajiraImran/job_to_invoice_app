@@ -40,7 +40,10 @@ import {
   parseLedgerReverse,
   parseOwnerEmail,
   PREVIEW_TTL_MS,
+  unresolvedInvoiceFieldErrors,
+  unresolvedInvoiceMessage,
   zonedCalendarDate,
+  type InvoiceUnresolvedBlocker,
 } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
 import { withApiRole } from "./db.ts";
@@ -155,6 +158,48 @@ function pgCode(error: unknown): string | undefined {
     return error.code;
   }
   return undefined;
+}
+
+const INVOICE_UNRESOLVED_SQL = `select 'change_draft'::text as kind, null::text as document_kind, null::text as number, null::int as revision_no
+           from commercial.document_drafts
+          where workspace_id = $1 and job_id = $2 and kind = 'change' and draft_state = 'editing'
+            and commercial.change_draft_is_invoice_blocker(workspace_id, job_id, payload_json)
+         union all
+         select 'pending_approval', d.kind, d.number, d.revision_no
+           from commercial.documents d
+          where d.workspace_id = $1 and d.job_id = $2
+            and d.kind in ('quote', 'change')
+            and d.lifecycle = 'issued'`;
+
+async function loadInvoiceUnresolvedBlockers(
+  pool: Pool,
+  workspaceId: string,
+  actorId: string,
+  jobId: string,
+): Promise<InvoiceUnresolvedBlocker[]> {
+  return withApiRole(pool, async (client) => {
+    await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [workspaceId, actorId]);
+    const found = await client.query<InvoiceUnresolvedBlocker>(INVOICE_UNRESOLVED_SQL, [workspaceId, jobId]);
+    return found.rows;
+  });
+}
+
+async function sendUnresolvedInvoice(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  pool: Pool,
+  owner: { workspace_id: string; actor_id: string },
+  jobId: string,
+) {
+  let blockers: InvoiceUnresolvedBlocker[] = [];
+  try {
+    blockers = await loadInvoiceUnresolvedBlockers(pool, owner.workspace_id, owner.actor_id, jobId);
+  } catch {
+    blockers = [];
+  }
+  return sendFail(request, reply, API_ERROR_CODES.UNRESOLVED_CHANGES, unresolvedInvoiceMessage(blockers), {
+    field_errors: unresolvedInvoiceFieldErrors(blockers),
+  });
 }
 
 function asIso(value: Date | string): string {
@@ -451,7 +496,7 @@ export function mapInvoiceError(
       request,
       reply,
       API_ERROR_CODES.UNRESOLVED_CHANGES,
-      "Resolve pending changes or approvals before issuing this invoice.",
+      unresolvedInvoiceMessage([]),
     );
   }
   if (code === "P0044") {
@@ -799,6 +844,9 @@ export function registerInvoiceRoutes(
         snapshot: frozen.snapshot,
       });
     } catch (error) {
+      if (pgCode(error) === "P0043" && deps.pool && params.jobId) {
+        return sendUnresolvedInvoice(request, reply, deps.pool, owner, params.jobId);
+      }
       const mapped = mapInvoiceError(request, reply, error);
       if (mapped) {
         return mapped;
@@ -999,6 +1047,19 @@ export function registerInvoiceRoutes(
       }
       return reply.status(202).send(success(request.id, presentIssuedInvoice(issued.row)));
     } catch (error) {
+      if (pgCode(error) === "P0043" && deps.pool && params.jobId) {
+        const provisioned = await withApiRole(deps.pool, async (client) => {
+          const loaded = await client.query<ProvisionRow>(
+            `select actor_id, workspace_id, account_status, display_email, setup_completed, first_sign_in, analytics_alias_id, workspace_version
+             from identity.provision_owner($1::uuid, $2, $3)`,
+            [access.sub, parsedEmail.display, parsedEmail.normalized],
+          );
+          return loaded.rows[0];
+        });
+        if (provisioned) {
+          return sendUnresolvedInvoice(request, reply, deps.pool, provisioned, params.jobId);
+        }
+      }
       const mapped = mapInvoiceError(request, reply, error);
       if (mapped) {
         return mapped;

@@ -229,6 +229,65 @@ describe("change order API", () => {
     }
   }
 
+  async function generatePdfThroughWorkerPath(documentId: string): Promise<string> {
+    const task = await running().admin.query<{ id: string }>(
+      `select id from commercial.outbox_tasks where aggregate_id = $1 and task_type = 'generate_original_pdf'`,
+      [documentId],
+    );
+    const taskId = task.rows[0]?.id;
+    if (!taskId) {
+      throw new Error("missing generate_original_pdf task");
+    }
+    const pdf = Buffer.from("%PDF-1.4 change");
+    await running().admin.query("begin");
+    try {
+      await running().admin.query("set local role worker_app");
+      const claimed = await running().admin.query<{ id: string; workspace_id: string; created_by: string }>(
+        "select id, workspace_id, created_by from commercial.claim_generate_original_pdf()",
+      );
+      expect(claimed.rows[0]?.id).toBe(taskId);
+      const row = claimed.rows[0];
+      if (!row) {
+        throw new Error("change PDF task was not claimed");
+      }
+      await running().admin.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
+        row.workspace_id,
+        row.created_by,
+      ]);
+      const source = await running().admin.query<{ revision_no: number; snapshot_json: { kind: string } }>(
+        "select revision_no, snapshot_json from commercial.load_original_pdf_source($1::uuid)",
+        [taskId],
+      );
+      expect(source.rows[0]?.snapshot_json.kind).toBe("change");
+      const reserved = await running().admin.query<{ artifact_id: string }>(
+        "select commercial.reserve_original_pdf_artifact($1::uuid) as artifact_id",
+        [taskId],
+      );
+      const artifactId = reserved.rows[0]?.artifact_id;
+      if (!artifactId) {
+        throw new Error("change PDF artifact was not reserved");
+      }
+      const objectKey = originalPdfObjectKey({
+        workspaceId: row.workspace_id,
+        documentId,
+        revision: source.rows[0]?.revision_no ?? 0,
+        artifactId,
+      });
+      await running().admin.query("select commercial.complete_original_pdf($1::uuid, $2::uuid, $3, $4, $5::bigint)", [
+        taskId,
+        artifactId,
+        objectKey,
+        createHash("sha256").update(pdf).digest("hex"),
+        pdf.byteLength,
+      ]);
+      await running().admin.query("commit");
+      return objectKey;
+    } catch (error) {
+      await running().admin.query("rollback");
+      throw error;
+    }
+  }
+
   async function verifySession(token: string) {
     const exchanged = await running().app.inject({
       method: "POST",
@@ -507,6 +566,10 @@ describe("change order API", () => {
     });
     expect(job.json().data.latest_change.number).toBe("CO-000001");
     expect(job.json().data.latest_change.lifecycle).toBe("issued");
+    expect(job.json().data.latest_change.additions).toEqual([
+      expect.objectContaining({ description: "Supply and fit second door handle", total_cents: 10825 }),
+    ]);
+    expect(job.json().data.change_draft).toBeNull();
     expect(job.json().data.permitted_actions).toContain("create_change");
 
     const pendingPreview = await running().app.inject({
@@ -516,11 +579,32 @@ describe("change order API", () => {
       payload: {},
     });
     expect(pendingPreview.statusCode).toBe(409);
+    expect(pendingPreview.json().error.code).toBe("UNRESOLVED_CHANGES");
+    expect(pendingPreview.json().error.message).toBe(
+      "The extra-work request is still waiting for the customer to approve it. Wait for that decision before invoicing.",
+    );
+    expect(pendingPreview.json().error.field_errors).toEqual([
+      { field: "approval_request", message: "Wait for the customer to approve the pending request before invoicing." },
+    ]);
 
-    await completePdf(published.json().data.id);
     const fragment = await fragmentToken(published.json().data.request_id, "EMAIL02");
     expect(JSON.stringify(published.json())).not.toContain(fragment);
     const session = await verifySession(fragment);
+    const preparing = await running().app.inject({
+      method: "GET",
+      url: "/v1/portal/document",
+      headers: { cookie: session.cookie },
+    });
+    expect(preparing.statusCode).toBe(200);
+    expect(preparing.json().data.pdf_state).toBe("preparing");
+    expect(preparing.json().data.allowed_actions).not.toContain("approve");
+
+    const objectKey = await generatePdfThroughWorkerPath(published.json().data.id);
+    const artifacts = await running().admin.query(
+      "select object_key, template_version, state from commercial.artifacts where document_id = $1 and type = 'original_pdf'",
+      [published.json().data.id],
+    );
+    expect(artifacts.rows).toEqual([{ object_key: objectKey, template_version: "change-original-v1", state: "ready" }]);
     const document = await running().app.inject({
       method: "GET",
       url: "/v1/portal/document",
@@ -528,8 +612,18 @@ describe("change order API", () => {
     });
     expect(document.statusCode).toBe(200);
     expect(document.json().data.snapshot.kind).toBe("change");
+    expect(document.json().data.pdf_state).toBe("ready");
+    expect(document.json().data.allowed_actions).toEqual(expect.arrayContaining(["approve", "decline"]));
     expect(document.json().data.consent_text).toContain("approve it");
     expect(JSON.stringify(document.json())).not.toContain(fragment);
+    const download = await running().app.inject({
+      method: "GET",
+      url: "/v1/portal/download",
+      headers: { cookie: session.cookie },
+    });
+    expect(download.statusCode).toBe(200);
+    expect(download.json().data).toMatchObject({ document_id: published.json().data.id, state: "ready" });
+    expect(download.json().data.url).toContain(encodeURIComponent(objectKey));
 
     const decided = await running().app.inject({
       method: "POST",
@@ -568,6 +662,22 @@ describe("change order API", () => {
     });
     expect(replayDecision.statusCode).toBe(200);
 
+    const approvedDoc = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${published.json().data.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(approvedDoc.statusCode).toBe(200);
+    expect(approvedDoc.json().data.lifecycle).toBe("accepted");
+    const ownerPdf = await running().app.inject({
+      method: "GET",
+      url: `/v1/documents/${published.json().data.id}/download`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ownerPdf.statusCode).toBe(200);
+    expect(ownerPdf.json().data.state).toBe("ready");
+    expect(ownerPdf.json().data.url).toEqual(expect.any(String));
+
     const scope = await running().admin.query<{ n: number }>(
       "select count(*)::int as n from commercial.scope_entries where accepted_document_id = $1 and event_kind = 'add'",
       [published.json().data.id],
@@ -583,6 +693,40 @@ describe("change order API", () => {
     expect(invoicePreview.statusCode).toBe(200);
     expect(invoicePreview.json().data.snapshot.total_cents).toBe(36805);
     expect(invoicePreview.json().data.snapshot.lines).toHaveLength(2);
+    expect(
+      invoicePreview.json().data.snapshot.lines.filter(
+        (line: { description: string }) => line.description === "Supply and fit second door handle",
+      ),
+    ).toHaveLength(1);
+
+    const leftover = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB}/changes`,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "53535353-5353-4353-8353-535353535364" },
+    });
+    expect(leftover.statusCode).toBe(200);
+    expect(leftover.json().data.additions).toEqual([]);
+    const leftoverJob = await running().app.inject({
+      method: "GET",
+      url: `/v1/jobs/${JOB}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(leftoverJob.json().data.change_draft.additions_count).toBe(0);
+    expect(leftoverJob.json().data.change_draft.reductions_count).toBe(0);
+    expect(leftoverJob.json().data.latest_change.lifecycle).toBe("accepted");
+    const leftoverPreview = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB}/invoice-preview`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      payload: {},
+    });
+    expect(leftoverPreview.statusCode).toBe(200);
+    expect(leftoverPreview.json().data.snapshot.total_cents).toBe(36805);
+    expect(
+      leftoverPreview.json().data.snapshot.lines.filter(
+        (line: { description: string }) => line.description === "Supply and fit second door handle",
+      ),
+    ).toHaveLength(1);
 
     const other = await sign({ sub: AUTH_B, email: "change.other@example.com" });
     await completeSetup(other, "change.other@example.com", "53535353-5353-4353-8353-535353535360");
@@ -767,5 +911,260 @@ describe("change order API", () => {
       [published.published.json().data.id],
     );
     expect(decisions.rows[0]?.n).toBe(1);
+  }, 120_000);
+
+  it("refreshes a missing recipient into the preview and refuses a second send", async () => {
+    const token = await sign({ sub: AUTH, email: "change.owner@example.com" });
+    const other = await sign({ sub: AUTH_B, email: "change.other@example.com" });
+    const opened = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_DECLINE}/changes`,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "57575757-5757-4757-8757-575757575755" },
+    });
+    expect(opened.statusCode).toBe(200);
+    const stale = await running().app.inject({
+      method: "PATCH",
+      url: `/v1/drafts/${opened.json().data.id}`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "57575757-5757-4757-8757-575757575756",
+        "if-match": String(opened.json().data.version),
+      },
+      payload: {
+        reason: "Add a shelf",
+        expected_scope_version: opened.json().data.expected_scope_version,
+        expiry_days: 14,
+        additions: [
+          {
+            client_line_id: randomUUID(),
+            description: "Shelf",
+            unit: "item",
+            quantity: "1",
+            unit_price_cents: 5000,
+            discount_cents: 0,
+            tax_bp: 0,
+          },
+        ],
+        reductions: [],
+      },
+    });
+    expect(stale.statusCode).toBe(200);
+    const conflict = await running().app.inject({
+      method: "PATCH",
+      url: `/v1/drafts/${opened.json().data.id}`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "57575757-5757-4757-8757-575757575757",
+        "if-match": String(opened.json().data.version),
+      },
+      payload: {
+        reason: "Add a shelf",
+        expected_scope_version: opened.json().data.expected_scope_version,
+        expiry_days: 14,
+        additions: [
+          {
+            client_line_id: randomUUID(),
+            description: "Shelf",
+            unit: "item",
+            quantity: "1",
+            unit_price_cents: 5000,
+            discount_cents: 0,
+            tax_bp: 0,
+          },
+        ],
+        reductions: [],
+      },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().error.code).toBe("VERSION_CONFLICT");
+    const previewed = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${opened.json().data.id}/preview`,
+      headers: { authorization: `Bearer ${token}`, "if-match": String(stale.json().data.version) },
+    });
+    expect(previewed.statusCode).toBe(200);
+    expect(previewed.json().data.snapshot.customer.email).toBeNull();
+    const hidden = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${opened.json().data.id}/preview`,
+      headers: { authorization: `Bearer ${other}`, "if-match": String(stale.json().data.version) },
+    });
+    expect(hidden.statusCode).toBe(404);
+    const beforeSend = await running().admin.query<{ changes: number; pending: number; emails: number }>(
+      `select
+         (select count(*)::int from commercial.documents where job_id = $1 and kind = 'change') as changes,
+         (select count(*)::int from commercial.approval_requests where job_id = $1 and state = 'pending') as pending,
+         (select count(*)::int from commercial.delivery_attempts where template_id = 'EMAIL02' and request_id in (
+            select id from commercial.approval_requests where job_id = $1
+         )) as emails`,
+      [JOB_DECLINE],
+    );
+    const baseline = beforeSend.rows[0];
+    if (!baseline) {
+      throw new Error("missing change baseline");
+    }
+    expect(baseline.pending).toBe(0);
+    const job = await running().app.inject({
+      method: "GET",
+      url: `/v1/jobs/${JOB_DECLINE}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const customer = await running().app.inject({
+      method: "GET",
+      url: `/v1/customers/${job.json().data.customer_id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(customer.statusCode).toBe(200);
+    expect(customer.json().data.email).toBeNull();
+    const patched = await running().app.inject({
+      method: "PATCH",
+      url: `/v1/customers/${job.json().data.customer_id}`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "57575757-5757-4757-8757-575757575758",
+        "if-match": String(customer.json().data.version),
+      },
+      payload: { email: "shelf.customer@example.com" },
+    });
+    expect(patched.statusCode).toBe(200);
+    const refreshed = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${opened.json().data.id}/preview`,
+      headers: { authorization: `Bearer ${token}`, "if-match": String(stale.json().data.version) },
+    });
+    expect(refreshed.statusCode).toBe(200);
+    expect(refreshed.json().data.snapshot.customer.email).toBe("shelf.customer@example.com");
+    await running().admin.query("set role migrator");
+    try {
+      await running().admin.query(
+        "update commercial.document_drafts set preview_expires_at = now() - interval '1 minute' where id = $1",
+        [opened.json().data.id],
+      );
+    } finally {
+      await running().admin.query("reset role");
+    }
+    const expired = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${opened.json().data.id}/publish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "57575757-5757-4757-8757-575757575759",
+        "if-match": String(stale.json().data.version),
+      },
+      payload: {
+        preview_hash: refreshed.json().data.preview_hash,
+        recipient_email: "shelf.customer@example.com",
+      },
+    });
+    expect(expired.statusCode).toBe(409);
+    expect(expired.json().error.code).toBe("PREVIEW_CHANGED");
+    const current = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${opened.json().data.id}/preview`,
+      headers: { authorization: `Bearer ${token}`, "if-match": String(stale.json().data.version) },
+    });
+    expect(current.statusCode).toBe(200);
+    const published = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${opened.json().data.id}/publish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "57575757-5757-4757-8757-575757575760",
+        "if-match": String(stale.json().data.version),
+      },
+      payload: {
+        preview_hash: current.json().data.preview_hash,
+        recipient_email: current.json().data.snapshot.customer.email,
+      },
+    });
+    expect(published.statusCode).toBe(202);
+    const replayedDraft = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${opened.json().data.id}/publish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "57575757-5757-4757-8757-575757575761",
+        "if-match": String(stale.json().data.version),
+      },
+      payload: {
+        preview_hash: current.json().data.preview_hash,
+        recipient_email: "shelf.customer@example.com",
+      },
+    });
+    expect(replayedDraft.statusCode).not.toBe(202);
+    const again = await running().app.inject({
+      method: "POST",
+      url: `/v1/jobs/${JOB_DECLINE}/changes`,
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "57575757-5757-4757-8757-575757575762" },
+    });
+    expect(again.statusCode).toBe(200);
+    const againSaved = await running().app.inject({
+      method: "PATCH",
+      url: `/v1/drafts/${again.json().data.id}`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "57575757-5757-4757-8757-575757575763",
+        "if-match": String(again.json().data.version),
+      },
+      payload: {
+        reason: "Add another shelf",
+        expected_scope_version: again.json().data.expected_scope_version,
+        expiry_days: 14,
+        additions: [
+          {
+            client_line_id: randomUUID(),
+            description: "Second shelf",
+            unit: "item",
+            quantity: "1",
+            unit_price_cents: 1000,
+            discount_cents: 0,
+            tax_bp: 0,
+          },
+        ],
+        reductions: [],
+      },
+    });
+    expect(againSaved.statusCode).toBe(200);
+    const againPreview = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${again.json().data.id}/preview`,
+      headers: { authorization: `Bearer ${token}`, "if-match": String(againSaved.json().data.version) },
+    });
+    expect(againPreview.statusCode).toBe(200);
+    const blocked = await running().app.inject({
+      method: "POST",
+      url: `/v1/drafts/${again.json().data.id}/publish`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "57575757-5757-4757-8757-575757575764",
+        "if-match": String(againSaved.json().data.version),
+      },
+      payload: {
+        preview_hash: againPreview.json().data.preview_hash,
+        recipient_email: "shelf.customer@example.com",
+      },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().error.code).toBe("APPROVAL_PENDING");
+    const afterSend = await running().admin.query<{ changes: number; pending: number; emails: number }>(
+      `select
+         (select count(*)::int from commercial.documents where job_id = $1 and kind = 'change') as changes,
+         (select count(*)::int from commercial.approval_requests where job_id = $1 and state = 'pending') as pending,
+         (select count(*)::int from commercial.delivery_attempts where template_id = 'EMAIL02' and document_id = $2) as emails`,
+      [JOB_DECLINE, published.json().data.id],
+    );
+    expect(afterSend.rows[0]).toEqual({
+      changes: baseline.changes + 1,
+      pending: 1,
+      emails: 1,
+    });
   }, 120_000);
 });

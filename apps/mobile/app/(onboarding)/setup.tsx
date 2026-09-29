@@ -1,4 +1,5 @@
-import { US_STATES, US_TIMEZONES, deviceTimeZone, isValidIanaTimeZone } from "@job-to-invoice/schemas";
+import { deviceTimeZone, suggestedBusinessTimeZone } from "@job-to-invoice/schemas";
+import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
@@ -15,41 +16,38 @@ import { copy } from "../../src/i18n/en.ts";
 import { useAuth } from "../../src/session/AuthProvider.tsx";
 import { secureKv } from "../../src/session/supabase.ts";
 import { clearSetupDraft, loadSetupDraft, saveSetupDraft } from "../../src/setup/draft.ts";
+import { TimezonePicker } from "../../src/setup/TimezonePicker.tsx";
 import { emptySetupForm, firstFieldError, setupRequestFromForm, type SetupFormValues } from "../../src/setup/form.ts";
 import { createSetupIdempotencyKey, retainOrCreateSetupIdempotencyKey } from "../../src/setup/idempotency.ts";
+import {
+  SETUP_GUTTER,
+  SETUP_HIT_TARGET,
+  SETUP_PRIMARY_BUTTON_MIN_HEIGHT,
+  SETUP_PROGRESS_ACCENT,
+  presentBasicInfoScreen,
+  presentContinueLabel,
+  presentDefaultsScreen,
+  presentDuePresetLabel,
+  presentEmailAccessibility,
+  presentFieldAccessibility,
+  presentFirstInvalidField,
+  presentNextInputName,
+  presentSavingAnnouncement,
+  presentSetupFieldErrors,
+  presentSetupProgress,
+  presentTimezoneFieldValue,
+} from "../../src/setup/presentation.ts";
+import { APP_JOBS_HREF } from "../../src/session/logic.ts";
 import { colors, space, type } from "../../src/theme.ts";
-
-const STEP1 = new Set(["business_name", "legal_name", "trade", "skip_logo"]);
-const STEP2 = new Set([
-  "contact_name",
-  "contact_email",
-  "contact_phone",
-  "address",
-  "address.line1",
-  "address.line2",
-  "address.city",
-  "address.state",
-  "address.postal_code",
-]);
+import { PublicAtmosphere } from "../../src/ui/PublicAtmosphere.tsx";
 
 function suggestedTimezone(): string {
-  const device = deviceTimeZone();
-  if (device && isValidIanaTimeZone(device)) {
-    return device;
-  }
-  return "America/New_York";
-}
-
-function timezoneChoices(current: string): string[] {
-  const list: string[] = [...US_TIMEZONES];
-  if (current && !list.includes(current)) {
-    list.unshift(current);
-  }
-  return list;
+  return suggestedBusinessTimeZone();
 }
 
 export default function SetupScreen() {
   const auth = useAuth();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const email = auth.bootstrap?.user.display_email ?? auth.snapshot.emailDisplay ?? "";
   const workspaceId = auth.bootstrap?.workspace.id ?? "";
@@ -66,6 +64,7 @@ export default function SetupScreen() {
   const [restored, setRestored] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [timezonePickerOpen, setTimezonePickerOpen] = useState(false);
   const idempotencyKey = useRef<string | undefined>(undefined);
   idempotencyKey.current = retainOrCreateSetupIdempotencyKey(idempotencyKey.current);
   const inputs = useRef<Record<string, TextInput | null>>({});
@@ -104,6 +103,13 @@ export default function SetupScreen() {
   }, [email, setupCompleted, workspaceId]);
 
   useEffect(() => {
+    if (!email) {
+      return;
+    }
+    setValues((current) => (current.contact_email === email ? current : { ...current, contact_email: email }));
+  }, [email]);
+
+  useEffect(() => {
     if (!hydrated || !workspaceId || setupCompleted) {
       return;
     }
@@ -129,18 +135,7 @@ export default function SetupScreen() {
   );
 
   function errorsForStep(current: 1 | 2 | 3): Record<string, string> {
-    if (parsed.ok) {
-      return {};
-    }
-    const next: Record<string, string> = {};
-    for (const item of parsed.field_errors) {
-      const inStep =
-        current === 1 ? STEP1.has(item.field) : current === 2 ? STEP2.has(item.field) : !STEP1.has(item.field) && !STEP2.has(item.field);
-      if (inStep) {
-        next[item.field] = item.message;
-      }
-    }
-    return next;
+    return presentSetupFieldErrors(values, { timezoneConfirmed, taxZeroConfirmed, skipLogo }, current);
   }
 
   function focusField(field?: string) {
@@ -168,7 +163,7 @@ export default function SetupScreen() {
     setErrors(nextErrors);
     setFormError(undefined);
     if (Object.keys(nextErrors).length > 0) {
-      focusField(Object.keys(nextErrors)[0]);
+      focusField(presentFirstInvalidField(values, { timezoneConfirmed, taxZeroConfirmed, skipLogo }, step));
       return;
     }
     setStep((current) => (current === 1 ? 2 : 3));
@@ -200,6 +195,7 @@ export default function SetupScreen() {
       await clearSetupDraft(secureKv);
       setBanner(copy.setupSaved);
       await auth.refreshBootstrap();
+      router.replace(APP_JOBS_HREF);
       return;
     }
     if (result.error.field_errors && result.error.field_errors.length > 0) {
@@ -229,24 +225,72 @@ export default function SetupScreen() {
     return errors[id];
   }
 
-  const zones = timezoneChoices(values.timezone);
+  const basic = presentBasicInfoScreen();
+  const defaults = presentDefaultsScreen();
+  const progress = presentSetupProgress(step);
+  const detectedTimezone = deviceTimeZone();
+  const continueLabel = presentContinueLabel(step, submitting);
+  const savingAnnouncement = presentSavingAnnouncement(submitting);
+  const emailA11y = presentEmailAccessibility(copy.contactEmail);
+
+  if (!hydrated) {
+    return (
+      <View style={[styles.root, { paddingTop: insets.top + SETUP_GUTTER }]}>
+        <Text accessibilityLiveRegion="polite" style={styles.body}>
+          {copy.restoring}
+        </Text>
+      </View>
+    );
+  }
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      style={[styles.flex, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
-    >
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardDismissMode="interactive"
-        keyboardShouldPersistTaps="handled"
+    <View style={styles.root}>
+      <PublicAtmosphere />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.flex}
       >
-        <Text accessibilityRole="header" style={styles.title}>
-          {copy.setupTitle}
-        </Text>
-        <Text style={styles.body}>
-          {step === 1 ? copy.setupStep1 : step === 2 ? copy.setupStep2 : copy.setupStep3}
-        </Text>
+        <ScrollView
+          contentContainerStyle={[
+            styles.content,
+            {
+              paddingTop: insets.top + SETUP_GUTTER,
+              paddingHorizontal: SETUP_GUTTER,
+              paddingBottom: space.gutter,
+            },
+          ]}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
+        >
+          {step > 1 ? (
+            <Pressable
+              accessibilityLabel={copy.back}
+              accessibilityRole="button"
+              onPress={() => {
+                setErrors({});
+                setStep((current) => (current === 3 ? 2 : 1));
+              }}
+              style={styles.backHit}
+            >
+              <Text style={styles.backLabel}>{copy.back}</Text>
+            </Pressable>
+          ) : null}
+          <Text style={styles.progressMeta}>
+            {copy.setupStepOf.replace("{current}", String(step)).replace("{total}", "3")}
+            {"  ·  "}
+            {progress.section}
+            {"  ·  "}
+            {progress.percentLabel}
+          </Text>
+          <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${Math.round(progress.fraction * 100)}%` }]} />
+          </View>
+          <Text accessibilityRole="header" style={styles.title}>
+            {step === 1 ? basic.heading : step === 3 ? defaults.heading : copy.setupTitle}
+          </Text>
+          <Text style={styles.body}>
+            {step === 1 ? basic.supportingText : step === 2 ? copy.skipLogoHint : defaults.supportingText}
+          </Text>
         {restored ? (
           <Text accessibilityLiveRegion="polite" style={styles.banner}>
             {copy.setupRestored}
@@ -272,6 +316,8 @@ export default function SetupScreen() {
               name="business_name"
               required
               register={inputs}
+              autoComplete="organization"
+              textContentType="organizationName"
               value={values.business_name}
             />
             <Field
@@ -286,7 +332,7 @@ export default function SetupScreen() {
             <Text nativeID="trade-label" style={styles.label}>
               {copy.tradeLabel} ({copy.setupRequired})
             </Text>
-            <View accessibilityRole="radiogroup" style={styles.row}>
+            <View accessibilityLabel={copy.tradeLabel} accessibilityRole="radiogroup" style={styles.row}>
               <Choice selected={values.trade === "handyman"} label={copy.tradeHandyman} onPress={() => setField("trade", "handyman")} />
               <Choice selected={values.trade === "other"} label={copy.tradeOther} onPress={() => setField("trade", "other")} />
             </View>
@@ -295,22 +341,6 @@ export default function SetupScreen() {
                 {fieldError("trade")}
               </Text>
             ) : null}
-            <Check
-              label={copy.skipLogo}
-              hint={copy.skipLogoHint}
-              selected={skipLogo}
-              onPress={() => setSkipLogo((current) => !current)}
-            />
-            {fieldError("skip_logo") ? (
-              <Text accessibilityLiveRegion="polite" style={styles.error}>
-                {fieldError("skip_logo")}
-              </Text>
-            ) : null}
-          </>
-        ) : null}
-
-        {step === 2 ? (
-          <>
             <Field
               error={fieldError("contact_name")}
               label={copy.contactName}
@@ -318,19 +348,23 @@ export default function SetupScreen() {
               onChange={setField}
               register={inputs}
               required
+              autoComplete="name"
+              textContentType="name"
               value={values.contact_name}
             />
             <Field
               autoCapitalize="none"
+              editable={false}
               error={fieldError("contact_email")}
               keyboardType="email-address"
-              label={copy.contactEmail}
+              label={`${copy.contactEmail} · ${basic.emailVerifiedLabel}`}
               name="contact_email"
               onChange={setField}
               register={inputs}
               required
               textContentType="emailAddress"
-              value={values.contact_email}
+              value={values.contact_email || email}
+              accessibilityOverride={emailA11y}
             />
             <Field
               error={fieldError("contact_phone")}
@@ -339,9 +373,11 @@ export default function SetupScreen() {
               name="contact_phone"
               onChange={setField}
               register={inputs}
+              autoComplete="tel"
               textContentType="telephoneNumber"
               value={values.contact_phone}
             />
+            <Text style={styles.section}>{basic.addressSection}</Text>
             <Field
               error={fieldError("address.line1")}
               label={copy.addressLine1}
@@ -349,6 +385,7 @@ export default function SetupScreen() {
               onChange={setField}
               register={inputs}
               required
+              autoComplete="street-address"
               textContentType="streetAddressLine1"
               value={values.line1}
             />
@@ -371,25 +408,17 @@ export default function SetupScreen() {
               textContentType="addressCity"
               value={values.city}
             />
-            <Text nativeID="state-label" style={styles.label}>
-              {copy.state} ({copy.setupRequired})
-            </Text>
-            <View accessibilityLabel={copy.state} style={styles.wrap}>
-              {US_STATES.map((code) => (
-                <Choice
-                  key={code}
-                  compact
-                  label={code}
-                  onPress={() => setField("state", code)}
-                  selected={values.state === code}
-                />
-              ))}
-            </View>
-            {fieldError("address.state") ? (
-              <Text accessibilityLiveRegion="polite" style={styles.error}>
-                {fieldError("address.state")}
-              </Text>
-            ) : null}
+            <Field
+              autoCapitalize="characters"
+              error={fieldError("address.state")}
+              label={copy.state}
+              name="state"
+              onChange={(_key, value) => setField("state", String(value).replace(/[^a-zA-Z]/g, "").slice(0, 2).toUpperCase())}
+              register={inputs}
+              required
+              textContentType="addressState"
+              value={values.state}
+            />
             <Field
               error={fieldError("address.postal_code")}
               keyboardType="number-pad"
@@ -398,9 +427,26 @@ export default function SetupScreen() {
               onChange={setField}
               register={inputs}
               required
+              autoComplete="postal-code"
               textContentType="postalCode"
               value={values.postal_code}
             />
+          </>
+        ) : null}
+
+        {step === 2 ? (
+          <>
+            <Check
+              label={copy.skipLogo}
+              hint={copy.skipLogoHint}
+              selected={skipLogo}
+              onPress={() => setSkipLogo((current) => !current)}
+            />
+            {fieldError("skip_logo") ? (
+              <Text accessibilityLiveRegion="polite" style={styles.error}>
+                {fieldError("skip_logo")}
+              </Text>
+            ) : null}
           </>
         ) : null}
 
@@ -409,19 +455,17 @@ export default function SetupScreen() {
             <Text nativeID="timezone-label" style={styles.label}>
               {copy.timezone} ({copy.setupRequired})
             </Text>
-            <View accessibilityRole="radiogroup">
-              {zones.map((zone) => (
-                <Choice
-                  key={zone}
-                  label={zone}
-                  onPress={() => {
-                    setField("timezone", zone);
-                    setTimezoneConfirmed(false);
-                  }}
-                  selected={values.timezone === zone}
-                />
-              ))}
-            </View>
+            <Pressable
+              accessibilityHint={copy.timezonePickerHint}
+              accessibilityLabel={`${copy.timezone}, ${presentTimezoneFieldValue(values.timezone)}`}
+              accessibilityRole="button"
+              onPress={() => setTimezonePickerOpen(true)}
+              style={styles.timezoneField}
+            >
+              <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.globe} />
+              <Text style={styles.timezoneValue}>{presentTimezoneFieldValue(values.timezone)}</Text>
+              <Text style={styles.chevron}>▾</Text>
+            </Pressable>
             <Check
               label={copy.timezoneConfirm}
               selected={timezoneConfirmed}
@@ -432,7 +476,22 @@ export default function SetupScreen() {
                 {fieldError("timezone_confirmed") ?? fieldError("timezone")}
               </Text>
             ) : null}
-            <Text style={styles.body}>{copy.currencyLocked}</Text>
+            <Text nativeID="currency-label" style={styles.label}>
+              {defaults.currencyLabel}
+            </Text>
+            <View
+              accessibilityLabel={`${defaults.currencyLabel}, ${defaults.currencyValue}`}
+              accessibilityHint={defaults.currencyHint}
+              accessibilityState={{ disabled: true }}
+              style={styles.currencyField}
+            >
+              <Text style={styles.currencyValue}>{defaults.currencyValue}</Text>
+              <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.lockWrap}>
+                <View style={styles.lockShackle} />
+                <View style={styles.lockBody} />
+              </View>
+            </View>
+            <Text style={styles.hint}>{defaults.currencyHint}</Text>
             <Field
               error={fieldError("default_tax_bp")}
               keyboardType="decimal-pad"
@@ -456,12 +515,13 @@ export default function SetupScreen() {
             <Text style={styles.label}>
               {copy.dueDays} ({copy.setupRequired})
             </Text>
-            <View style={styles.wrap}>
+            <View accessibilityRole="radiogroup" style={styles.wrap}>
               {(["0", "7", "14", "30", "custom"] as const).map((option) => (
                 <Choice
                   key={option}
                   compact
-                  label={option === "0" ? copy.dueOnReceipt : option === "custom" ? copy.dueCustom : option}
+                  label={presentDuePresetLabel(option)}
+                  accessibilityLabel={option === "0" ? copy.dueOnReceipt : presentDuePresetLabel(option)}
                   onPress={() => setField("due_preset", option)}
                   selected={values.due_preset === option}
                 />
@@ -489,42 +549,13 @@ export default function SetupScreen() {
               multiline
               name="default_terms"
               onChange={setField}
+              placeholder={copy.defaultTermsPlaceholder}
               register={inputs}
               value={values.default_terms}
             />
           </>
         ) : null}
 
-        <View style={styles.actions}>
-          {step > 1 ? (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                setErrors({});
-                setStep((current) => (current === 3 ? 2 : 1));
-              }}
-              style={styles.secondary}
-            >
-              <Text style={styles.secondaryLabel}>{copy.back}</Text>
-            </Pressable>
-          ) : null}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ busy: submitting, disabled: submitting }}
-            disabled={submitting}
-            onPress={() => {
-              if (step < 3) {
-                goNext();
-              } else {
-                void submit();
-              }
-            }}
-            style={[styles.button, submitting ? styles.buttonDisabled : null]}
-          >
-            <Text style={styles.buttonLabel}>
-              {step < 3 ? copy.continue : submitting ? copy.savingSetup : copy.saveSetup}
-            </Text>
-          </Pressable>
           <Pressable
             accessibilityRole="button"
             onPress={() => {
@@ -534,9 +565,48 @@ export default function SetupScreen() {
           >
             <Text style={styles.secondaryLabel}>{copy.signOut}</Text>
           </Pressable>
+        </ScrollView>
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, space.gutter), paddingHorizontal: SETUP_GUTTER }]}>
+          <Pressable
+            accessibilityLabel={continueLabel}
+            accessibilityLiveRegion={savingAnnouncement ? "polite" : undefined}
+            accessibilityRole="button"
+            accessibilityState={{ busy: submitting, disabled: submitting }}
+            disabled={submitting}
+            onPress={() => {
+              if (submitting) {
+                return;
+              }
+              if (step < 3) {
+                goNext();
+              } else {
+                void submit();
+              }
+            }}
+            style={[
+              styles.button,
+              { minHeight: SETUP_PRIMARY_BUTTON_MIN_HEIGHT },
+              submitting ? styles.buttonDisabled : null,
+            ]}
+          >
+            <Text style={styles.buttonLabel}>{continueLabel}</Text>
+          </Pressable>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+      <TimezonePicker
+        committed={values.timezone}
+        device={detectedTimezone}
+        onClose={() => setTimezonePickerOpen(false)}
+        onConfirm={(zone) => {
+          if (zone !== values.timezone) {
+            setField("timezone", zone);
+            setTimezoneConfirmed(false);
+          }
+          setTimezonePickerOpen(false);
+        }}
+        visible={timezonePickerOpen}
+      />
+    </View>
   );
 }
 
@@ -548,32 +618,70 @@ function Field(props: {
   register: { current: Record<string, TextInput | null> };
   error?: string;
   required?: boolean;
+  editable?: boolean;
   keyboardType?: TextInput["props"]["keyboardType"];
   autoCapitalize?: TextInput["props"]["autoCapitalize"];
   textContentType?: TextInput["props"]["textContentType"];
+  autoComplete?: TextInput["props"]["autoComplete"];
+  placeholder?: string;
   multiline?: boolean;
+  accessibilityOverride?: {
+    accessibilityLabel: string;
+    accessibilityHint?: string;
+    editable?: boolean;
+    accessibilityState?: { disabled?: boolean };
+  };
 }) {
   const labelId = `${props.name}-label`;
   const errorId = `${props.name}-error`;
+  const a11y = props.accessibilityOverride ?? presentFieldAccessibility(props.label, props.required === true, props.error);
+  const next = presentNextInputName(String(props.name));
+  const editable = props.accessibilityOverride?.editable ?? props.editable ?? true;
+  const labelHasStatus =
+    props.label.includes(copy.setupRequired) ||
+    props.label.includes(copy.setupOptional) ||
+    props.label.includes("(optional)");
   return (
     <View>
       <Text nativeID={labelId} style={styles.label}>
         {props.label}
-        {props.required ? ` (${copy.setupRequired})` : ""}
+        {labelHasStatus ? "" : props.required ? ` (${copy.setupRequired})` : ` (${copy.setupOptional})`}
       </Text>
       <TextInput
-        accessibilityLabel={`${props.label}${props.required ? `, ${copy.setupRequired}` : ""}`}
-        accessibilityHint={props.error}
+        accessibilityHint={a11y.accessibilityHint ?? props.error}
+        accessibilityLabel={a11y.accessibilityLabel}
         accessibilityLabelledBy={labelId}
+        accessibilityState={props.accessibilityOverride?.accessibilityState ?? { disabled: editable === false }}
         autoCapitalize={props.autoCapitalize}
+        autoComplete={props.autoComplete}
+        blurOnSubmit={!next}
+        editable={editable}
         keyboardType={props.keyboardType}
         multiline={props.multiline}
         nativeID={props.name}
-        onChangeText={(text) => props.onChange(props.name as keyof SetupFormValues, text)}
+        placeholder={props.placeholder}
+        placeholderTextColor={colors.secondary}
+        onChangeText={(text) => {
+          if (editable === false) {
+            return;
+          }
+          props.onChange(props.name as keyof SetupFormValues, text);
+        }}
+        onSubmitEditing={() => {
+          if (next) {
+            props.register.current[next]?.focus();
+          }
+        }}
         ref={(node) => {
           props.register.current[props.name] = node;
         }}
-        style={[styles.input, props.multiline ? styles.multiline : null, props.error ? styles.inputError : null]}
+        returnKeyType={next ? "next" : props.multiline ? "default" : "done"}
+        style={[
+          styles.input,
+          props.multiline ? styles.multiline : null,
+          props.error ? styles.inputError : null,
+          editable === false ? styles.inputReadonly : null,
+        ]}
         textContentType={props.textContentType}
         value={props.value}
       />
@@ -586,9 +694,16 @@ function Field(props: {
   );
 }
 
-function Choice(props: { label: string; selected: boolean; onPress: () => void; compact?: boolean }) {
+function Choice(props: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  compact?: boolean;
+  accessibilityLabel?: string;
+}) {
   return (
     <Pressable
+      accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="radio"
       accessibilityState={{ selected: props.selected }}
       onPress={props.onPress}
@@ -618,31 +733,44 @@ function Check(props: { label: string; selected: boolean; onPress: () => void; h
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: colors.background },
-  content: { padding: space.gutter, gap: space.scale, paddingBottom: 48 },
+  root: { flex: 1, backgroundColor: colors.background },
+  flex: { flex: 1 },
+  content: { gap: space.scale, flexGrow: 1 },
+  backHit: { minHeight: SETUP_HIT_TARGET, minWidth: SETUP_HIT_TARGET, justifyContent: "center", alignSelf: "flex-start" },
+  backLabel: { color: colors.navy, fontSize: type.body, fontWeight: "600" },
+  progressMeta: { color: colors.navy, fontSize: type.secondary, fontWeight: "700" },
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: colors.infoTint,
+    overflow: "hidden",
+  },
+  progressFill: { height: 8, borderRadius: 999, backgroundColor: SETUP_PROGRESS_ACCENT },
   title: { color: colors.text, fontSize: type.screen, fontWeight: "700" },
-  body: { color: colors.text, fontSize: type.body },
+  body: { color: colors.secondary, fontSize: type.body },
+  section: { color: colors.text, fontSize: type.section, fontWeight: "700", marginTop: space.scale },
   label: { color: colors.text, fontSize: type.secondary, marginTop: space.scale },
   hint: { color: colors.secondary, fontSize: type.secondary, marginTop: 4 },
   banner: { color: colors.navy, fontSize: type.secondary },
   error: { color: colors.danger, fontSize: type.secondary },
   input: {
-    minHeight: 44,
+    minHeight: SETUP_HIT_TARGET,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: space.radius,
     paddingHorizontal: space.gutter,
     fontSize: type.body,
     color: colors.text,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.surface,
   },
+  inputReadonly: { backgroundColor: colors.infoTint },
   multiline: { minHeight: 96, textAlignVertical: "top", paddingVertical: space.scale },
   inputError: { borderColor: colors.danger, borderWidth: 2 },
   row: { flexDirection: "row", flexWrap: "wrap", gap: space.scale },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   choice: {
-    minHeight: 44,
-    minWidth: 44,
+    minHeight: SETUP_HIT_TARGET,
+    minWidth: SETUP_HIT_TARGET,
     borderWidth: 1,
     borderColor: colors.navy,
     borderRadius: space.radius,
@@ -653,25 +781,73 @@ const styles = StyleSheet.create({
   choiceCompact: { paddingHorizontal: 10 },
   choiceSelected: { backgroundColor: colors.navy },
   choiceLabel: { color: colors.navy, fontSize: type.secondary, fontWeight: "600" },
-  choiceLabelSelected: { color: "#FFFFFF" },
-  check: { minHeight: 44, justifyContent: "center", marginTop: space.scale },
-  actions: { gap: space.scale, marginTop: space.gutter },
+  choiceLabelSelected: { color: colors.surface },
+  check: { minHeight: SETUP_HIT_TARGET, justifyContent: "center", marginTop: space.scale },
+  timezoneField: {
+    minHeight: SETUP_PRIMARY_BUTTON_MIN_HEIGHT,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: space.radius,
+    backgroundColor: colors.surface,
+    paddingHorizontal: space.gutter,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.scale,
+  },
+  globe: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: colors.navy,
+  },
+  timezoneValue: { flex: 1, color: colors.text, fontSize: type.body },
+  chevron: { color: colors.navy, fontSize: type.body, fontWeight: "700" },
+  currencyField: {
+    minHeight: SETUP_HIT_TARGET,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: space.radius,
+    backgroundColor: colors.infoTint,
+    paddingHorizontal: space.gutter,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: space.scale,
+  },
+  currencyValue: { color: colors.text, fontSize: type.body, flex: 1 },
+  lockWrap: { width: 18, height: 20, alignItems: "center" },
+  lockShackle: {
+    width: 10,
+    height: 7,
+    borderWidth: 2,
+    borderBottomWidth: 0,
+    borderColor: colors.navy,
+    borderTopLeftRadius: 5,
+    borderTopRightRadius: 5,
+  },
+  lockBody: { width: 14, height: 10, backgroundColor: colors.navy, borderRadius: 2, marginTop: -1 },
+  footer: {
+    paddingTop: space.gutter,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
   button: {
-    minHeight: 48,
+    minHeight: SETUP_PRIMARY_BUTTON_MIN_HEIGHT,
     backgroundColor: colors.navy,
     borderRadius: space.radius,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: space.gutter,
   },
   buttonDisabled: { opacity: 0.5 },
-  buttonLabel: { color: "#FFFFFF", fontSize: type.body, fontWeight: "600" },
+  buttonLabel: { color: colors.surface, fontSize: type.body, fontWeight: "600", textAlign: "center" },
   secondary: {
-    minHeight: 48,
-    borderColor: colors.navy,
-    borderWidth: 1,
-    borderRadius: space.radius,
+    minHeight: SETUP_HIT_TARGET,
     alignItems: "center",
     justifyContent: "center",
+    marginTop: space.gutter,
   },
   secondaryLabel: { color: colors.navy, fontSize: type.body, fontWeight: "600" },
 });

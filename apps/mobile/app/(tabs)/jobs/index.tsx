@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -8,12 +8,21 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../src/i18n/en.ts";
 import { listStateFromFilter } from "../../../src/jobs/form.ts";
 import { presentJobsList, type JobSummary } from "../../../src/jobs/presentation.ts";
-import { upsertCachedJob, listCachedJobs } from "../../../src/jobs/cache.ts";
+import { upsertCachedJobs, listCachedJobs } from "../../../src/jobs/cache.ts";
+import {
+  applyCachedJobs,
+  applyJobsFailure,
+  applyNetworkJobs,
+  beginJobsLoad,
+  initialJobsListState,
+  jobsListKey,
+  type JobsListState,
+} from "../../../src/jobs/list-state.ts";
 import { createJobDisabled, createJobPath, jobDetailPath } from "../../../src/jobs/routes.ts";
 import { canUseCachedCommercialData } from "../../../src/sync/offline-gate.ts";
 import { useAuth } from "../../../src/session/AuthProvider.tsx";
@@ -23,127 +32,154 @@ type Filter = "active" | "finished" | "archived";
 
 export default function JobsScreen() {
   const auth = useAuth();
-  const runOwnerRequest = auth.runOwnerRequest;
+  const { runOwnerRequest, getSyncSessionDb } = auth;
+  const authStatus = auth.snapshot.status;
+  const lastAuthenticatedAt = auth.snapshot.lastAuthenticatedAt;
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState<Filter>("active");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [items, setItems] = useState<JobSummary[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const listState = listStateFromFilter(filter);
+  const key = jobsListKey(listState, search);
+  const [state, setState] = useState<JobsListState>(() => initialJobsListState(key));
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [loadingMore, setLoadingMore] = useState(false);
-  const [loadedOnce, setLoadedOnce] = useState(false);
-  const [error, setError] = useState<{ message: string; retryable: boolean } | undefined>();
+  const focusedOnceRef = useRef(false);
 
   useEffect(() => {
     const handle = setTimeout(() => setSearch(searchInput.trim()), 300);
     return () => clearTimeout(handle);
   }, [searchInput]);
 
-  const load = useCallback(
-    async (cursor?: string | null) => {
-      const appending = Boolean(cursor);
-      if (appending) {
-        setLoadingMore(true);
-      } else {
-        setLoading(true);
-      }
-      setError(undefined);
-      const listState = listStateFromFilter(filter);
-      const session = auth.getSyncSessionDb();
-      const offlineOk = canUseCachedCommercialData(
-        auth.snapshot.status,
-        auth.snapshot.lastAuthenticatedAt,
-        Date.now(),
-      );
+  const update = useCallback((next: (prev: JobsListState) => JobsListState) => {
+    setState((prev) => {
+      const value = next(prev);
+      stateRef.current = value;
+      return value;
+    });
+  }, []);
 
-      if (auth.snapshot.status === "offline_cached") {
-        if (!offlineOk) {
-          setError({ message: copy.accessExpired, retryable: false });
-          setLoading(false);
-          setLoadingMore(false);
-          setLoadedOnce(true);
-          return;
-        }
-        if (!session) {
-          setItems([]);
-          setError({ message: copy.cacheMissOffline, retryable: true });
-          setLoadedOnce(true);
-          setLoading(false);
-          setLoadingMore(false);
-          return;
-        }
-        try {
-          const cached = await listCachedJobs(session.db, { listState, search });
-          const itemsMapped = cached.map((row) => JSON.parse(row.payloadJson) as JobSummary);
-          setItems(itemsMapped);
-          setNextCursor(null);
-          setLoadedOnce(true);
-          if (itemsMapped.length === 0) {
-            setError({ message: copy.cacheMissOffline, retryable: true });
-          }
-        } catch {
-          setItems([]);
-          setError({ message: copy.cacheMissOffline, retryable: true });
-          setLoadedOnce(true);
-        }
-        setLoading(false);
-        setLoadingMore(false);
+  const load = useCallback(async () => {
+    const next = beginJobsLoad(stateRef.current, key);
+    const generation = next.generation;
+    update(() => next);
+    const session = getSyncSessionDb();
+
+    if (authStatus === "offline_cached") {
+      if (!canUseCachedCommercialData(authStatus, lastAuthenticatedAt, Date.now())) {
+        update((prev) => applyJobsFailure(prev, generation, { message: copy.accessExpired, retryable: false }));
         return;
       }
+      if (!session) {
+        update((prev) => applyJobsFailure(prev, generation, { message: copy.cacheMissOffline, retryable: true }));
+        return;
+      }
+      try {
+        const cached = await listCachedJobs(session.db, { listState, search });
+        const items = cached.map((row) => JSON.parse(row.payloadJson) as JobSummary);
+        update((prev) => applyNetworkJobs(prev, generation, { items, next_cursor: null }));
+        if (items.length === 0) {
+          update((prev) => applyJobsFailure(prev, generation, { message: copy.cacheMissOffline, retryable: true }));
+        }
+      } catch {
+        update((prev) => applyJobsFailure(prev, generation, { message: copy.cacheMissOffline, retryable: true }));
+      }
+      return;
+    }
 
+    if (session && next.source === "none") {
+      void listCachedJobs(session.db, { listState, search })
+        .then((rows) => {
+          const items = rows.map((row) => JSON.parse(row.payloadJson) as JobSummary);
+          update((prev) => applyCachedJobs(prev, generation, items));
+        })
+        .catch(() => undefined);
+    }
+
+    const query = new URLSearchParams();
+    query.set("state", listState);
+    if (search) {
+      query.set("search", search);
+    }
+    const result = await runOwnerRequest<{ items: JobSummary[]; next_cursor: string | null }>({
+      path: `/v1/jobs?${query.toString()}`,
+    });
+    if (!result.ok) {
+      update((prev) =>
+        applyJobsFailure(prev, generation, {
+          message: result.error.message || copy.jobLoadError,
+          retryable: result.error.retryable || result.error.status === 0,
+        }),
+      );
+      return;
+    }
+    update((prev) => applyNetworkJobs(prev, generation, result.data));
+    if (session) {
+      void upsertCachedJobs(
+        session.db,
+        result.data.items.map((job) => ({
+          jobId: job.id,
+          payloadJson: JSON.stringify(job),
+          listState,
+          syncBadge: "synced" as const,
+          serverConfirmed: true,
+        })),
+      ).catch(() => undefined);
+    }
+  }, [authStatus, getSyncSessionDb, key, lastAuthenticatedAt, listState, runOwnerRequest, search, update]);
+
+  const loadMore = useCallback(
+    async (cursor: string) => {
+      const generation = stateRef.current.generation;
+      setLoadingMore(true);
       const query = new URLSearchParams();
       query.set("state", listState);
       if (search) {
         query.set("search", search);
       }
-      if (cursor) {
-        query.set("cursor", cursor);
-      }
+      query.set("cursor", cursor);
       const result = await runOwnerRequest<{ items: JobSummary[]; next_cursor: string | null }>({
         path: `/v1/jobs?${query.toString()}`,
       });
-      if (result.ok) {
-        setItems((current) => (appending ? [...current, ...result.data.items] : result.data.items));
-        setNextCursor(result.data.next_cursor);
-        setLoadedOnce(true);
-        if (session && !appending) {
-          for (const job of result.data.items) {
-            try {
-              await upsertCachedJob(session.db, {
-                jobId: job.id,
-                payloadJson: JSON.stringify(job),
-                listState,
-                syncBadge: "synced",
-                serverConfirmed: true,
-              });
-            } catch {
-              /* cache best-effort */
-            }
-          }
-        }
-      } else {
-        setError({
-          message: result.error.message || copy.jobLoadError,
-          retryable: result.error.retryable || result.error.status === 0,
-        });
-      }
-      setLoading(false);
       setLoadingMore(false);
+      if (stateRef.current.generation !== generation) {
+        return;
+      }
+      if (result.ok) {
+        update((prev) => applyNetworkJobs(prev, generation, result.data, true));
+      } else {
+        update((prev) =>
+          applyJobsFailure(prev, generation, {
+            message: result.error.message || copy.jobLoadError,
+            retryable: result.error.retryable || result.error.status === 0,
+          }),
+        );
+      }
     },
-    [auth, filter, runOwnerRequest, search],
+    [listState, runOwnerRequest, search, update],
   );
 
   useEffect(() => {
-    setLoadedOnce(false);
-    setItems([]);
-    setNextCursor(null);
     void load();
-  }, [filter, load, search]);
+  }, [load]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (!focusedOnceRef.current) {
+        focusedOnceRef.current = true;
+        return;
+      }
+      if (!stateRef.current.loading) {
+        void load();
+      }
+    }, [load]),
+  );
+
+  const { items, nextCursor, loading, loadedOnce, error } = state;
   const view = presentJobsList({
-    authStatus: auth.snapshot.status,
+    authStatus,
     loading,
     loadedOnce,
     items,
@@ -229,15 +265,29 @@ export default function JobsScreen() {
         </View>
       ) : null}
 
-      {view.kind === "empty" || (view.kind === "offline" && view.items.length === 0) ? (
+      {view.kind === "empty" && !error ? (
         <View style={styles.center}>
           <Text style={styles.empty}>{copy.jobsEmpty}</Text>
           <Text style={styles.hint}>{copy.jobsEmptyHint}</Text>
         </View>
       ) : null}
 
+      {(view.kind === "empty" && error) || (view.kind === "offline" && view.items.length === 0) ? (
+        <View style={styles.center}>
+          <Text accessibilityLiveRegion="polite" style={styles.error}>
+            {error?.message ?? view.message ?? copy.cacheMissOffline}
+          </Text>
+          {view.showRetry ? (
+            <Pressable accessibilityRole="button" onPress={() => void load()} style={styles.secondary}>
+              <Text style={styles.secondaryLabel}>{copy.retry}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
       {view.items.length > 0 ? (
         <ScrollView contentContainerStyle={styles.list} keyboardShouldPersistTaps="handled">
+          {view.refreshing ? <ActivityIndicator accessibilityLabel={copy.refreshing} color={colors.navy} /> : null}
           {view.message ? (
             <Text accessibilityLiveRegion="polite" style={styles.error}>
               {view.message}
@@ -257,7 +307,7 @@ export default function JobsScreen() {
             </Pressable>
           ))}
           {nextCursor && !loadingMore ? (
-            <Pressable accessibilityRole="button" onPress={() => void load(nextCursor)} style={styles.secondary}>
+            <Pressable accessibilityRole="button" onPress={() => void loadMore(nextCursor)} style={styles.secondary}>
                 <Text style={styles.secondaryLabel}>{copy.loadMore}</Text>
             </Pressable>
           ) : null}

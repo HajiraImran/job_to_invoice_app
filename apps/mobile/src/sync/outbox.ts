@@ -1,3 +1,4 @@
+import { secureRandomUUID } from "../crypto/uuid.ts";
 import type { EncryptedSqliteHandle } from "../storage/encrypted-database.ts";
 import { StorageError } from "../storage/storage-error.ts";
 import { assertOutboxOperationAllowed, type OutboxResourceKind } from "./outbox-rules.ts";
@@ -115,15 +116,22 @@ export async function enqueueOutboxOperation(
 
   const nowIso = input.nowIso ?? new Date().toISOString();
   try {
-    const existingForResource = await db.getFirstAsync<{ operation_id: string; state: string }>(
-      "select operation_id, state from outbox_ops where resource_id = ? and state in ('pending', 'in_flight', 'paused_conflict', 'failed') order by updated_at desc limit 1",
+    const open = await db.getAllAsync<{ operation_id: string; state: string; idempotency_key: string }>(
+      `select operation_id, state, idempotency_key from outbox_ops
+       where resource_id = ? and state in ('pending', 'in_flight', 'paused_conflict', 'failed')
+       order by updated_at desc`,
       [input.resourceId],
     );
-    if (existingForResource && existingForResource.operation_id !== input.operationId) {
-      // Replace open body for same resource by updating the existing op when not in flight.
-      if (existingForResource.state === "in_flight" || existingForResource.state === "paused_conflict") {
-        throw new StorageError("SYNC_PAUSED");
-      }
+    if (open.some((row) => row.state === "paused_conflict")) {
+      throw new StorageError("SYNC_PAUSED");
+    }
+    const editable = open.find((row) => row.state === "pending" || row.state === "failed");
+    const inFlight = open.find((row) => row.state === "in_flight");
+    if (editable && editable.operation_id !== input.operationId) {
+      const idempotencyKey =
+        inFlight && input.idempotencyKey === inFlight.idempotency_key
+          ? editable.idempotency_key
+          : input.idempotencyKey;
       await db.runAsync(
         `update outbox_ops set
           method = ?, path = ?, body_json = ?, base_version = ?, idempotency_key = ?,
@@ -134,28 +142,37 @@ export async function enqueueOutboxOperation(
           input.path,
           input.bodyJson ?? null,
           input.baseVersion ?? null,
-          input.idempotencyKey,
+          idempotencyKey,
           JSON.stringify(input.dependencyIds ?? []),
           nowIso,
           nowIso,
-          existingForResource.operation_id,
+          editable.operation_id,
         ],
       );
       // Drop any older duplicate open rows for this resource (keeps one op per resource).
       await db.runAsync(
         `update outbox_ops set state = 'done', updated_at = ?, last_error_code = ?
          where resource_id = ? and operation_id != ? and state in ('pending', 'failed')`,
-        [nowIso, "SUPERSEDED", input.resourceId, existingForResource.operation_id],
+        [nowIso, "SUPERSEDED", input.resourceId, editable.operation_id],
       );
       const row = await db.getFirstAsync<Record<string, unknown>>(
         "select * from outbox_ops where operation_id = ?",
-        [existingForResource.operation_id],
+        [editable.operation_id],
       );
       if (!row) {
         throw new StorageError("DATABASE_UNAVAILABLE");
       }
       return mapRow(row);
     }
+
+    const successor =
+      inFlight && (inFlight.operation_id === input.operationId || !editable)
+        ? {
+            operationId: inFlight.operation_id === input.operationId ? secureRandomUUID() : input.operationId,
+            idempotencyKey:
+              input.idempotencyKey === inFlight.idempotency_key ? secureRandomUUID() : input.idempotencyKey,
+          }
+        : null;
 
     await db.runAsync(
       `insert into outbox_ops (
@@ -172,14 +189,14 @@ export async function enqueueOutboxOperation(
         updated_at = excluded.updated_at,
         last_error_code = null`,
       [
-        input.operationId,
+        successor?.operationId ?? input.operationId,
         input.resourceKind,
         input.resourceId,
         input.method.toUpperCase(),
         input.path,
         input.bodyJson ?? null,
         input.baseVersion ?? null,
-        input.idempotencyKey,
+        successor?.idempotencyKey ?? input.idempotencyKey,
         JSON.stringify(input.dependencyIds ?? []),
         nowIso,
         nowIso,
@@ -188,7 +205,7 @@ export async function enqueueOutboxOperation(
     );
     const row = await db.getFirstAsync<Record<string, unknown>>(
       "select * from outbox_ops where operation_id = ?",
-      [input.operationId],
+      [successor?.operationId ?? input.operationId],
     );
     if (!row) {
       throw new StorageError("DATABASE_UNAVAILABLE");
@@ -380,6 +397,23 @@ export async function markOutboxInFlight(db: EncryptedSqliteHandle, operationId:
     await db.runAsync(
       "update outbox_ops set state = 'in_flight', updated_at = ? where operation_id = ? and state = 'pending'",
       [nowIso, operationId],
+    );
+  } catch {
+    throw new StorageError("DATABASE_UNAVAILABLE");
+  }
+}
+
+export async function rebasePendingOutboxVersions(
+  db: EncryptedSqliteHandle,
+  resourceId: string,
+  version: number,
+  nowIso: string,
+): Promise<void> {
+  try {
+    await db.runAsync(
+      `update outbox_ops set base_version = ?, updated_at = ?
+       where resource_id = ? and state in ('pending', 'failed') and (base_version is null or base_version < ?)`,
+      [version, nowIso, resourceId, version],
     );
   } catch {
     throw new StorageError("DATABASE_UNAVAILABLE");
