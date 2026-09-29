@@ -37,14 +37,17 @@ function queryFailPool(code: string, message: string): Pool {
     connect: async () => {
       const client = {
         query: async (sql: string) => {
-          const normalized = sql.trim().toLowerCase();
-          if (normalized === "begin" || normalized === "set local role api_app" || normalized === "commit") {
-            return { rows: [] };
+          for (const statement of sql.split(";")) {
+            const normalized = statement.trim().toLowerCase();
+            if (normalized === "begin" || normalized === "set local role api_app" || normalized === "commit") {
+              continue;
+            }
+            if (normalized === "rollback") {
+              continue;
+            }
+            throw Object.assign(new Error(message), { code });
           }
-          if (normalized === "rollback") {
-            return { rows: [] };
-          }
-          throw Object.assign(new Error(message), { code });
+          return { rows: [] };
         },
         release: () => undefined,
       };

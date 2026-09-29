@@ -462,6 +462,12 @@ describe("invoice issue API", () => {
     });
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json().error.code).toBe("UNRESOLVED_CHANGES");
+    expect(blocked.json().error.message).toBe(
+      "This job has unpublished extra work. Open Extra work to finish sending it for approval, or discard that draft before invoicing.",
+    );
+    expect(blocked.json().error.field_errors).toEqual([
+      { field: "change_draft", message: "Finish or discard the unpublished extra work before invoicing." },
+    ]);
     await running().admin.query("set role migrator");
     try {
       await running().admin.query(`update commercial.document_drafts set draft_state = 'discarded' where id = $1`, [

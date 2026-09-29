@@ -59,26 +59,37 @@ describe("owner bootstrap after OTP", () => {
     expect(classifyOwnerMeError({ status: 503, code: "UNAVAILABLE" })).toBe("BOOTSTRAP_SERVICE");
     expect(classifyOwnerMeError({ status: 200, code: "INVALID_RESPONSE" })).toBe("BOOTSTRAP_RESPONSE");
     expect(classifyOwnerMeError({ status: 401, code: "AUTHENTICATION_REQUIRED" })).toBe("BOOTSTRAP_UNKNOWN");
-    expect(classifyOwnerMeError({ status: 500, code: "UNAVAILABLE" })).toBe("BOOTSTRAP_UNKNOWN");
+    expect(classifyOwnerMeError({ status: 500, code: "UNAVAILABLE" })).toBe("BOOTSTRAP_SERVICE");
+    expect(classifyOwnerMeError({ status: 0, code: "UNAVAILABLE", network: "offline" })).toBe("BOOTSTRAP_OFFLINE");
+    expect(classifyOwnerMeError({ status: 0, code: "UNAVAILABLE", network: "timeout" })).toBe("BOOTSTRAP_NETWORK");
+    expect(classifyOwnerMeError({ status: 503, code: "DATABASE_TIMEOUT" })).toBe("BOOTSTRAP_DATABASE");
+    expect(classifyOwnerMeError({ status: 503, code: "DATABASE_UNAVAILABLE" })).toBe("BOOTSTRAP_DATABASE");
     expect(BOOTSTRAP_SUPPORT_CODES).toEqual([
       "BOOTSTRAP_NETWORK",
       "BOOTSTRAP_SESSION",
       "BOOTSTRAP_SERVICE",
       "BOOTSTRAP_RESPONSE",
       "BOOTSTRAP_UNKNOWN",
+      "BOOTSTRAP_OFFLINE",
+      "BOOTSTRAP_DATABASE",
     ]);
   });
 
   it("renders the support code under the safe bootstrap error", () => {
     const network = bootstrapFailureScreenCopy("BOOTSTRAP_NETWORK");
-    expect(network.message).toBe(copy.networkError);
+    expect(network.message).toBe(copy.bootstrapApiUnreachable);
+    expect(bootstrapFailureScreenCopy("BOOTSTRAP_OFFLINE").message).toBe(copy.bootstrapOffline);
+    expect(bootstrapFailureScreenCopy("BOOTSTRAP_DATABASE").message).toBe(copy.bootstrapDatabase);
+    expect(bootstrapFailureScreenCopy("BOOTSTRAP_SERVICE").message).toBe(copy.bootstrapService);
+    expect(new Set([copy.bootstrapApiUnreachable, copy.bootstrapOffline, copy.bootstrapDatabase, copy.bootstrapService]).size).toBe(4);
     expect(network.supportLine).toBe("Support code: BOOTSTRAP_NETWORK");
     expect(formatSupportCode("BOOTSTRAP_SESSION")).toBe("Support code: BOOTSTRAP_SESSION");
     expect(formatSupportCode("BOOTSTRAP_SERVICE")).toBe("Support code: BOOTSTRAP_SERVICE");
     expect(formatSupportCode("BOOTSTRAP_RESPONSE")).toBe("Support code: BOOTSTRAP_RESPONSE");
     expect(formatSupportCode("BOOTSTRAP_UNKNOWN")).toBe("Support code: BOOTSTRAP_UNKNOWN");
     expect(bootstrapErrorCopy("BOOTSTRAP_SESSION")).toBe("bootstrapSession");
-    expect(bootstrapErrorCopy("BOOTSTRAP_SERVICE")).toBe("bootstrapUnavailable");
+    expect(bootstrapErrorCopy("BOOTSTRAP_SERVICE")).toBe("bootstrapService");
+    expect(bootstrapErrorCopy("BOOTSTRAP_UNKNOWN")).toBe("bootstrapUnavailable");
   });
 
   it("keeps a network failure on S03 without expiring the session", () => {
@@ -104,7 +115,7 @@ describe("owner bootstrap after OTP", () => {
     });
     expect(snapshot.status).toBe("bootstrap_error");
     expect(routeAfterAuth(snapshot)).toBe("verify");
-    expect(bootstrapErrorCopy("BOOTSTRAP_SERVICE")).toBe("bootstrapUnavailable");
+    expect(bootstrapErrorCopy("BOOTSTRAP_SERVICE")).toBe("bootstrapService");
   });
 
   it("classifies fetch failure as BOOTSTRAP_NETWORK", async () => {
@@ -314,6 +325,7 @@ describe("owner bootstrap after OTP", () => {
         code: "UNAVAILABLE",
         message: copy.networkError,
         retryable: true,
+        network: "timeout",
       });
       expect(classifyOwnerMeError(result.error)).toBe("BOOTSTRAP_NETWORK");
       const serialized = JSON.stringify(result);

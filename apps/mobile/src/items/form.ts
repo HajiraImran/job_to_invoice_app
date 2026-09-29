@@ -40,9 +40,9 @@ export function emptyItemForm(): ItemFormValues {
     unit: "item",
     custom_unit_label: "",
     default_quantity: "1",
-    unit_price: "0",
-    discount: "0",
-    tax_percent: "0",
+    unit_price: "0.00",
+    discount: "0.00",
+    tax_percent: "0.00",
   };
 }
 

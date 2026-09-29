@@ -155,6 +155,8 @@ export function presentChangeDraft(row: DraftRow, sources: ScopeSourceRow[] = []
     sources: sources.map((source) => ({
       source_line_id: source.source_line_id,
       description: source.description,
+      original_net_cents: asCents(source.original_net_cents),
+      original_tax_cents: asCents(source.original_tax_cents),
       remaining_net_cents: asCents(source.remaining_net_cents),
       remaining_tax_cents: asCents(source.remaining_tax_cents),
     })),

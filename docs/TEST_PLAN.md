@@ -69,7 +69,7 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA04 | Cross-tenant line/asset ID in own draft | Rejected at composite FK and API before publication | Isolation |
 | QA05 | App terminated after local save | Draft reappears exactly | Device |
 | QA06 | Network removed during typing/publish | Local save visible; publish blocked or resolved | Device |
-| QA07 | Two phones edit same monetary field | 409; both copies; no LWW | Integration |
+| QA07 | Two phones edit same monetary field | 409; both copies; no LWW | Local in-memory: `conflict-resolution.test.ts`. Hosted 409 and dual-device QA07 NOT VERIFIED. |
 | QA08 | Replay draft operation 20 times | One mutation; stable version | Integration |
 | QA09 | Publish timed out after commit and retried | One number, slot, request, outbox | Integration |
 | QA10 | Fourth new free job | Paywall; draft kept; first three completable. Stage 2 integration against real `job_allowances` (no RevenueCat). No stub path. | Integration + E2E |
@@ -77,7 +77,7 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA12 | Trial expires during pending approval | Customer can approve; owner can finish. Local: expired trial blocks new jobs; existing trial job remains readable. Portal approve-after-expiry and device unverified. | Integration |
 | QA13 | Paid owner downgrades with jobs | Completion/export; new-job gate | E2E |
 | QA14 | Reset customer/site of published job | Blocked; new job required | API |
-| QA15 | Edit catalogue price and business address | Issued docs unchanged | Integration; apps/api/src/items.test.ts catalogue price edit leaves canonical bytes and issued line price unchanged. Business-address half remains S22. Not VERIFIED on device. Hosted APPLY_0020 not applied. |
+| QA15 | Edit catalogue price and business address | Issued docs unchanged | Integration; apps/api/src/items.test.ts catalogue price edit leaves canonical bytes and issued line price unchanged. Mobile copy-on-use independence is `apps/mobile/src/items/form.test.ts` and `apps/mobile/src/items/list.test.ts`. Business-address half remains S22. Not VERIFIED on device. Hosted APPLY_0020 not applied. Do not mark QA15 complete from Items tests alone. |
 | QA16 | Publish replacement while old pending | Old superseded; one pending index | Concurrency |
 | QA17 | Old recipient follows replaced link | Cannot decide; correct message. Revoke-after-approve leaves `approval_decisions` intact (TX06). | Portal | Local: `apps/api/src/requests.test.ts` + `openapi/v1.json` replace-link. Physical Android development build 2026-09-21: previous link rejected after replace-link; newest link opened the correct quote. TX06 revoke-after-approve, iOS/TestFlight, and production SPF/DKIM unverified. |
 | QA18 | Link forwarded to unrelated person | No scope without bound-email code | Portal |
@@ -99,7 +99,7 @@ Do not automate every cosmetic case. Portal approval races stay in integration/E
 | QA34 | Email timeout after acceptance | Reconcile before retry | Worker; EMAIL06 claim waits for ready original PDF and does not blind-resend. Hosted Resend timeout unverified |
 | QA35 | Permanent bounce | Not delivered; suppression path | Integration |
 | QA36 | Full scope reduced to zero | Zero invoice; no fake payment | Domain |
-| QA37 | Manual partial/overpayment | Derived balance; overpay confirm | API; apps/api/src/invoices.test.ts partial 4000 then unconfirmed overpay 422 then confirmed refund_due. Not VERIFIED on device. Do not retry INV-000001. |
+| QA37 | Manual partial/overpayment | Derived balance; overpay confirm | API; apps/api/src/invoices.test.ts partial 4000 then unconfirmed overpay 422 then confirmed refund_due. Mobile `payment.test.ts` covers cents, partial, exact, and confirmed overpay. Not VERIFIED on device. Do not retry INV-000001. |
 | QA38 | Credit after full payment | Negative balance; refund due; no money moved | API; apps/api/src/invoices.test.ts INV-000003 pay 25980 then CN-000001 credit 2000 net / 2165 total; refund_due; one payment entry only. Not VERIFIED on device. Do not use INV-000001. |
 | QA39 | Refund exceeds available | Rejected; partial refund works | API; apps/api/src/invoices.test.ts REFUND_EXCEEDS_BALANCE then partial then settling refund. Not VERIFIED on device. |
 | QA40 | Reverse payment once and retry | One reversal; ledger correct. Replay after simulated 31-day ephemeral cache expiry still one `operation_id`. | API; apps/api/src/invoices.test.ts second-owner INV-000001 pay 4000 then reverse; financial idempotency survives ephemeral delete. Not VERIFIED on device. Do not reuse hosted INV-000001. |
@@ -183,6 +183,14 @@ pnpm --filter @job-to-invoice/mobile test
 pnpm test:db
 pnpm migrate:clean
 ```
+
+S02/S03 presentation contracts are covered by `apps/mobile/src/auth/presentation.test.ts` (S02 copy, S03 six-digit sanitize/paste/cells, explicit Verify code, timestamp 60s resend, masked email, change-email to S02, redaction). OTP send/verify, SecureStore, and VoiceOver remain device/staging evidence.
+
+S04 Basic info presentation is covered by `apps/mobile/src/setup/basic-info.test.ts` (VAL01/VAL02 field rules, read-only email, E.164 vs national phone, `postal_code` payload, no Branding route, protected-route hold, redaction). Hosted POST `/v1/workspace`, VoiceOver, and Figma `31:4` pixel match remain device/staging evidence.
+
+Figma S06 / PRD S04 step 3 (timezone and defaults) is covered by `packages/schemas/src/timezone.test.ts` and `apps/mobile/src/setup/defaults.test.ts` (IANA storage, DST offset, picker confirm/cancel, tax/due/terms, redaction, post-save Jobs replace). Physical timezone picker, VoiceOver, and Figma `39:5`/`39:65` pixel match remain device/staging evidence.
+
+PRD S06 Create job presentation is covered by `apps/mobile/src/jobs/create-job.test.ts` (quote default, mode cards, customer picker states, archived exclusion, add-customer hold, title validation, quote/direct continuation, offline `customer_name`, no Contacts path, redaction). Physical picker, VoiceOver, and Figma `48:5`/`48:63` pixel match remain device/staging evidence.
 
 QA01 mailbox E2E, Maestro `.maestro/setup-onboarding.yaml`, VoiceOver, and physical SecureStore checks require `EXPO_PUBLIC_AUTH_PROJECT_URL` plus dashboard OTP settings from `docs/ENV.md`. They are not satisfied by unit mocks.
 
@@ -320,6 +328,22 @@ Physical evidence on a development-build Android operator client. Status remains
 | After withdraw: Replace link unavailable | PASS |
 | Withdraw: no worker database error | PASS |
 
+The later visual restyle of S12 is covered by `apps/mobile/src/quotes/request-actions.test.ts` for presentation, permitted actions, idempotency reuse, offline, and access expiry. That suite does not replace the Android evidence above and does not verify production email delivery.
+
+S13 extra-work presentation, integer-cent totals, validation, idempotency retention, stale-response checks, offline preview blocking, and access-expired hiding are covered by `apps/mobile/src/changes/presentation.test.ts`. That suite does not verify a physical device, staging publication, or customer delivery. The API change-order contract remains `apps/api/src/changes.test.ts`.
+
+S14 reduction presentation in the same file covers source-line net credits, tax, the accepted-amount boundary, incompatible extra-work drafts, and offline preview blocking. It does not verify a physical device or staging publication.
+
+S15 invoice preview presentation in `apps/mobile/src/invoices/presentation.test.ts` covers integer-cent totals, hidden invoice numbers before allocation, recipient validation, idempotency retention, PDF versus delivery phases, offline blocking, and access-expired hiding. It does not verify a physical device, PDF generation, or email delivery.
+
+S16 invoice detail presentation in the same file covers the server invoice number, integer-cent totals, masked recipients, PDF and delivery phases, permitted actions, the absence of an invoice resend route, void-reason validation, retention of the original invoice, and a distinct replacement number. It does not verify device PDF, email, void, or replacement.
+
+S17 payment presentation in `apps/mobile/src/invoices/payment.test.ts` covers integer-cent parsing, zero and negative amounts, partial and exact payments, explicit overpayment confirmation, date and method and reference rules, review-before-submit, idempotency reuse, balance-change revalidation, offline and void blocking, access-expired hiding, and server-status navigation. It does not verify a physical device or a staging ledger entry.
+
+Refund recording in the same file covers the server refundable balance, partial and exact refunds, over-refund rejection, date and method and reference rules, review-before-submit, idempotency, a changed refundable balance, and the distinction from a reversal. It does not verify a physical device or a staging ledger entry.
+
+S18 credit-note presentation in `apps/mobile/src/invoices/credit-note.test.ts` covers integer-cent line caps, reason rules, preview-before-issue, idempotency, refund-due credits, PDF phases, and separation from refund, reversal, and void. It does not verify a physical device, staging issuance, or PDF generation.
+
 Still unverified after this pass:
 
 - Full QA21 parallel race/stress testing
@@ -352,8 +376,12 @@ Automated evidence is IMPLEMENTED, not VERIFIED. Do not mark QA03, QA08, QA14, Q
 | API envelopes, idempotency, duplicate confirmation, archive, delete, cross-tenant 404, job binding, issued snapshot bytes | `apps/api/src/customers.test.ts` |
 | Privilege, tenant isolation, FORCE RLS | `supabase/tests/0028_customers.sql` via `pnpm test:db` |
 | Mobile form, offline denial, accessibility state | `apps/mobile/src/customers/form.test.ts` |
+| S19 list and detail presentation | `apps/mobile/src/customers/list.test.ts` |
+| S20 list, validation, archive, copy-on-use | `apps/mobile/src/items/list.test.ts`; `apps/mobile/src/items/form.test.ts` |
+| S22 overview, email privacy, sync honesty, sign-out sheets | `apps/mobile/src/settings/presentation.test.ts`; `apps/mobile/src/session/sign-out.test.ts`. Local automated evidence only. Does not verify QA05, QA06, QA15, QA02, or physical secure storage. |
 | Customer mutations excluded from SYNC01 | `apps/mobile/src/sync/sync01.test.ts` |
 | OpenAPI | `pnpm validate:openapi` |
+| S24 export, deletion, grants, and outbox exclusion | `apps/mobile/src/export/presentation.test.ts`; `apps/mobile/src/deletion/presentation.test.ts`; `apps/mobile/src/sync/sync01.test.ts`. Local presentation evidence only. Does not verify QA55 ZIP bytes, QA56 download, QA57 purge, QA58 restore, QA61 VoiceOver or Dynamic Type, QA13 completion rights, or QA66 object restore. |
 | Hosted workflow phrase | `node scripts/hosted-development-migrations.workflow.test.mjs` |
 
 ## Setup slice commands

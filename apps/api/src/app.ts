@@ -31,6 +31,15 @@ import { registerPortalRoutes } from "./portal.ts";
 import { registerActionGrantRoutes } from "./action-grants.ts";
 import { registerRequestMutationRoutes } from "./requests.ts";
 import { RateLimiter } from "./rate-limit.ts";
+import {
+  apiRequestEvent,
+  clientRequestId,
+  createRequestTiming,
+  runWithRequestTiming,
+  serverTimingHeader,
+  type ApiRequestEvent,
+  type RequestTiming,
+} from "./request-context.ts";
 import { registerSubscriptionRoutes } from "./subscription.ts";
 import { registerExportRoutes } from "./exports.ts";
 import { registerDeletionRoutes } from "./deletion.ts";
@@ -40,6 +49,7 @@ import { registerWorkspaceRoutes } from "./workspace.ts";
 declare module "fastify" {
   interface FastifyRequest {
     rawBody?: Buffer;
+    timing?: RequestTiming;
   }
 }
 
@@ -52,6 +62,7 @@ export type AppDeps = {
   logPortal?: (event: { event: "portal"; request_id: string; status: number; stage: string; sqlstate?: string }) => void;
   documentsStore?: { presignGet: (key: string, expiresIn?: number) => Promise<string> };
   nowSec?: () => number;
+  logRequest?: (event: ApiRequestEvent) => void;
 };
 
 type ProvisionRow = {
@@ -157,6 +168,34 @@ export function buildApp(deps: AppDeps) {
     }
   });
 
+  app.addHook("onRequest", (request, _reply, done) => {
+    const timing = createRequestTiming();
+    request.timing = timing;
+    runWithRequestTiming(timing, done);
+  });
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (request.timing) {
+      void reply.header("Server-Timing", serverTimingHeader(request.timing));
+    }
+    return payload;
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    if (!request.timing || !deps.logRequest) {
+      return;
+    }
+    const event = apiRequestEvent({
+      requestId: String(request.id),
+      clientRequestId: clientRequestId(request.headers["x-client-request-id"]),
+      method: request.method,
+      route: request.routeOptions.url ?? "unmatched",
+      status: reply.statusCode,
+      timing: request.timing,
+    });
+    deps.logRequest(event);
+  });
+
   app.addHook("onRequest", async (request, reply) => {
     const origin = request.headers.origin;
     if (origin && origin !== deps.env.PORTAL_ORIGIN) {
@@ -253,11 +292,7 @@ export function buildApp(deps: AppDeps) {
         canPublish = false;
         entitlementSource = "unverified";
       } else if (row.setup_completed) {
-        const allowance = await withApiRole(deps.pool, async (client) => {
-          await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
-            row.workspace_id,
-            row.actor_id,
-          ]);
+        const allowance = await withTenant(deps.pool, row.workspace_id, row.actor_id, async (client) => {
           const consumed = await client.query<{
             free_jobs_consumed: number;
             trial_started_at: Date | string | null;

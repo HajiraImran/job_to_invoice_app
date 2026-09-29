@@ -149,6 +149,22 @@ export function createMemorySqlite(): EncryptedSqliteHandle & {
         }
         return { changes: 1, lastInsertRowId: 1 };
       }
+      if (sql.startsWith("update outbox_ops set base_version = ?")) {
+        const version = Number(params[0]);
+        let changes = 0;
+        for (const row of ensure("outbox_ops")) {
+          if (row.resource_id !== params[2] || !["pending", "failed"].includes(String(row.state))) {
+            continue;
+          }
+          const current = row.base_version === null || row.base_version === undefined ? null : Number(row.base_version);
+          if (current === null || current < version) {
+            row.base_version = version;
+            row.updated_at = params[1];
+            changes += 1;
+          }
+        }
+        return { changes, lastInsertRowId: 1 };
+      }
       if (sql.startsWith("update outbox_ops set") && sql.includes("method = ?")) {
         const row = ensure("outbox_ops").find((item) => item.operation_id === params[8]);
         if (row) {
@@ -162,6 +178,20 @@ export function createMemorySqlite(): EncryptedSqliteHandle & {
           row.next_attempt_at = params[6];
           row.updated_at = params[7];
           row.last_error_code = null;
+        }
+        return { changes: row ? 1 : 0, lastInsertRowId: 1 };
+      }
+      if (
+        sql.includes("set state = 'in_flight'") &&
+        sql.includes("and state = 'pending'") &&
+        !sql.includes("next_attempt_at")
+      ) {
+        const row = ensure("outbox_ops").find(
+          (item) => item.operation_id === params[1] && item.state === "pending",
+        );
+        if (row) {
+          row.state = "in_flight";
+          row.updated_at = params[0];
         }
         return { changes: row ? 1 : 0, lastInsertRowId: 1 };
       }
@@ -243,6 +273,17 @@ export function createMemorySqlite(): EncryptedSqliteHandle & {
         }
         return { changes: row ? 1 : 0, lastInsertRowId: 1 };
       }
+      if (sql.includes("state = 'pending'") && sql.includes("paused_conflict")) {
+        for (const row of ensure("outbox_ops")) {
+          if (row.resource_id === params[2] && row.state === "paused_conflict") {
+            row.state = "pending";
+            row.next_attempt_at = params[0];
+            row.updated_at = params[1];
+            row.last_error_code = null;
+          }
+        }
+        return { changes: 1, lastInsertRowId: 1 };
+      }
       if (sql.includes("state = 'paused_conflict'")) {
         const row = ensure("outbox_ops").find((item) => item.operation_id === params[2]);
         if (row) {
@@ -262,17 +303,6 @@ export function createMemorySqlite(): EncryptedSqliteHandle & {
           row.updated_at = params[3];
         }
         return { changes: row ? 1 : 0, lastInsertRowId: 1 };
-      }
-      if (sql.includes("state = 'pending'") && sql.includes("paused_conflict")) {
-        for (const row of ensure("outbox_ops")) {
-          if (row.resource_id === params[2] && row.state === "paused_conflict") {
-            row.state = "pending";
-            row.next_attempt_at = params[0];
-            row.updated_at = params[1];
-            row.last_error_code = null;
-          }
-        }
-        return { changes: 1, lastInsertRowId: 1 };
       }
       if (sql.startsWith("delete from outbox_ops")) {
         const before = ensure("outbox_ops").length;
@@ -382,9 +412,21 @@ export function createMemorySqlite(): EncryptedSqliteHandle & {
         return row ? (clone(row) as T) : null;
       }
       if (sql.includes("from local_drafts where job_id")) {
+        const rank = (row: Row) => {
+          if (row.sync_state === "conflict") {
+            return 0;
+          }
+          return row.server_version === null || row.server_version === undefined ? 2 : 1;
+        };
         const rows = ensure("local_drafts")
           .filter((item) => item.job_id === params[0])
-          .sort((a, b) => String(b.local_updated_at).localeCompare(String(a.local_updated_at)));
+          .sort((a, b) => {
+            const byRank = rank(a) - rank(b);
+            if (byRank !== 0) {
+              return byRank;
+            }
+            return String(b.local_updated_at).localeCompare(String(a.local_updated_at));
+          });
         return rows[0] ? (clone(rows[0]) as T) : null;
       }
       if (sql.includes("from jobs_cache where job_id")) {
@@ -395,6 +437,23 @@ export function createMemorySqlite(): EncryptedSqliteHandle & {
     },
     getAllAsync: async <T,>(source: string, params: unknown[] = []): Promise<T[]> => {
       const sql = source.replace(/\s+/g, " ").trim();
+      if (sql.includes("idempotency_key from outbox_ops")) {
+        return ensure("outbox_ops")
+          .filter(
+            (row) =>
+              row.resource_id === params[0] &&
+              ["pending", "in_flight", "paused_conflict", "failed"].includes(String(row.state)),
+          )
+          .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
+          .map(
+            (row) =>
+              clone({
+                operation_id: row.operation_id,
+                state: row.state,
+                idempotency_key: row.idempotency_key,
+              }) as T,
+          );
+      }
       if (sql.includes("group by resource_id") && sql.includes("having")) {
         const counts = new Map<string, number>();
         for (const row of ensure("outbox_ops")) {
@@ -437,6 +496,17 @@ export function createMemorySqlite(): EncryptedSqliteHandle & {
           .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
           .slice(0, Number(params[1] ?? 20))
           .map((row) => clone(row) as T);
+      }
+      if (sql.includes("from local_drafts where job_id") && sql.includes("server_version is null")) {
+        return ensure("local_drafts")
+          .filter(
+            (row) =>
+              row.job_id === params[0] &&
+              row.draft_id !== params[1] &&
+              (row.server_version === null || row.server_version === undefined) &&
+              row.sync_state === "dirty",
+          )
+          .map((row) => clone({ draft_id: row.draft_id, payload_json: row.payload_json }) as T);
       }
       if (sql.includes("from jobs_cache where list_state")) {
         return ensure("jobs_cache")

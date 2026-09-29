@@ -5,9 +5,21 @@ vi.mock("expo-crypto", () => ({
   randomUUID: vi.fn(() => nodeRandomUUID()),
 }));
 
-import { presentQuoteReview } from "./presentation.ts";
-import { beginConfirmedQuotePublish, executeConfirmedQuotePublish, quotePublishSuccessPath } from "./publish.ts";
+import { analyticsPropertiesAreSafe } from "@job-to-invoice/schemas";
+import { copy } from "../i18n/en.ts";
 import { jobDetailPath } from "../jobs/routes.ts";
+import { subscriptionPath } from "../subscription/presentation.ts";
+import {
+  presentFrozenPreview,
+  presentPreviewGeneratedLabel,
+  presentQuotePdf,
+  presentQuoteReview,
+  previewAfterPublishError,
+  previewHashIsCurrent,
+  quotePublishPlansPath,
+  type QuotePreviewRecord,
+} from "./presentation.ts";
+import { beginConfirmedQuotePublish, executeConfirmedQuotePublish, quotePublishSuccessPath } from "./publish.ts";
 
 const DRAFT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const JOB_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -281,5 +293,247 @@ describe("confirmed quote publish", () => {
         },
       }).kind,
     ).toBe("published");
+  });
+
+  it("reuses the same idempotency key after an ambiguous failure", async () => {
+    const inFlight = { current: false };
+    const idempotencyKey = { current: undefined as string | undefined };
+    const first = await executeConfirmedQuotePublish({
+      confirming: true,
+      preview: PREVIEW,
+      recipientEmail: "customer@example.com",
+      inFlight,
+      idempotencyKey,
+      publish: async () => ({ ok: false as const }),
+    });
+    const second = await executeConfirmedQuotePublish({
+      confirming: true,
+      preview: PREVIEW,
+      recipientEmail: "customer@example.com",
+      inFlight,
+      idempotencyKey,
+      publish: async () => ({ ok: false as const }),
+    });
+    expect(first.requests[0]?.idempotencyKey).toBeTruthy();
+    expect(second.requests[0]?.idempotencyKey).toBe(first.requests[0]?.idempotencyKey);
+    expect(first.stayedOnPublish).toBe(true);
+    expect(second.stayedOnPublish).toBe(true);
+  });
+
+  it("does not send a publish request for a cleared preview hash", () => {
+    const started = beginConfirmedQuotePublish({
+      confirming: true,
+      preview: { ...PREVIEW, preview_hash: "" },
+      recipientEmail: "customer@example.com",
+      inFlight: { current: false },
+      idempotencyKey: undefined,
+    });
+    expect(started.kind).not.toBe("request");
+  });
+});
+
+const SNAPSHOT: QuotePreviewRecord["snapshot"] = {
+  business: { business_name: "Northwind", legal_name: "Northwind LLC", contact_name: "Owner", contact_email: "owner@example.com" },
+  customer: { name: "Riley Chen", email: "riley@example.com" },
+  job: { title: "Kitchen valve", no_site: true, site_address: null },
+  notes: "Gate code 12",
+  terms: "Payment on completion",
+  expiry_days: 14,
+  expiry_local_date: "2026-10-10",
+  issue_date: "2026-09-26",
+  lines: [
+    {
+      position: 1,
+      description: "Valve replacement",
+      quantity: "2.000",
+      unit: "item",
+      custom_unit_label: null,
+      unit_price_cents: 4000,
+      discount_cents: 500,
+      tax_bp: 825,
+      net_cents: 7500,
+      tax_cents: 619,
+      total_cents: 8119,
+    },
+  ],
+  net_cents: 7500,
+  tax_cents: 619,
+  total_cents: 8119,
+  currency: "USD",
+};
+
+function reviewPreview(hash = "ab".repeat(32)): QuotePreviewRecord {
+  return {
+    ...PREVIEW,
+    preview_hash: hash,
+    preview_expires_at: "2026-09-26T16:10:00.000Z",
+    schema_version: 1,
+    number_label: "Draft",
+    snapshot: SNAPSHOT,
+  };
+}
+
+describe("quote preview presentation", () => {
+  it("renders server line and document cents and withholds a final quote number", () => {
+    const view = presentFrozenPreview(reviewPreview());
+    expect(view.businessName).toBe("Northwind");
+    expect(view.customerName).toBe("Riley Chen");
+    expect(view.expiryDays).toBe(14);
+    expect(view.unpublishedLabel).toBe(copy.previewNotPublished);
+    expect(view).not.toHaveProperty("quoteNumber");
+    expect(JSON.stringify(view)).not.toContain("Q-");
+    expect(view.lines[0]).toMatchObject({
+      description: "Valve replacement",
+      quantity: "2.000",
+      unit: "item",
+      unitPriceCents: 4000,
+      amountCents: 8119,
+    });
+    expect(view.subtotalCents).toBe(8000);
+    expect(view.discountCents).toBe(500);
+    expect(view.showDiscount).toBe(true);
+    expect(view.netCents).toBe(7500);
+    expect(view.taxCents).toBe(619);
+    expect(view.totalCents).toBe(8119);
+    expect(view.notes).toBe("Gate code 12");
+    expect(view.terms).toBe("Payment on completion");
+  });
+
+  it("shows a generated label only for a real receipt time", () => {
+    expect(presentPreviewGeneratedLabel(undefined, 1_000)).toBeUndefined();
+    expect(presentPreviewGeneratedLabel(1_000, 20_000)).toBe(copy.previewGeneratedJustNow);
+    expect(presentPreviewGeneratedLabel(1_000, 61_000)).toBeUndefined();
+  });
+
+  it("keeps publishing disabled while the preview is loading or the hash is missing", () => {
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: true,
+        confirming: false,
+        publishing: false,
+      }).kind,
+    ).toBe("loading");
+    expect(previewHashIsCurrent(undefined)).toBe(false);
+    expect(previewHashIsCurrent({ preview_hash: "" })).toBe(false);
+    expect(previewHashIsCurrent(reviewPreview())).toBe(true);
+  });
+
+  it("invalidates a stale hash and requires a new confirmation after refresh", () => {
+    const current = reviewPreview();
+    const stale = previewAfterPublishError(current, "PREVIEW_CHANGED");
+    expect(stale?.preview_hash).toBe("");
+    expect(previewHashIsCurrent(stale)).toBe(false);
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
+        confirming: true,
+        publishing: false,
+        preview: stale,
+        error: { message: copy.quoteStalePreview, retryable: true, status: 409, code: "PREVIEW_CHANGED" },
+      }),
+    ).toMatchObject({ kind: "conflict", publishDisabled: true });
+    const refreshed = reviewPreview("cd".repeat(32));
+    expect(previewHashIsCurrent(refreshed)).toBe(true);
+    expect(refreshed.preview_hash).not.toBe(current.preview_hash);
+    const reviewed = presentQuoteReview({
+      authStatus: "authenticated",
+      loading: false,
+      confirming: false,
+      publishing: false,
+      preview: refreshed,
+    });
+    expect(reviewed).toMatchObject({ kind: "ready", publishDisabled: false });
+    expect(
+      beginConfirmedQuotePublish({
+        confirming: false,
+        preview: refreshed,
+        recipientEmail: "riley@example.com",
+        inFlight: { current: false },
+        idempotencyKey: undefined,
+      }).kind,
+    ).toBe("ignored");
+  });
+
+  it("blocks publish for entitlement, offline, and access expiry", () => {
+    const preview = reviewPreview();
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
+        confirming: true,
+        publishing: false,
+        preview,
+        error: { message: copy.quoteEntitlement, retryable: false, status: 402, code: "ENTITLEMENT_REQUIRED" },
+      }),
+    ).toMatchObject({ kind: "entitlement", publishDisabled: true });
+    expect(quotePublishPlansPath()).toBe(`${subscriptionPath()}?from=publish`);
+    expect(
+      presentQuoteReview({
+        authStatus: "authenticated",
+        loading: false,
+        confirming: false,
+        publishing: false,
+        preview,
+      }).kind,
+    ).toBe("ready");
+    expect(
+      presentQuoteReview({
+        authStatus: "offline_cached",
+        loading: false,
+        confirming: false,
+        publishing: false,
+        preview,
+      }),
+    ).toMatchObject({ kind: "offline", publishDisabled: true });
+    expect(
+      presentQuoteReview({
+        authStatus: "access_expired",
+        loading: false,
+        confirming: true,
+        publishing: false,
+        preview,
+      }).kind,
+    ).toBe("access_expired");
+  });
+
+  it("keeps recoverable publish failures on confirmation and leaves an issued PDF preparing", () => {
+    const preview = reviewPreview();
+    for (const code of ["RATE_LIMITED", "OPERATION_PENDING", "ASSET_NOT_READY", "UNAVAILABLE"]) {
+      expect(
+        presentQuoteReview({
+          authStatus: "authenticated",
+          loading: false,
+          confirming: true,
+          publishing: false,
+          preview,
+          error: { message: "Try again shortly.", retryable: code !== "ASSET_NOT_READY", status: 409, code },
+        }).kind,
+      ).toBe("confirming");
+    }
+    expect(presentQuotePdf({ state: "preparing", url: null })).toMatchObject({ kind: "preparing" });
+    expect(presentQuotePdf({ state: "ready", url: "https://files.example/quote.pdf" }).kind).toBe("ready");
+  });
+
+  it("uses the documented document_published property names and rejects recipient details", () => {
+    const properties = { kind: "quote", entitlement_origin: "free", line_count_bucket: "1-3" };
+    expect(Object.keys(properties).sort()).toEqual(["entitlement_origin", "kind", "line_count_bucket"]);
+    expect(analyticsPropertiesAreSafe(properties)).toBe(true);
+    expect(analyticsPropertiesAreSafe({ recipient_email: "riley@example.com" })).toBe(false);
+    expect(analyticsPropertiesAreSafe({ customer_name: "Riley", job_title: "Valve", terms: "Net 14" })).toBe(false);
+    expect(properties).not.toHaveProperty("preview_hash");
+    expect(properties).not.toHaveProperty("recipient_email");
+  });
+
+  it("exposes the preview and confirmation labels", () => {
+    expect(copy.previewBack).toBe("Back to quote");
+    expect(copy.previewContinue).toBe("Continue to publish");
+    expect(copy.publishAndSend).toBe("Publish and send");
+    expect(copy.previewRefresh).toBe("Refresh preview");
+    expect(copy.publishUnavailable).toBe("Publish unavailable");
+    expect(copy.viewPlans).toBe("View plans");
+    expect(copy.notNow).toBe("Not now");
+    expect(copy.previewNotPublished).toBe("Preview • Not published");
   });
 });

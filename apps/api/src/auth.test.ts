@@ -105,12 +105,23 @@ describe("owner authentication API", () => {
     });
     const response = await me(token);
     expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe("AUTHENTICATION_FAILED");
   });
 
   it("rejects an incorrect audience", async () => {
     const token = await sign({ sub: AUTH_A, email: "a@example.com", audience: "staff" });
     const response = await me(token);
     expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe("AUTHENTICATION_FAILED");
+  });
+
+  it("rejects a JWT without an email or with an invalid subject", async () => {
+    const missingEmail = await me(await sign({ sub: AUTH_A, email: "" }));
+    expect(missingEmail.statusCode).toBe(401);
+    expect(missingEmail.json().error.code).toBe("AUTHENTICATION_FAILED");
+    const invalidSub = await me(await sign({ sub: "not-a-uuid", email: "a@example.com" }));
+    expect(invalidSub.statusCode).toBe(401);
+    expect(invalidSub.json().error.code).toBe("AUTHENTICATION_FAILED");
   });
 
   it("rejects a staff role on owner routes", async () => {
@@ -136,6 +147,20 @@ describe("owner authentication API", () => {
       created.user.id,
     ]);
     expect(count.rows[0]?.n).toBe(1);
+    const signup = await running().admin.query(
+      `select event_name, safe_properties_json, pseudonymous_owner_id
+       from commercial.analytics_events
+       where workspace_id = $1 and event_name = 'signup_verified'`,
+      [created.workspace.id],
+    );
+    expect(signup.rows).toHaveLength(1);
+    expect(signup.rows[0]?.event_name).toBe("signup_verified");
+    const properties = signup.rows[0]?.safe_properties_json;
+    expect(typeof properties === "string" ? JSON.parse(properties) : properties).toEqual({
+      acquisition_source: "unknown",
+    });
+    expect(JSON.stringify(signup.rows[0])).not.toMatch(/Owner\.A@|example\.com/i);
+    expect(signup.rows[0]?.pseudonymous_owner_id).toBe(created.analytics_alias_id);
   });
 
   it("does not let workspace B appear in workspace A responses", async () => {
@@ -176,6 +201,16 @@ describe("owner authentication API", () => {
     });
     expect(mutation.statusCode).toBe(403);
     expect(mutation.json().error.code).toBe("ACCOUNT_SUSPENDED");
+    await running().admin.query("update identity.app_users set status = 'active' where id = $1", [meBody.user.id]);
+  });
+
+  it("rejects a deleted account on /v1/me", async () => {
+    const token = await sign({ sub: AUTH_B, email: "owner.b@example.com" });
+    const meBody = (await me(token)).json().data as { user: { id: string } };
+    await running().admin.query("update identity.app_users set status = 'deleted' where id = $1", [meBody.user.id]);
+    const response = await me(token);
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe("ACCOUNT_DELETING");
     await running().admin.query("update identity.app_users set status = 'active' where id = $1", [meBody.user.id]);
   });
 
@@ -390,7 +425,7 @@ describe("owner authentication API", () => {
     const env = loadEnv({ APP_ENV: "development", PORTAL_ORIGIN: "http://localhost:3000" });
     const token = await sign({ sub: AUTH_A, email: "a@example.com" });
 
-    async function probe(stage: string, poolImpl: Pool, sqlstate?: string) {
+    async function probe(stage: string, poolImpl: Pool, sqlstate?: string, code = "UNAVAILABLE") {
       const events: OwnerMeSafeEvent[] = [];
       const app = buildApp({
         env,
@@ -410,7 +445,7 @@ describe("owner authentication API", () => {
         headers: { authorization: `Bearer ${token}` },
       });
       expect(response.statusCode).toBe(503);
-      expect(response.json().error.code).toBe("UNAVAILABLE");
+      expect(response.json().error.code).toBe(code);
       expect(events.map((event) => event.stage)).toEqual(["request_received", "jwt_verified", stage]);
       const failure = events.at(-1);
       expect(failure?.status).toBe(503);
@@ -442,28 +477,35 @@ describe("owner authentication API", () => {
           if (script.connect) {
             throw script.connect;
           }
+          const run = async (sql: string) => {
+            const normalized = sql.trim().toLowerCase();
+            if (normalized === "begin") {
+              if (script.begin) {
+                throw script.begin;
+              }
+              return { rows: [] };
+            }
+            if (normalized === "set local role api_app") {
+              if (script.setRole) {
+                throw script.setRole;
+              }
+              return { rows: [] };
+            }
+            if (normalized === "commit" || normalized === "rollback") {
+              return { rows: [] };
+            }
+            if (script.query) {
+              throw script.query;
+            }
+            return { rows: script.rows ?? [] };
+          };
           return {
             query: async (sql: string) => {
-              const normalized = sql.trim().toLowerCase();
-              if (normalized === "begin") {
-                if (script.begin) {
-                  throw script.begin;
-                }
-                return { rows: [] };
+              let last: { rows: unknown[] } = { rows: [] };
+              for (const statement of sql.split(";")) {
+                last = await run(statement);
               }
-              if (normalized === "set local role api_app") {
-                if (script.setRole) {
-                  throw script.setRole;
-                }
-                return { rows: [] };
-              }
-              if (normalized === "commit" || normalized === "rollback") {
-                return { rows: [] };
-              }
-              if (script.query) {
-                throw script.query;
-              }
-              return { rows: script.rows ?? [] };
+              return last;
             },
             release: () => undefined,
           };
@@ -471,7 +513,18 @@ describe("owner authentication API", () => {
       } as unknown as Pool;
     }
 
-    await probe("database_connect_failed", poolFrom({ connect: pgError("08006", "could not connect to host.example.invalid") }), "08006");
+    await probe(
+      "database_connect_failed",
+      poolFrom({ connect: pgError("08006", "could not connect to host.example.invalid") }),
+      "08006",
+      "DATABASE_UNAVAILABLE",
+    );
+    await probe(
+      "database_connect_failed",
+      poolFrom({ connect: new Error("timeout exceeded when trying to connect") }),
+      "08006",
+      "DATABASE_TIMEOUT",
+    );
     await probe("transaction_start_failed", poolFrom({ begin: pgError("25P02", "current transaction is aborted") }), "25P02");
     await probe(
       "set_role_failed",

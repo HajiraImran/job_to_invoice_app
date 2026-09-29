@@ -8,7 +8,13 @@ import {
 import { formatCalendarDate } from "@job-to-invoice/domain";
 import { formatUsdCents } from "@job-to-invoice/schemas";
 import type { Pool } from "pg";
-import { withWorkerRole, WORKER_CLAIM_TIMEOUT_MS, WORKER_STATEMENT_TIMEOUT_MS } from "./db.ts";
+import {
+  enterWorkerRoleOperation,
+  withWorkerRole,
+  workerRoleOperationIs,
+  WORKER_CLAIM_TIMEOUT_MS,
+  WORKER_STATEMENT_TIMEOUT_MS,
+} from "./db.ts";
 import { whileLeased } from "./outbox.ts";
 
 export const RESEND_EMAILS_URL = "https://api.resend.com/emails";
@@ -506,6 +512,9 @@ export async function processSendEmail(input: {
   supportUrl?: string;
   send?: ResendSender;
 }): Promise<"idle" | "done" | "retry" | "dead"> {
+  if (!workerRoleOperationIs("email")) {
+    return enterWorkerRoleOperation("email", () => processSendEmail(input));
+  }
   const trialClaimed = await withWorkerRole(
     input.pool,
     async (client) => {

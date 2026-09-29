@@ -3,11 +3,16 @@
     "allowJs": true,
     "esModuleInterop": true,
     "jsx": "react-jsx",
-    "lib": ["DOM", "ESNext"],
+    "lib": [
+      "DOM",
+      "ESNext"
+    ],
     "module": "preserve",
     "moduleDetection": "force",
     "moduleResolution": "bundler",
-    "customConditions": ["react-native"],
+    "customConditions": [
+      "react-native"
+    ],
     "noEmit": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
@@ -16,6 +21,17 @@
     "noUncheckedIndexedAccess": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["app/**/*.ts", "app/**/*.tsx", "src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["node_modules", "babel.config.js", "android", "ios"]
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "babel.config.js",
+    "android",
+    "ios"
+  ],
+  "extends": "expo/tsconfig.base"
 }

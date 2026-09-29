@@ -256,7 +256,7 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | ID | D-012 |
 | Date | 2026-09-14 |
 | Status | Resolved |
-| Decision | Hosted `db.<project-ref>.supabase.co:5432` is IPv6-only. `supabase db query --linked` still works over HTTPS; `supabase db push --linked` dials the IPv6 direct host and times out (`LegacyDbConnectError`). Hosted applies from IPv4-only networks must use Supavisor **session** mode: exact host `aws-0-<region>.pooler.supabase.com`, explicit port `5432`, user `postgres.<linked-project-ref>` from `supabase/.temp/project-ref`. Do not take the project ref from the environment. Do not use extra pooler subdomains, omitted port, port `6543`, `--linked`, `--include-all`, `--include-roles`, `--include-seed`, `--debug`, `--log-level`, `--output-format`, or `migrate:clean`. Do not use `service_role`. Do not reapply `0001`. Percent-encode reserved password characters. `pnpm hosted:db-check` is a read-only preflight (`db push --db-url <url> --dry-run` with no `--yes`). `pnpm hosted:db-push` is the live apply (`db push --db-url <url> --yes` with no `--dry-run`). The wrapper ignores child stdin, so live apply must pass `--yes`. Both validate the URL statically (linked ref, `postgres.<linked-ref>` username, session-pooler host, explicit port `5432`, password, protocol; reject direct host, `6543`, `service_role`, query, fragment), then spawn the CLI once with argv and the shell disabled. Custom DNS/TCP reachability probes were removed because they can disagree with Windows and Supabase CLI resolution and add no authorization protection. DNS, TCP, TLS, and authentication are performed by the CLI. The wrapper emits a sanitized report only (ok/fail, exit code, connect started/succeeded, pending `NNNN_name.sql` names, `stage`, allowlisted category, optional migration basename, statement number, SQLSTATE, `LegacyDb*` tag). Raw child output, URLs, passwords, argv, SQL, and unknown text are not printed. Generic `Error:` and login-role `permission denied to alter role` are not a migration SQL failure. Hosted migration commands use the root-pinned `supabase` 2.117.0 CLI. The wrapper resolves repository `supabase/dist/supabase.js` before any global npm PATH shim and launches it through `process.execPath` with `shell:false`. `.cmd`/`.ps1` shims, `cmd.exe`, and PowerShell are prohibited. `--db-url` remains visible on the local process list while the CLI runs. Local Windows live apply over the session pooler has been unreliable at `connecting` after a successful dry-run. Hosted development `0002`–`0004` were applied through `.github/workflows/hosted-development-migrations.yml` (confirmation `APPLY_0002_0004`, Environment `development`, secret `DATABASE_URL_MIGRATIONS`). Further hosted applies use that same dispatch-only Ubuntu path. The current confirmation phrase is `APPLY_0010` for pending `0010_quote_approval_request.sql` only. |
+| Decision | Hosted `db.<project-ref>.supabase.co:5432` is IPv6-only. `supabase db query --linked` still works over HTTPS; `supabase db push --linked` dials the IPv6 direct host and times out (`LegacyDbConnectError`). Hosted applies from IPv4-only networks must use Supavisor **session** mode: exact host `aws-0-<region>.pooler.supabase.com`, explicit port `5432`, user `postgres.<linked-project-ref>` from `supabase/.temp/project-ref`. Do not take the project ref from the environment. Do not use extra pooler subdomains, omitted port, port `6543`, `--linked`, `--include-all`, `--include-roles`, `--include-seed`, `--debug`, `--log-level`, `--output-format`, or `migrate:clean`. Do not use `service_role`. Do not reapply `0001`. Percent-encode reserved password characters. `pnpm hosted:db-check` is a read-only preflight (`db push --db-url <url> --dry-run` with no `--yes`). `pnpm hosted:db-push` is the live apply (`db push --db-url <url> --yes` with no `--dry-run`). The wrapper ignores child stdin, so live apply must pass `--yes`. Both validate the URL statically (linked ref, `postgres.<linked-ref>` username, session-pooler host, explicit port `5432`, password, protocol; reject direct host, `6543`, `service_role`, query, fragment), then spawn the CLI once with argv and the shell disabled. Custom DNS/TCP reachability probes were removed because they can disagree with Windows and Supabase CLI resolution and add no authorization protection. DNS, TCP, TLS, and authentication are performed by the CLI. The wrapper emits a sanitized report only (ok/fail, exit code, connect started/succeeded, pending `NNNN_name.sql` names, `stage`, allowlisted category, optional migration basename, statement number, SQLSTATE, `LegacyDb*` tag, fixed-vocabulary `cli_signals` matched from pgx/Supavisor phrases, `cli_output` present/empty, static `password_percent_encoded` / `password_cli_compatible` / `password_issues` from a no-network check of Go `net/url` userinfo rules, and a fixed `hint`). A live push whose password the Go CLI would reject is refused before spawning; `hosted:db-check` still spawns once so the CLI can confirm. Raw child output, URLs, passwords, argv, SQL, and unknown text are not printed. Generic `Error:` and login-role `permission denied to alter role` are not a migration SQL failure. Hosted migration commands use the root-pinned `supabase` 2.117.0 CLI. The wrapper resolves repository `supabase/dist/supabase.js` before any global npm PATH shim and launches it through `process.execPath` with `shell:false`. `.cmd`/`.ps1` shims, `cmd.exe`, and PowerShell are prohibited. `--db-url` remains visible on the local process list while the CLI runs. Local Windows live apply over the session pooler has been unreliable at `connecting` after a successful dry-run. Hosted development `0002`–`0004` were applied through `.github/workflows/hosted-development-migrations.yml` (confirmation `APPLY_0002_0004`, Environment `development`, secret `DATABASE_URL_MIGRATIONS`). Further hosted applies use that same dispatch-only Ubuntu path. The current confirmation phrase is `APPLY_0010` for pending `0010_quote_approval_request.sql` only. |
 | Reason | Direct host `db.fhgacxkpgjdcjuvanesv.supabase.co` resolves only to AAAA. TCP 5432 to it fails. The us-west-2 session pooler resolves to IPv4 and accepts TCP 5432 and 6543. Linked `db push` of `0002`–`0004` timed out during connect after `0001` was already recorded. A wrapper DNS/TCP preflight then reported DNS failure on Windows while Test-NetConnection succeeded against the same session-pooler host and port. That probe added no authorization protection, so connection checks are delegated to the CLI. Local Windows `hosted:db-check` can list pending `0002`–`0004` while `hosted:db-push` then fails at `connecting`, so live apply is not authorized from that workstation. |
 | Evidence | DNS AAAA-only for `db.fhgacxkpgjdcjuvanesv.supabase.co`; TCP 5432 false to that host; TCP 5432 true to `aws-0-us-west-2.pooler.supabase.com`; `LegacyDbConnectError` / `PgClient: Connection timed out`; Windows live `hosted:db-push` `stage: connecting`; `scripts/hosted-db-push.mjs`; `.github/workflows/hosted-development-migrations.yml`; `pnpm test:hosted-push`; hosted `migration list --linked` and catalog SELECT 2026-09-15 (`0001`–`0004` recorded, nine FORCE RLS tables, migrator policies, revoked client grants, `pnpm secret-scan`) |
 | Owner | Engineering lead |
@@ -662,4 +662,238 @@ Statuses: `Open` | `Assumed` | `Escalated` | `Resolved`
 | Impacted test IDs | QA03, QA08, QA14, QA55, QA61 |
 | Migration implications | `0027_customer_feature.sql`. Do not modify 0001–0026. Hosted confirmation is `APPLY_0027`. |
 | Reversible | Additive constraints, indexes, policy, and functions |
+| Escalation category | none |
+
+### D-034 — S02/S03 visual contract reuses existing OTP session
+
+| Field | Value |
+| --- | --- |
+| ID | D-034 |
+| Date | 2026-09-25 |
+| Status | Assumed |
+| Decision | The owner email/code screens keep the existing Supabase OTP, SecureStore session, GET /v1/me provisioning, and guard behavior. S02/S03 adopt the S01 public visual language (navy #17324D, 56 pt primary, 24 pt gutter, atmospheric lighting) without a new auth package. The lock mark is View-drawn because `react-native-svg` is not installed. Terms/Privacy stay non-links. Settings remains absent on public auth routes. Figma node 24:4 was not readable via MCP; pixel match stays unverified. |
+| Reason | ACC01/ACC02 are already implemented. Rewriting working OTP would violate the engineering contract. The remaining customer-visible gap was S02 visual completeness plus presentation/redaction tests. |
+| Evidence | `apps/mobile/app/(public)/sign-in.tsx`; `apps/mobile/app/(public)/verify.tsx`; `apps/mobile/src/auth/presentation.ts`; `docs/ENV.md` dashboard OTP steps |
+| Owner | Engineering lead |
+| PRD implication | S02/S03 visual and a11y labels ship; hosted OTP caps, Keychain, VoiceOver, and mailbox E2E remain unverified. |
+| Impacted requirement IDs | S02, S03, ACC01, ACC02, NFR01, UI02, SEC01, ANA01 |
+| Impacted test IDs | QA01, QA02, QA19, QA61, QA63; `apps/mobile/src/auth/presentation.test.ts`; `apps/api/src/auth.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-035 — S03 uses explicit verify and a single accessible code field
+
+| Field | Value |
+| --- | --- |
+| ID | D-035 |
+| Date | 2026-09-25 |
+| Status | Assumed |
+| Decision | S03 shows six visual cells but keeps one hidden numeric TextInput for paste, autofill, and VoiceOver. PRD S03 does not require auto-submit, so verification runs only from Verify code. Resend cooldown uses `resendAvailableAt` timestamps. Back and Change email call `changeEmail()` so the public guard can leave `awaiting_code`. Figma node 27:4 was not readable via MCP. |
+| Reason | Auto-submit would skip the approved primary action. Six independent inputs would break assistive technology. Navigation state cannot override `awaiting_code`. |
+| Evidence | `apps/mobile/app/(public)/verify.tsx`; `apps/mobile/src/auth/VerifyCodeField.tsx`; `apps/mobile/src/auth/presentation.ts` |
+| Owner | Engineering lead |
+| PRD implication | S03 visual and a11y labels; mailbox OTP and VoiceOver remain unverified. |
+| Impacted requirement IDs | S03, ACC01, ACC02, NFR01, UI02, SEC01, QA02, QA19, QA63 |
+| Impacted test IDs | `apps/mobile/src/auth/presentation.test.ts`; `apps/mobile/src/auth/auth.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-036 — S04 Basic info remaps the existing workspace wizard
+
+| Field | Value |
+| --- | --- |
+| ID | D-036 |
+| Date | 2026-09-25 |
+| Status | Assumed |
+| Decision | Approved Figma S04 (`31:4`) is the first step of the existing `/(onboarding)/setup` wizard, not a new persistence model. Step 1 collects PRD/schema business fields (display name, legal name, trade, contact name, read-only authenticated email, optional E.164 phone, US business address with `postal_code`). Continue to branding validates locally, writes the existing SecureStore draft, and advances in-route to the skip-logo step. There is no Branding screen. `POST /v1/workspace` remains on the final timezone/defaults step with If-Match and idempotency. Step 1 Back is omitted so authenticated owners cannot return to OTP. Figma MCP was unavailable. |
+| Reason | PRD S04 and `parseWorkspaceSetup` already define the workspace command. Inventing a Branding route or posting an incomplete setup body would break the working API/database contract. |
+| Evidence | `apps/mobile/app/(onboarding)/setup.tsx`; `apps/mobile/src/setup/presentation.ts`; `packages/schemas/src/workspace-setup.ts` |
+| Owner | Engineering lead |
+| PRD implication | S04 visual step 1 ships. Branding upload remains skipped. Hosted persistence, VoiceOver, and Figma pixel match remain unverified. |
+| Impacted requirement IDs | S04, VAL01, VAL02, FIN02, INV10, ANA01, DEC03, DEC04, ACC01, ACC02 |
+| Impacted test IDs | QA01, QA61, QA63; `apps/mobile/src/setup/basic-info.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-037 — Figma S06 is PRD S04 step 3, not Create job
+
+| Field | Value |
+| --- | --- |
+| ID | D-037 |
+| Date | 2026-09-25 |
+| Status | Assumed |
+| Decision | Figma S06 (nodes `39:5` / `39:65`) remaps the existing `/(onboarding)/setup` step 3. Timezones are IANA identifiers with DST-aware `UTC±HH:MM` labels. The picker is a modal sheet with search; the inline radio list is removed. Runtime `Intl.supportedValuesOf('timeZone')` is used when present, otherwise `CURATED_TIMEZONES` in `packages/schemas`. Saved/draft timezone is never overwritten by device detection. Currency stays locked USD and is not a client field. Tax persists as integer basis points. Tax confirmation still uses PRD FIN02 copy and is required only for a 0% default. Successful POST `/v1/workspace` refreshes bootstrap and `router.replace`s to Jobs. Figma MCP was unavailable. |
+| Reason | PRD S06 is Create job. Inventing a new onboarding route or offset-only timezone storage would break INV10 and the working workspace command. |
+| Evidence | `apps/mobile/src/setup/TimezonePicker.tsx`; `packages/schemas/src/timezone.ts`; `apps/mobile/app/(onboarding)/setup.tsx` |
+| Owner | Engineering lead |
+| PRD implication | S04 visual step 3 ships. Figma S05 Branding remains the in-route skip-logo step. Hosted persistence, VoiceOver, and Figma pixel match remain unverified. |
+| Impacted requirement IDs | S04, VAL02, FIN02, INV10, DEC03, ANA01, ACC01, ACC02, QA01, QA64 |
+| Impacted test IDs | `packages/schemas/src/timezone.test.ts`; `apps/mobile/src/setup/defaults.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-038 — Create Job restyle keeps POST /jobs and in-memory add-customer hold
+
+| Field | Value |
+| --- | --- |
+| ID | D-038 |
+| Date | 2026-09-25 |
+| Status | Assumed |
+| Decision | Figma S06 Create Job (`48:5` / `48:63`) restyles `/(tabs)/jobs/new` without a new job or customer model. Quote is the default mode. No site address is the default site choice. The customer list is an active-only searchable sheet. Add-customer uses the existing S07 route; an in-memory form hold preserves mode/site/title across that round-trip. Online success `router.replace`s to the quote or direct-invoice editor. Offline create still queues `customer_name` and opens S08. `job_created` stays server-only. Figma MCP was unavailable. |
+| Reason | Rewriting `create_job` or dropping offline `customer_name` would break CUS02 and SYNC05. Returning through `replace` to Create Job would otherwise wipe the form. |
+| Evidence | `apps/mobile/app/(tabs)/jobs/new.tsx`; `apps/mobile/src/jobs/create-presentation.ts`; `apps/mobile/src/jobs/CustomerPickerSheet.tsx` |
+| Owner | Engineering lead |
+| PRD implication | S06 visual ships. Device/VoiceOver/Figma pixel match remain unverified. |
+| Impacted requirement IDs | S06, CUS01, CUS02, VAL01, VAL02, JRN06, ANA01, QA44 |
+| Impacted test IDs | `apps/mobile/src/jobs/create-job.test.ts`; `apps/mobile/src/jobs/form.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-039 — S15 invoice preview stays on the existing issue contract
+
+| Field | Value |
+| --- | --- |
+| ID | D-039 |
+| Date | 2026-09-26 |
+| Status | Assumed |
+| Decision | Figma S15 (`135:5`, `135:39`, `135:83`, `135:117`) restyles `/(tabs)/jobs/[id]/invoice`. Continue to send opens a confirmation sheet and does not issue. Send posts the existing preview refresh (`due_date`, `payment_instructions`) and `POST /jobs/{id}/issue-invoice` with only `preview_hash` and the retained idempotency key. The quote preview schema does not accept a replacement recipient, so the sheet shows the snapshot email and does not submit a different address. After issue the screen stays on S15, shows the server invoice number only after `GET /v1/documents/{id}` returns it, and polls document download every 3 seconds up to 20 times while `pdf_state` is preparing. Check again repeats that read. `original_pdf_download` reports a dead PDF task as failed and does not requeue it, so Retry PDF is not shown. Back to job `replace`s S08. An invoice that already exists when S15 opens still `replace`s S16. Direct-invoice jobs keep the existing line editor. `invoice_issued` stays server-owned. |
+| Reason | Adding a recipient or PDF-retry command would invent an API. Leaving for S16 immediately would skip the approved preparing and failed frames. Sample Figma customers, amounts, and INV-1043 are not production data. |
+| Evidence | `packages/schemas/src/invoice.ts`; `apps/api/src/invoices.ts`; `supabase/migrations/0013_invoice_issue.sql`; `apps/mobile/app/(tabs)/jobs/[id]/invoice.tsx` |
+| Owner | Engineering lead |
+| PRD implication | S15 visual preview ships as IMPLEMENTED. Device PDF, email, VoiceOver, and this restyle remain unverified. |
+| Impacted requirement IDs | S15, JRN05, JRN06, BIL01, BIL02, INV05, INV06, API04, TX03 |
+| Impacted test IDs | QA31, QA32, QA33, QA43, QA44; `apps/mobile/src/invoices/presentation.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-040 — S16 invoice detail does not invent a resend or a zeroed void total
+
+| Field | Value |
+| --- | --- |
+| ID | D-040 |
+| Date | 2026-09-26 |
+| Status | Assumed |
+| Decision | Figma S16 (`138:5`, `138:39`, `138:75`, `138:111`) restyles `/(tabs)/jobs/[id]/invoice/[invoiceId]`. The invoice number, total, customer, PDF state, and delivery state come from `GET /v1/documents/{id}` and `GET /v1/documents/{id}/download`. The recipient is masked with the existing helper. A voided invoice keeps `total_cents`; the screen does not display `$0.00` unless the server total is zero. There is no invoice resend endpoint, so Send again is omitted. Void still uses `POST /v1/invoices/{id}/void` on the existing reason screen. Replacement still uses `invoice/replace` and is shown only when the job returns `create_replacement`. PDF polling stays at 3 seconds and stops after 20 checks. Existing ledger, payment, refund, credit, and reversal routes stay in the actions sheet when the server invoice fields allow them. `invoice_issued` and `payment_recorded` stay server-owned. |
+| Reason | Adding a resend command or rewriting a voided total would break BIL03 and the document contract. The approved frames do not include the ledger actions the PRD already requires on S16. |
+| Evidence | `apps/api/src/invoices.ts`; `apps/api/src/jobs.ts`; `packages/schemas/src/invoice.ts`; `apps/mobile/app/(tabs)/jobs/[id]/invoice/[invoiceId].tsx` |
+| Owner | Engineering lead |
+| PRD implication | S16 visual detail ships as IMPLEMENTED. Device PDF, email, void, replacement, and VoiceOver remain unverified. |
+| Impacted requirement IDs | S16, JRN05, BIL02, BIL03, BIL07, BIL08, INV06, INV07 |
+| Impacted test IDs | QA33, QA37, QA38, QA40, QA41, QA42, QA43; `apps/mobile/src/invoices/presentation.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-041 — S17 records an external payment after review and keeps overpayment confirmation
+
+| Field | Value |
+| --- | --- |
+| ID | D-041 |
+| Date | 2026-09-26 |
+| Status | Assumed |
+| Decision | Figma S17 (`143:5`, `143:37`, `143:70`, `143:100`) restyles `/(tabs)/jobs/[id]/ledger/entry`. Review payment does not post. Record payment posts once to the existing payments endpoint. The recorded frame stays on S17 until View invoice replaces S16 or Back to job replaces S08. Mark paid still prefills the server amount due; Record payment leaves the amount empty. An amount above the outstanding balance shows a field warning and stays disabled until the owner confirms the overpayment. The request then sends `confirm_overpayment: true`. The amount is not capped and a refund is not created on the client. The received date is checked as a calendar date against the device day and a five-year window; the server remains authoritative for the workspace timezone. The payment route has no If-Match version, so the client re-reads the ledger immediately before posting and requires review again when the outstanding balance changed. `payment_recorded` stays server-owned. Refunds remain on this route. |
+| Reason | BIL05 and QA37 require an explicit overpayment confirmation. The approved validation frame shows a hard block. Dropping confirmation would reject a payment the ledger accepts. Inventing If-Match would not match the payment route. |
+| Evidence | `packages/schemas/src/ledger.ts`; `apps/api/src/invoices.ts`; `supabase/migrations/0015_invoice_credits.sql`; `apps/mobile/src/invoices/payment.ts`; `apps/mobile/app/(tabs)/jobs/[id]/ledger/entry.tsx` |
+| Owner | Engineering lead |
+| PRD implication | S17 visual recording ships as IMPLEMENTED. Device entry, staging ledger recording, and production financial behavior remain unverified. |
+| Impacted requirement IDs | S17, BIL05, BIL06, DEC05, INV07, NTF05 |
+| Impacted test IDs | QA37, QA39, F09, F10; `apps/mobile/src/invoices/payment.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-042 — Record refund stays on the ledger entry route and rejects over-refunds
+
+| Field | Value |
+| --- | --- |
+| ID | D-042 |
+| Date | 2026-09-26 |
+| Status | Assumed |
+| Decision | Figma refund frames (`153:5`, `153:36`, `153:68`, `153:98`) restyle `/(tabs)/jobs/[id]/ledger/entry` when `kind=refund`. The PRD still names that flow inside S17 and keeps the credit note at S18. Review refund does not post. Record refund posts once to `POST /v1/invoices/{id}/refunds`. The amount is not prefilled. An amount above `amount_to_refund_cents` is a field error and is not sent, capped, or turned into a credit. There is no over-refund confirmation. The optional note stays because the refund schema accepts it. The entry date remains `YYYY-MM-DD`; the review shows a display date. Partial refund and fully refunded come from the server `amount_to_refund_cents` after the response. A refund does not reverse a payment. The client re-reads the ledger before posting and requires another review if the refundable balance changed. |
+| Reason | BIL06 permits a partial or exact refund and rejects an amount above the refundable balance. The approved frames use a hard block, which matches that rule. Inventing a separate route or a reversal would not match the ledger contract. |
+| Evidence | `packages/schemas/src/ledger.ts`; `apps/api/src/invoices.ts`; `apps/mobile/src/invoices/payment.ts`; `apps/mobile/app/(tabs)/jobs/[id]/ledger/entry.tsx` |
+| Owner | Engineering lead |
+| PRD implication | Refund recording ships as IMPLEMENTED. Device entry, staging ledger recording, and production financial behavior remain unverified. The credit-note screen is unchanged. |
+| Impacted requirement IDs | BIL06, BIL07, DEC05, NTF05 |
+| Impacted test IDs | QA39, F09; `apps/mobile/src/invoices/payment.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-043 — Credit notes stay line allocations with a preview hash
+
+| Field | Value |
+| --- | --- |
+| ID | D-043 |
+| Date | 2026-09-26 |
+| Status | Assumed |
+| Decision | Figma credit-note frames (`158:5`, `158:36`, `158:68`, `158:98`) restyle `/(tabs)/jobs/[id]/credit`. The form credits remaining net on invoice lines and requires a 5 to 500 character reason. Review calls `POST /v1/invoices/{id}/credits/preview`. Issue calls `POST /v1/invoices/{id}/credits` with only `preview_hash` and an idempotency key. The schema has no effective date, note, or reason enum, so those Figma fields are omitted. A credit above a line's remaining net is rejected. A credit that makes the invoice balance negative stays allowed when the line remainder allows it, because BIL08 treats that as refund due. The issued number, total, and PDF state come from the server. The original invoice total is not rewritten. |
+| Reason | BIL04 and QA38 allocate net credits with calculated tax and a frozen preview. A single amount capped at the positive invoice balance would reject the credit-after-payment case in F08. |
+| Evidence | `packages/schemas/src/credit.ts`; `packages/domain/src/credit.ts`; `apps/api/src/invoices.ts`; `apps/mobile/src/invoices/credit-note.ts`; `apps/mobile/app/(tabs)/jobs/[id]/credit.tsx` |
+| Owner | Engineering lead |
+| PRD implication | S18 ships as IMPLEMENTED. Device entry, staging issuance, PDF generation, and email remain unverified. |
+| Impacted requirement IDs | S18, BIL04, BIL08, DEC14, FIN03, FIN04 |
+| Impacted test IDs | QA38, F08; `apps/mobile/src/invoices/credit-note.test.ts` |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-044 — Conflict recovery stays on the quote route
+
+| Field | Value |
+| --- | --- |
+| ID | D-044 |
+| Date | 2026-09-27 |
+| Status | Assumed |
+| Decision | S23 is the conflict state of `/(tabs)/jobs/[id]/quote`, matching Figma frames `189:21`, `189:53`, and `189:88`. Do not add `/(modal)/conflict`. The screen shows no version comparison. A 409 body is only `{"code":"VERSION_CONFLICT"}` and must never be written as the server draft. Keep server requires a network read through `POST /v1/jobs/{id}/quote`, then `resolveDraftConflict({ choice: "keep_server" })` with that full payload and version. That discards the conflicting local working payload. Figma has no second confirmation, so the app does not add one. Save local copy stores the shelved local JSON under a new UUID. Online, the original row becomes the fetched server draft and its paused outbox rows are cleared. Offline, the new row is inserted and the original conflict plus paused outbox stay. The new row is recoverable local data. It is not a second server quote and it is not enqueued. Draft selection prefers a conflict row, then a row with a server version, then the newest local timestamp. `sync_conflict` analytics stay limited to `resource_kind` and `client_version`. Delivery of that event is not wired from this screen. |
+| Reason | The approved frames are states of the quote draft, and the API does not return enough data for a truthful comparison. A recoverable local row can be stored without corrupting the original draft. Treating that row as publishable would invent a second quote for one job. |
+| Evidence | `apps/mobile/app/(tabs)/jobs/[id]/quote.tsx`; `apps/mobile/src/quotes/conflict-screen.tsx`; `apps/mobile/src/sync/conflict.ts`; `apps/mobile/src/sync/conflict-resolution.test.ts` |
+| Owner | Engineering lead |
+| PRD implication | S23, JRN07, and SYNC03 stay IMPLEMENTED. Dual-device QA07, hosted 409, physical SQLCipher, VoiceOver, and Dynamic Type stay unverified. |
+| Impacted requirement IDs | S23, JRN07, SYNC01, SYNC02, SYNC03, SYNC05, NTF05, UI01, NFR01 |
+| Impacted test IDs | QA05, QA06, QA07, QA61 |
+| Migration implications | None |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-045 — Export and deletion stay on the settings data route
+
+| Field | Value |
+| --- | --- |
+| ID | D-045 |
+| Date | 2026-09-27 |
+| Status | Assumed |
+| Decision | S24 remains `/(tabs)/settings/data`, matching Figma frames `195:36`, `195:75`, `195:110`, `195:147`, `195:178`, `195:206`, `195:243`, and `195:284`. Fresh verification is a sheet on that screen. Sending the code does not move the session to the public verify route. "Use a different email" closes the sheet and does not sign the owner out. Export and deletion each require their own action grant. A newer export uses `{ newer: true }` and a new idempotency key. An existing key is kept after an ambiguous failure and replaced only after `IDEMPOTENCY_MISMATCH`. A failed refresh does not clear a loaded export. The ready card labels integrity as server SHA-256 and availability as until server expiry. It does not print the hash, the download URL, a byte count, or a date the server did not return. Empty retained categories are not replaced with invented categories. Mobile does not emit `export_completed`. That event stays server-owned with `size_bucket` and `job_count_bucket` only. |
+| Reason | The approved frames are states of the existing export and deletion contract. A second sign-in route would fight the root guard. Invented dates, hashes, or retention categories would describe data the server did not send. |
+| Evidence | `apps/mobile/app/(tabs)/settings/data.tsx`; `apps/mobile/src/export/presentation.ts`; `apps/mobile/src/deletion/presentation.ts`; `apps/mobile/src/session/AuthProvider.tsx` |
+| Owner | Engineering lead |
+| PRD implication | S24, EXP01, EXP02, PRV03, PRV04, PRV06, ACC02A, EMAIL10, and EMAIL11 stay IMPLEMENTED. DB05 and PRV05 stay PARTIAL. UI01, NFR01, PRV01, PRV02, and OPS06 stay PENDING. Hosted APPLY_0024 and APPLY_0025, a real ZIP, live EMAIL10 and EMAIL11, 1000-job timing, QA58 restore, provider deletion, VoiceOver, Dynamic Type, and physical-device use remain unverified. |
+| Impacted requirement IDs | S24, EXP01, EXP02, PRV03, PRV04, PRV05, PRV06, ACC02A, EMAIL10, EMAIL11, ANA01, DB05, SYNC05, SUB05, UI01, NFR01 |
+| Impacted test IDs | QA55, QA56, QA57, QA58, QA61, QA13, QA66 |
+| Migration implications | None in this change. Hosted APPLY_0024 and APPLY_0025 are not recorded as dispatched. |
+| Reversible | Yes |
+| Escalation category | none |
+
+### D-046 — Bootstrap resilience and API database round trips
+
+| Field | Value |
+| --- | --- |
+| ID | D-046 |
+| Date | 2026-09-28 |
+| Status | Resolved |
+| Decision | Every pooled pg client gets an `error` listener, so a pooler disconnect no longer crashes the API. The API sends `begin; set local role api_app; select identity.set_local_tenant_context(...)` as one message; workspace and actor must be UUIDs, so no value is interpolated unchecked. It retries only pre-BEGIN connect failures. The pool keeps `min: 1`, a 20 s `query_timeout` that destroys the client, and a 10 s `select 1` heartbeat on idle clients, because the Supabase session pooler closes idle connections after about 20 s. Database failures reply 503 `DATABASE_TIMEOUT` or `DATABASE_UNAVAILABLE`. Each request logs one `api_request` line with the route pattern, status, total, db-wait, and db milliseconds, and the transaction count. It carries no tokens, query values, or bodies; `Server-Timing` carries the same timings. Mobile retries only `GET /v1/me`, and never after a client timeout in flight. `bootstrap_error` with a transient support code and `offline_cached` retry automatically while foregrounded. A launch-time refresh that fails for network reasons (supabase-js `AuthRetryableFetchError`) is a network failure, not a sign-out. Status-0 failures keep code `UNAVAILABLE` for idempotency-key retention and add `network: timeout, unreachable, or offline`. Offline is inferred when the auth host is also unreachable. The Jobs list shows cached rows while loading and keeps real rows on a failed refresh. |
+| Reason | Measured against the Supabase session pooler from the development machine: about 307 ms per round trip; a tenant transaction took a median 1812 ms as separate statements and 945 ms with the combined preamble (same run). An idle connection dropped after 20 s and the next transaction took 11.4 s; with the heartbeat, no drop in 150 s and 1.2 s. The dev API crashed on an unhandled pg client `error` after a pooler disconnect. `node --watch` then waited for a file change, so every phone request failed as BOOTSTRAP_NETWORK. |
+| Evidence | `apps/api/src/db.ts`; `apps/api/src/request-context.ts`; `apps/api/src/db-latency.ts`; `apps/mobile/src/session/bootstrap.ts`; `apps/mobile/src/session/AuthProvider.tsx`; `apps/mobile/src/api/client.ts`; `apps/mobile/src/api/reachability.ts`; `apps/mobile/src/jobs/list-state.ts` |
+| Owner | Engineering lead |
+| PRD implication | NFR06 stays PARTIAL. Physical-device transition timings are unmeasured. |
+| Impacted requirement IDs | NFR06, ACC02, ARC04 |
+| Impacted test IDs | QA34 |
+| Migration implications | None |
+| Reversible | Yes |
 | Escalation category | none |

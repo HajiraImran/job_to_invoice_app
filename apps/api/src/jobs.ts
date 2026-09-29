@@ -81,6 +81,7 @@ type JobRow = {
   latest_change_lifecycle?: string | null;
   latest_change_total?: string | number | null;
   latest_change_request_state?: string | null;
+  latest_change_additions?: unknown;
   replayed?: boolean;
 };
 
@@ -169,6 +170,39 @@ export function decodeJobCursor(raw: string): JobCursor | undefined {
 
 function escapeIlike(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
+
+function changeDraftCounts(payload: unknown): { additions_count: number; reductions_count: number } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return { additions_count: 0, reductions_count: 0 };
+  }
+  const record = payload as { additions?: unknown; reductions?: unknown };
+  return {
+    additions_count: Array.isArray(record.additions) ? record.additions.length : 0,
+    reductions_count: Array.isArray(record.reductions) ? record.reductions.length : 0,
+  };
+}
+
+function changeAdditionLines(raw: unknown): Array<{ description: string; total_cents: number }> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const lines: Array<{ description: string; total_cents: number }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const row = item as { description?: unknown; total_cents?: unknown };
+    if (typeof row.description !== "string" || row.description.length === 0) {
+      continue;
+    }
+    const total = typeof row.total_cents === "number" ? row.total_cents : Number(row.total_cents);
+    if (!Number.isInteger(total)) {
+      continue;
+    }
+    lines.push({ description: row.description, total_cents: total });
+  }
+  return lines;
 }
 
 function jobSummary(row: JobListRow) {
@@ -304,6 +338,7 @@ function jobDetail(row: JobRow) {
               typeof (row.change_draft_payload as { reason?: unknown }).reason === "string"
                 ? (row.change_draft_payload as { reason: string }).reason
                 : "",
+            ...changeDraftCounts(row.change_draft_payload),
           }
         : null,
     latest_change:
@@ -318,6 +353,7 @@ function jobDetail(row: JobRow) {
                 ? row.latest_change_total
                 : Number(row.latest_change_total ?? 0),
             request_state: row.latest_change_request_state ?? null,
+            additions: changeAdditionLines(row.latest_change_additions),
           }
         : null,
   };
@@ -380,7 +416,8 @@ const JOB_DETAIL_SQL = `select j.id, j.workspace_id, j.customer_id, c.name as cu
                   cd.id as change_draft_id, cd.version as change_draft_version, cd.payload_json as change_draft_payload,
                   latest_chg.id as latest_change_id, latest_chg.number as latest_change_number,
                   latest_chg.revision_no as latest_change_revision, latest_chg.lifecycle as latest_change_lifecycle,
-                  latest_chg.total_cents as latest_change_total, latest_chg.request_state as latest_change_request_state
+                  latest_chg.total_cents as latest_change_total, latest_chg.request_state as latest_change_request_state,
+                  latest_chg.additions as latest_change_additions
            from commercial.jobs j
            join commercial.customers c
              on c.workspace_id = j.workspace_id and c.id = j.customer_id
@@ -419,7 +456,8 @@ const JOB_DETAIL_SQL = `select j.id, j.workspace_id, j.customer_id, c.name as cu
                       when d3.lifecycle = 'accepted' then 'approved'
                       when d3.lifecycle = 'declined' then 'declined'
                       else d3.lifecycle
-                    end as request_state
+                    end as request_state,
+                    d3.snapshot_json->'additions' as additions
              from commercial.documents d3
              where d3.workspace_id = j.workspace_id and d3.job_id = j.id and d3.kind = 'change'
              order by d3.issued_at desc, d3.id desc

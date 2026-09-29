@@ -48,6 +48,34 @@ export function presentDeletion(input: {
   return { kind: "ready", confirmDisabled: input.confirmation !== "DELETE", message: input.error };
 }
 
+export function deletionBadge(status: string): string {
+  switch (status) {
+    case "purging":
+      return "REMOVING RECORDS";
+    case "completed":
+      return "LIVE RECORDS REMOVED";
+    case "exception":
+      return "NEEDS ATTENTION";
+    default:
+      return "ACCOUNT LOCKED";
+  }
+}
+
+export function deletionIdempotencyAfterFailure(current: string, code: string | undefined): string | undefined {
+  return code === "IDEMPOTENCY_MISMATCH" ? undefined : current;
+}
+
+export function deletionConfirmEnabled(confirmation: string, busy: boolean): boolean {
+  return confirmation === "DELETE" && !busy;
+}
+
+export function visibleRetentionCategories(categories: unknown): string[] {
+  if (!Array.isArray(categories)) {
+    return [];
+  }
+  return categories.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
 export function deletionStatusLabel(status: string): string {
   switch (status) {
     case "locked":

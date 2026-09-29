@@ -39,6 +39,8 @@ describe("documents object store", () => {
     expect(workerClientOptions(storage).endpoint).toBe("http://127.0.0.1:9000");
     expect(workerClientOptions(storage).forcePathStyle).toBe(true);
     expect(workerClientOptions(storage).credentials.accessKeyId).toBe("wk_access_dev01");
+    expect(workerClientOptions(storage).requestChecksumCalculation).toBe("WHEN_REQUIRED");
+    expect(workerClientOptions(storage).responseChecksumValidation).toBe("WHEN_REQUIRED");
     expect(workerStatus(env)).not.toContain("wk_secret_dev01_value");
     expect(workerStatus(env)).not.toContain("api_secret_dev01_value");
     expect(workerStatus(env)).not.toContain("127.0.0.1:9000");

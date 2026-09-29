@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
-import { withWorkerRole, WORKER_CLAIM_TIMEOUT_MS, WORKER_STATEMENT_TIMEOUT_MS } from "./db.ts";
+import {
+  enterWorkerRoleOperation,
+  withWorkerRole,
+  workerRoleOperationIs,
+  WORKER_CLAIM_TIMEOUT_MS,
+  WORKER_STATEMENT_TIMEOUT_MS,
+} from "./db.ts";
 import { buildExportBundle, type ExportPayload } from "./export-bundle.ts";
 
 export type ExportObjectStore = {
@@ -26,6 +32,9 @@ export async function processBuildExport(input: {
   pool: Pool;
   store: ExportObjectStore;
 }): Promise<"idle" | "done" | "failed"> {
+  if (!workerRoleOperationIs("export")) {
+    return enterWorkerRoleOperation("export", () => processBuildExport(input));
+  }
   const claimed = await withWorkerRole(
     input.pool,
     async (client) => {
@@ -105,6 +114,9 @@ export async function processPurgeExports(input: {
   pool: Pool;
   deleteObject?: (key: string) => Promise<void>;
 }): Promise<"idle" | "done"> {
+  if (!workerRoleOperationIs("export")) {
+    return enterWorkerRoleOperation("export", () => processPurgeExports(input));
+  }
   const claimed = await withWorkerRole(
     input.pool,
     async (client) => {

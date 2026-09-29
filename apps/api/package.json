@@ -9,7 +9,8 @@
     "start": "node --experimental-strip-types src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src --config ../../eslint.config.js",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts",
+    "db:latency": "node --experimental-transform-types src/db-latency.ts"
   },
   "dependencies": {
     "@job-to-invoice/config": "workspace:*",

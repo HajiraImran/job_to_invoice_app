@@ -14,6 +14,7 @@ import {
   completeOwnerSignOut,
   signOutAlertSpec,
   signOutChoiceProceeds,
+  signOutFailureCopy,
 } from "./sign-out.ts";
 
 function memoryKv(initial?: Record<string, string>): SecureKv & { store: Map<string, string> } {
@@ -137,5 +138,48 @@ describe("sign-out draft-sync boundary", () => {
       clearMemory: () => undefined,
     });
     expect(result).toEqual({ ok: true });
+  });
+
+  it("does not sign out when forced synchronization fails or conflicts", async () => {
+    const providerSignOut = vi.fn();
+    const clearMemory = vi.fn();
+    const failed = await completeOwnerSignOut({
+      mode: "synchronize",
+      discardDrafts: async () => undefined,
+      synchronizeDrafts: async () => ({ ok: false }),
+      providerSignOut,
+      clearStoredAuth: async () => undefined,
+      clearMemory,
+    });
+    expect(failed).toEqual({ ok: false, stage: "synchronize" });
+    expect(providerSignOut).not.toHaveBeenCalled();
+    expect(clearMemory).not.toHaveBeenCalled();
+    expect(signOutFailureCopy("synchronize", "conflict")).toBe(copy.synchronizeConflict);
+    expect(signOutFailureCopy("synchronize", "failed")).toBe(copy.synchronizeFailed);
+  });
+
+  it("keeps stored auth when provider sign-out fails", async () => {
+    const kv = memoryKv({
+      [SESSION_STORAGE_KEY]: "session-json",
+      [BOOTSTRAP_KEY]: "{}",
+      [PENDING_REPLACE_KEY]: "{}",
+    });
+    const clearMemory = vi.fn();
+    const result = await completeOwnerSignOut({
+      mode: "confirm",
+      discardDrafts: async () => undefined,
+      providerSignOut: async () => {
+        throw new Error("provider");
+      },
+      clearStoredAuth: async () => {
+        await clearAuthMaterial(kv);
+      },
+      clearMemory,
+    });
+    expect(result).toEqual({ ok: false, stage: "sign_out" });
+    expect(clearMemory).not.toHaveBeenCalled();
+    expect(await kv.getItem(SESSION_STORAGE_KEY)).toBe("session-json");
+    expect(signOutFailureCopy("sign_out")).toBe(copy.signOutFailed);
+    expect(JSON.stringify(result)).not.toMatch(/provider|session-json/);
   });
 });

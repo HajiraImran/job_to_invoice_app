@@ -129,6 +129,7 @@ Bearer-only (no grant) on those four commands → 403. Replayed grant → 403. G
 | PATCH /workspace | Owner | Defaults with If-Match; future drafts only |
 | POST /account/email-change | Owner + X-Action-Grant email_change | New email; provider verification; revoke prior refresh tokens |
 | GET /customers | Owner | Search, state active/archived/all, cursor bound to state and search. **Implemented.** Response omits normalized_email and workspace_id. |
+| GET /customers/{id} | Owner | One customer in the current workspace. **Implemented.** Unknown and cross-workspace ids return 404. Response omits normalized_email and workspace_id. |
 | POST /customers | Owner | Name plus optional email, E.164 phone, and billing address. **Implemented.** Idempotency-Key. Duplicate email is 409 until confirm_duplicate_email. Failed 409 is not stored. |
 | PATCH /customers/{id} | Owner | Partial contact update. **Implemented.** If-Match. Version conflict 409. |
 | POST /customers/{id}/archive | Owner | archived boolean. **Implemented.** No If-Match. Version increments only when the archived state changes. |

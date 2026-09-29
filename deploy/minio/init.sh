@@ -14,8 +14,22 @@ case "${anon}" in
     ;;
 esac
 
-mc admin policy create local documents-worker /policies/worker.json >/dev/null 2>&1 || true
-mc admin policy create local documents-api /policies/api.json >/dev/null 2>&1 || true
+# This mc release has no policy update. Replace an existing policy by
+# detaching it, removing it, and creating it again from the mounted JSON.
+# Command output stays discarded so credentials and policy documents are not printed.
+apply_policy() {
+  name="$1"
+  file="$2"
+  user="$3"
+  if mc admin policy info "local" "${name}" >/dev/null 2>&1; then
+    mc admin policy detach "local" "${name}" --user "${user}" >/dev/null 2>&1 || true
+    mc admin policy remove "local" "${name}" >/dev/null
+  fi
+  mc admin policy create "local" "${name}" "${file}" >/dev/null
+}
+
+apply_policy documents-worker /policies/worker.json "${STORAGE_WORKER_ACCESS_KEY_ID}"
+apply_policy documents-api /policies/api.json "${STORAGE_API_ACCESS_KEY_ID}"
 mc admin user add local "${STORAGE_WORKER_ACCESS_KEY_ID}" "${STORAGE_WORKER_SECRET_ACCESS_KEY}" >/dev/null 2>&1 || true
 mc admin user add local "${STORAGE_API_ACCESS_KEY_ID}" "${STORAGE_API_SECRET_ACCESS_KEY}" >/dev/null 2>&1 || true
 mc admin policy attach local documents-worker --user "${STORAGE_WORKER_ACCESS_KEY_ID}" >/dev/null 2>&1 || true

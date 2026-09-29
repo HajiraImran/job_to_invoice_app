@@ -1,4 +1,4 @@
-import { formatUsdCents } from "@job-to-invoice/schemas";
+import { analyticsPropertiesAreSafe, formatUsdCents } from "@job-to-invoice/schemas";
 import { describe, expect, it } from "vitest";
 import {
   centsToDollarsInput,
@@ -6,6 +6,7 @@ import {
   formFromDraft,
   liveTotals,
   moveLine,
+  quoteTotalsBreakdown,
   payloadFromForm,
   quotePublishBody,
   type QuoteDraftRecord,
@@ -16,7 +17,9 @@ import {
   presentQuotePdf,
   presentQuotePdfRetry,
   presentQuoteReview,
+  presentQuoteSaveLabel,
   quoteActionLabel,
+  quoteReviewBlocked,
   quotePublishBackControls,
   requestStateLabel,
 } from "./presentation.ts";
@@ -60,6 +63,104 @@ describe("quote form money", () => {
       lines: [{ ...F01_LINE, unit_price: "19.999" }],
     });
     expect(badPrice.ok).toBe(false);
+  });
+
+  it("breaks down subtotal, discount, net, tax and total in integer cents", () => {
+    const totals = quoteTotalsBreakdown({
+      notes: "Scope",
+      terms: "Net 14.",
+      expiry_days: "14",
+      lines: [F01_LINE],
+    });
+    expect(totals.ok).toBe(true);
+    if (totals.ok) {
+      expect(totals.discountCents).toBe(1000);
+      expect(totals.grossCents).toBe(25000);
+      expect(totals.netCents).toBe(24000);
+      expect(totals.taxCents).toBe(1980);
+      expect(totals.totalCents).toBe(25980);
+    }
+    const empty = quoteTotalsBreakdown({ notes: "", terms: "", expiry_days: "14", lines: [] });
+    expect(empty.ok).toBe(true);
+    if (empty.ok) {
+      expect(empty.totalCents).toBe(0);
+    }
+  });
+
+  it("blocks review while empty, invalid, offline, or busy", () => {
+    expect(
+      quoteReviewBlocked({ lineCount: 0, totalsOk: true, netCents: 0, offline: false, busy: false, accessExpired: false }),
+    ).toBe(true);
+    expect(
+      quoteReviewBlocked({ lineCount: 1, totalsOk: false, netCents: 0, offline: false, busy: false, accessExpired: false }),
+    ).toBe(true);
+    expect(
+      quoteReviewBlocked({ lineCount: 1, totalsOk: true, netCents: 100, offline: true, busy: false, accessExpired: false }),
+    ).toBe(true);
+    expect(
+      quoteReviewBlocked({ lineCount: 1, totalsOk: true, netCents: 100, offline: false, busy: false, accessExpired: true }),
+    ).toBe(true);
+    expect(
+      quoteReviewBlocked({ lineCount: 1, totalsOk: true, netCents: 100, offline: false, busy: false, accessExpired: false }),
+    ).toBe(false);
+    expect(
+      quoteReviewBlocked({
+        lineCount: 1,
+        totalsOk: true,
+        netCents: 11000,
+        offline: false,
+        busy: false,
+        accessExpired: false,
+        formUnsaved: true,
+        saveStatus: "storage_failure",
+      }),
+    ).toBe(true);
+    expect(
+      quoteReviewBlocked({
+        lineCount: 1,
+        totalsOk: true,
+        netCents: 11000,
+        offline: false,
+        busy: false,
+        accessExpired: false,
+        formUnsaved: false,
+        saveStatus: "synced",
+      }),
+    ).toBe(false);
+  });
+
+  it("labels local save separately from a server sync", () => {
+    expect(presentQuoteSaveLabel("saving_locally")).toBe("Saving locally");
+    expect(presentQuoteSaveLabel("saved_on_device")).toBe("Saved on this device");
+    expect(presentQuoteSaveLabel("synced")).toBe("Synced");
+    expect(presentQuoteSaveLabel("conflict")).toContain("another device");
+    expect(analyticsPropertiesAreSafe({ screen: "quote_editor", save_status: "saved_on_device" })).toBe(true);
+    expect(
+      analyticsPropertiesAreSafe({
+        customer_name: "Taylor",
+        job_title: "Porch",
+        notes: "Scope",
+        terms: "Net 14",
+        total_cents: 104000,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps notes, terms and expiry in the payload and rejects an out-of-range expiry", () => {
+    const saved = payloadFromForm({
+      notes: "  Visible note  ",
+      terms: "Payment due on completion.",
+      expiry_days: "14",
+      lines: [],
+    });
+    expect(saved.ok).toBe(true);
+    if (saved.ok) {
+      expect(saved.value.notes).toBe("Visible note");
+      expect(saved.value.terms).toBe("Payment due on completion.");
+      expect(saved.value.expiry_days).toBe(14);
+    }
+    expect(payloadFromForm({ notes: "", terms: "", expiry_days: "0", lines: [] }).ok).toBe(false);
+    expect(payloadFromForm({ notes: "", terms: "", expiry_days: "91", lines: [] }).ok).toBe(false);
   });
 
   it("reorders lines without changing ids", () => {
@@ -278,6 +379,11 @@ describe("quote editor states", () => {
 
   it("validates recipient email on publish and presents S12 delivery states", () => {
     expect(quotePublishBody("ab".repeat(32), "not-an-email").ok).toBe(false);
+    expect(quotePublishBody("ab".repeat(32), "  customer@example.com  ")).toEqual({
+      ok: true,
+      value: { preview_hash: "ab".repeat(32), recipient_email: "customer@example.com" },
+    });
+    expect(quotePublishBody("ab".repeat(32), "   ").ok).toBe(false);
     expect(quotePublishBody("ab".repeat(32), "customer@example.com")).toEqual({
       ok: true,
       value: { preview_hash: "ab".repeat(32), recipient_email: "customer@example.com" },

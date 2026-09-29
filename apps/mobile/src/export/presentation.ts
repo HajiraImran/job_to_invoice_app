@@ -70,6 +70,82 @@ export function presentExport(input: {
   return { kind: "idle", exportDisabled: false, message: input.error };
 }
 
+export type PrivacySurface =
+  | "loading"
+  | "overview"
+  | "preparing"
+  | "ready"
+  | "confirm_deletion"
+  | "locked"
+  | "offline"
+  | "access_expired";
+
+export function presentPrivacySurface(input: {
+  authStatus: string;
+  loading: boolean;
+  hasExport: boolean;
+  exportStatus?: string;
+  requesting: boolean;
+  deletionLocked: boolean;
+  confirmingDeletion: boolean;
+}): PrivacySurface {
+  if (input.authStatus === "access_expired") {
+    return "access_expired";
+  }
+  if (input.authStatus === "offline_cached") {
+    return "offline";
+  }
+  if (input.deletionLocked) {
+    return "locked";
+  }
+  if (input.confirmingDeletion) {
+    return "confirm_deletion";
+  }
+  if (input.requesting || input.exportStatus === "queued" || input.exportStatus === "running") {
+    return "preparing";
+  }
+  if (input.exportStatus === "ready") {
+    return "ready";
+  }
+  if (input.loading && !input.hasExport) {
+    return "loading";
+  }
+  return "overview";
+}
+
+export function exportPollShouldStop(status: string): boolean {
+  return status === "ready" || status === "failed" || status === "expired";
+}
+
+export function nextExportRecord<T>(current: T | null, loaded: { ok: true; record: T | null } | { ok: false }): T | null {
+  if (!loaded.ok) {
+    return current;
+  }
+  return loaded.record;
+}
+
+export function exportIdempotencyAfterFailure(current: string, code: string | undefined): string | undefined {
+  return code === "IDEMPOTENCY_MISMATCH" ? undefined : current;
+}
+
+export function privacyCommandBlocked(input: { offline: boolean; expired: boolean; busy: boolean; locked: boolean }): boolean {
+  return input.offline || input.expired || input.busy || input.locked;
+}
+
+export function downloadLogIsSafe(logged: string, url: string): boolean {
+  return url.length === 0 || !logged.includes(url);
+}
+
+export function exportCompletedPropertiesAreSafe(props: Record<string, unknown>): boolean {
+  return Object.keys(props).sort().join(",") === "job_count_bucket,size_bucket";
+}
+
+export function privacyLogIsSafe(text: string, secrets: readonly string[]): boolean {
+  return secrets.every((secret) => secret.length === 0 || !text.includes(secret));
+}
+
+export const APPLE_SUBSCRIPTIONS_URL = "https://apps.apple.com/account/subscriptions";
+
 export function exportStatusLabel(status: string): string {
   switch (status) {
     case "queued":

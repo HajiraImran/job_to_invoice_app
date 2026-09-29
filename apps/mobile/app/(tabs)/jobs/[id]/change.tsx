@@ -1,8 +1,8 @@
 import { useLocalSearchParams } from "expo-router";
-import { ChangeEditorScreen } from "../../../../src/changes/editor.tsx";
+import { ExtraWorkScreen } from "../../../../src/changes/extra-work-screen.tsx";
 
-export default function ExtraWorkScreen() {
+export default function ChangeRoute() {
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const jobId = typeof params.id === "string" ? params.id : Array.isArray(params.id) ? (params.id[0] ?? "") : "";
-  return <ChangeEditorScreen jobId={jobId} mode="additions" />;
+  return <ExtraWorkScreen jobId={jobId} />;
 }

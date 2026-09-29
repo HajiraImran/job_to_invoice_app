@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  alignDevelopmentStorageEnv,
   apiClientOptions,
   assertStorageEndpoint,
   DEVELOPMENT_DOCUMENTS_BUCKET,
@@ -315,5 +316,65 @@ describe("documents storage", () => {
     expect(apiPolicy).toMatch(/s3:GetObject/);
     expect(apiPolicy).not.toMatch(/s3:PutObject/);
     expect(apiPolicy).not.toMatch(/s3:ListBucket/);
+  });
+});
+
+describe("development storage endpoint alignment", () => {
+  const host = { localAddresses: ["127.0.0.1", "192.168.0.109"], lanHost: "192.168.0.109" };
+
+  it("moves a stale private endpoint to loopback and the download host to the current LAN address", () => {
+    const env: NodeJS.Dict<string> = {
+      APP_ENV: "development",
+      STORAGE_ENDPOINT: "http://192.168.1.38:9000",
+      STORAGE_DOWNLOAD_ENDPOINT: "http://192.168.1.38:9000",
+    };
+    expect(alignDevelopmentStorageEnv(env, host)).toEqual(["download_lan", "endpoint_loopback"]);
+    expect(env.STORAGE_ENDPOINT).toBe("http://127.0.0.1:9000");
+    expect(env.STORAGE_DOWNLOAD_ENDPOINT).toBe("http://192.168.0.109:9000");
+  });
+
+  it("derives a phone-reachable download endpoint from a loopback endpoint", () => {
+    const env: NodeJS.Dict<string> = { APP_ENV: "development", STORAGE_ENDPOINT: "http://localhost:9000" };
+    expect(alignDevelopmentStorageEnv(env, host)).toEqual(["download_lan"]);
+    expect(env.STORAGE_ENDPOINT).toBe("http://localhost:9000");
+    expect(env.STORAGE_DOWNLOAD_ENDPOINT).toBe("http://192.168.0.109:9000");
+  });
+
+  it("leaves current addresses, hostnames, and non-development environments alone", () => {
+    const current: NodeJS.Dict<string> = {
+      APP_ENV: "development",
+      STORAGE_ENDPOINT: "http://127.0.0.1:9000",
+      STORAGE_DOWNLOAD_ENDPOINT: "http://192.168.0.109:9000",
+    };
+    expect(alignDevelopmentStorageEnv(current, host)).toEqual([]);
+    const named: NodeJS.Dict<string> = {
+      APP_ENV: "development",
+      STORAGE_ENDPOINT: "http://minio.lan:9000",
+      STORAGE_DOWNLOAD_ENDPOINT: "http://minio.lan:9000",
+    };
+    expect(alignDevelopmentStorageEnv(named, host)).toEqual([]);
+    expect(named.STORAGE_ENDPOINT).toBe("http://minio.lan:9000");
+    for (const appEnv of ["staging", "production"]) {
+      const env: NodeJS.Dict<string> = { APP_ENV: appEnv, STORAGE_ENDPOINT: "http://192.168.1.38:9000" };
+      expect(alignDevelopmentStorageEnv(env, host)).toEqual([]);
+      expect(env.STORAGE_ENDPOINT).toBe("http://192.168.1.38:9000");
+    }
+  });
+
+  it("does not invent a download host when no LAN address is known", () => {
+    const env: NodeJS.Dict<string> = { APP_ENV: "development", STORAGE_ENDPOINT: "http://10.9.9.9:9000" };
+    expect(alignDevelopmentStorageEnv(env, { localAddresses: ["127.0.0.1"] })).toEqual(["endpoint_loopback"]);
+    expect(env.STORAGE_DOWNLOAD_ENDPOINT).toBeUndefined();
+  });
+
+  it("bounds worker storage calls so an unreachable endpoint cannot hang the worker loop", () => {
+    const storage = resolveWorkerDocumentsStorage(WORKER_DEV_STORAGE);
+    if (!storage) {
+      throw new Error("expected storage");
+    }
+    expect(workerClientOptions(storage)).toMatchObject({
+      requestHandler: { connectionTimeout: 5_000, requestTimeout: 20_000 },
+      maxAttempts: 2,
+    });
   });
 });

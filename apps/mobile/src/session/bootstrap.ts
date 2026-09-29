@@ -33,6 +33,7 @@ export type FetchOwnerMeOptions = {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   startTimer?: OwnerMeTimer;
+  clientRequestId?: string;
 };
 
 function defaultStartTimer(onTimeout: () => void, ms: number): () => void {
@@ -82,11 +83,16 @@ function readError(json: unknown, fallbackStatus: number): ApiError {
     record.error && typeof record.error === "object" && !Array.isArray(record.error)
       ? (record.error as Record<string, unknown>)
       : {};
+  const meta =
+    record.meta && typeof record.meta === "object" && !Array.isArray(record.meta)
+      ? (record.meta as Record<string, unknown>)
+      : {};
   return {
     status: fallbackStatus,
     code: typeof error.code === "string" && error.code.length > 0 ? error.code : "UNAVAILABLE",
     message: typeof error.message === "string" && error.message.length > 0 ? error.message : "Request failed.",
     retryable: error.retryable === true,
+    ...(typeof meta.request_id === "string" ? { requestId: meta.request_id } : {}),
   };
 }
 
@@ -95,7 +101,11 @@ export async function fetchOwnerMe(options: FetchOwnerMeOptions): Promise<OwnerM
   const fetchImpl = options.fetchImpl ?? fetch;
   const startTimer = options.startTimer ?? defaultStartTimer;
   const controller = new AbortController();
-  const clearTimer = startTimer(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const clearTimer = startTimer(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   let response: Response;
   try {
     response = await fetchImpl(`${options.apiBaseUrl}/v1/me`, {
@@ -103,11 +113,12 @@ export async function fetchOwnerMe(options: FetchOwnerMeOptions): Promise<OwnerM
       headers: {
         accept: "application/json",
         authorization: `Bearer ${options.accessToken}`,
+        ...(options.clientRequestId ? { "x-client-request-id": options.clientRequestId } : {}),
       },
       signal: controller.signal,
     });
   } catch {
-    return { ok: false, error: { ...NETWORK_UNAVAILABLE } };
+    return { ok: false, error: { ...NETWORK_UNAVAILABLE, network: timedOut ? "timeout" : "unreachable" } };
   } finally {
     clearTimer();
   }
@@ -180,9 +191,11 @@ export async function retryOwnerMe(options: {
   return { ...result, refreshCount: 0 };
 }
 
-export function classifyOwnerMeError(error: Pick<ApiError, "status" | "code">): BootstrapSupportCode {
+export function classifyOwnerMeError(
+  error: Pick<ApiError, "status" | "code"> & { network?: ApiError["network"] },
+): BootstrapSupportCode {
   if (error.status === 0) {
-    return "BOOTSTRAP_NETWORK";
+    return error.network === "offline" ? "BOOTSTRAP_OFFLINE" : "BOOTSTRAP_NETWORK";
   }
   if (error.status === 401 && error.code === "AUTHENTICATION_FAILED") {
     return "BOOTSTRAP_SESSION";
@@ -190,13 +203,102 @@ export function classifyOwnerMeError(error: Pick<ApiError, "status" | "code">): 
   if (error.status === 403 && error.code === "ACCOUNT_DELETING") {
     return "BOOTSTRAP_SESSION";
   }
-  if (error.status === 503 && error.code === "UNAVAILABLE") {
+  if (error.code === "DATABASE_TIMEOUT" || error.code === "DATABASE_UNAVAILABLE") {
+    return "BOOTSTRAP_DATABASE";
+  }
+  if (error.status >= 500 && error.code !== "INVALID_RESPONSE") {
     return "BOOTSTRAP_SERVICE";
   }
   if (error.code === "INVALID_RESPONSE") {
     return "BOOTSTRAP_RESPONSE";
   }
   return "BOOTSTRAP_UNKNOWN";
+}
+
+/** A failure that a later identical GET /v1/me can plausibly succeed on. */
+export function isTransientOwnerMeError(error: Pick<ApiError, "status">): boolean {
+  return error.status === 0 || error.status >= 500;
+}
+
+export const TRANSIENT_SUPPORT_CODES: readonly BootstrapSupportCode[] = [
+  "BOOTSTRAP_NETWORK",
+  "BOOTSTRAP_OFFLINE",
+  "BOOTSTRAP_SERVICE",
+  "BOOTSTRAP_DATABASE",
+];
+
+/** In-flight retries after a fast transient failure, before any error screen is shown. */
+export const BOOTSTRAP_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+
+/** Background retries while the app is foregrounded and bootstrap is still failing. */
+export const BOOTSTRAP_BACKGROUND_RETRY_MS = [5_000, 15_000, 30_000, 60_000] as const;
+
+export function backgroundBootstrapRetryDelay(attempt: number): number {
+  const index = Math.min(Math.max(0, attempt), BOOTSTRAP_BACKGROUND_RETRY_MS.length - 1);
+  return BOOTSTRAP_BACKGROUND_RETRY_MS[index] ?? 60_000;
+}
+
+export function shouldAutoRetryBootstrap(snapshot: Pick<AuthSnapshot, "status" | "supportCode">): boolean {
+  if (snapshot.status === "offline_cached") {
+    return true;
+  }
+  return (
+    snapshot.status === "bootstrap_error" &&
+    snapshot.supportCode !== undefined &&
+    TRANSIENT_SUPPORT_CODES.includes(snapshot.supportCode)
+  );
+}
+
+/**
+ * What a stored-session read at launch means. supabase-js returns `session: null` with a retryable
+ * fetch error when the access token expired and the refresh could not reach the auth server; the
+ * stored refresh token is kept, so that is a network failure, not a sign-out.
+ */
+export function sessionReadOutcome(input: {
+  hasSession: boolean;
+  error?: unknown;
+  isRetryableFetchError: (error: unknown) => boolean;
+}): "session" | "network_failure" | "signed_out" {
+  if (input.hasSession) {
+    return "session";
+  }
+  if (input.error && input.isRetryableFetchError(input.error)) {
+    return "network_failure";
+  }
+  return "signed_out";
+}
+
+export type Sleep = (ms: number) => Promise<void>;
+
+const realSleep: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Retries GET /v1/me after fast transient failures. A client timeout is not retried in-flight:
+ * the user has already waited the full timeout, so the app moves to cached or error state and
+ * retries in the background instead.
+ */
+export async function fetchOwnerMeWithTransientRetry(options: {
+  attempt: () => Promise<FetchOwnerMeResult>;
+  delaysMs?: readonly number[];
+  sleep?: Sleep;
+  shouldContinue?: () => boolean;
+}): Promise<FetchOwnerMeResult & { attempts: number }> {
+  const delays = options.delaysMs ?? BOOTSTRAP_RETRY_DELAYS_MS;
+  const sleep = options.sleep ?? realSleep;
+  let result = await options.attempt();
+  let attempts = 1;
+  for (const delay of delays) {
+    if (result.ok || !isTransientOwnerMeError(result.error) || result.error.network === "timeout") {
+      break;
+    }
+    if (options.shouldContinue && !options.shouldContinue()) {
+      break;
+    }
+    await sleep(delay);
+    result = await options.attempt();
+    attempts += 1;
+  }
+  return { ...result, attempts };
 }
 
 export function snapshotAfterBootstrapFailure(input: {
@@ -240,14 +342,27 @@ export function snapshotAfterBootstrapFailure(input: {
 
 export function bootstrapErrorCopy(
   supportCode: BootstrapSupportCode,
-): "bootstrapSession" | "networkError" | "bootstrapUnavailable" {
-  if (supportCode === "BOOTSTRAP_SESSION") {
-    return "bootstrapSession";
+):
+  | "bootstrapSession"
+  | "bootstrapApiUnreachable"
+  | "bootstrapOffline"
+  | "bootstrapService"
+  | "bootstrapDatabase"
+  | "bootstrapUnavailable" {
+  switch (supportCode) {
+    case "BOOTSTRAP_SESSION":
+      return "bootstrapSession";
+    case "BOOTSTRAP_NETWORK":
+      return "bootstrapApiUnreachable";
+    case "BOOTSTRAP_OFFLINE":
+      return "bootstrapOffline";
+    case "BOOTSTRAP_SERVICE":
+      return "bootstrapService";
+    case "BOOTSTRAP_DATABASE":
+      return "bootstrapDatabase";
+    default:
+      return "bootstrapUnavailable";
   }
-  if (supportCode === "BOOTSTRAP_NETWORK") {
-    return "networkError";
-  }
-  return "bootstrapUnavailable";
 }
 
 export function formatSupportCode(supportCode: BootstrapSupportCode): string {

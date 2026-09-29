@@ -1,3 +1,5 @@
+import { formatUsdCents } from "@job-to-invoice/schemas";
+import { changeStatusLabel } from "../changes/presentation.ts";
 import { copy } from "../i18n/en.ts";
 
 export type JobSummary = {
@@ -68,6 +70,8 @@ export type JobDetail = JobSummary & {
     id: string;
     version: number;
     reason: string;
+    additions_count?: number;
+    reductions_count?: number;
   } | null;
   latest_change: {
     id: string;
@@ -76,6 +80,7 @@ export type JobDetail = JobSummary & {
     lifecycle: string;
     total_cents: number;
     request_state: string | null;
+    additions?: Array<{ description: string; total_cents: number }>;
   } | null;
 };
 
@@ -89,6 +94,8 @@ export type JobsListView = {
   showOfflineBanner: boolean;
   showSearchDownloaded: boolean;
   message?: string;
+  /** Real items are on screen and a newer copy is loading. */
+  refreshing?: boolean;
 };
 
 export function presentJobsList(input: {
@@ -160,19 +167,46 @@ export function presentJobsList(input: {
     showOfflineBanner: false,
     showSearchDownloaded: false,
     message: input.error?.message,
+    refreshing: input.loading,
   };
+}
+
+/** Fail closed: only a string array is a server permission list. */
+export function normalizePermittedActions(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((action) => typeof action !== "string")) {
+    return [];
+  }
+  return value;
+}
+
+export function jobPermitsAction(job: unknown, action: string): boolean {
+  if (!job || typeof job !== "object") {
+    return false;
+  }
+  return normalizePermittedActions((job as { permitted_actions?: unknown }).permitted_actions).includes(action);
+}
+
+type PresentableJob = Omit<JobDetail, "permitted_actions"> & { permitted_actions?: unknown };
+
+function presentableJob(job: PresentableJob): JobDetail {
+  const permitted_actions = normalizePermittedActions(job.permitted_actions);
+  if (job.permitted_actions === permitted_actions) {
+    return job as JobDetail;
+  }
+  return { ...job, permitted_actions };
 }
 
 export function presentJobDetail(input: {
   authStatus: string;
   loading: boolean;
-  job?: JobDetail;
+  job?: PresentableJob;
   error?: { message: string; retryable: boolean; status: number };
 }): {
   kind: "loading" | "error" | "missing" | "loaded" | "access_expired" | "offline";
   showRetry: boolean;
   job?: JobDetail;
   message?: string;
+  refreshFailed?: boolean;
 } {
   if (input.authStatus === "access_expired") {
     return { kind: "access_expired", showRetry: false };
@@ -193,7 +227,13 @@ export function presentJobDetail(input: {
   if (!input.job) {
     return { kind: "missing", showRetry: false };
   }
-  return { kind: "loaded", showRetry: false, job: input.job };
+  return {
+    kind: "loaded",
+    showRetry: Boolean(input.error?.retryable),
+    job: presentableJob(input.job),
+    message: input.error?.message,
+    refreshFailed: Boolean(input.error),
+  };
 }
 
 export function nextActionCopy(
@@ -229,7 +269,7 @@ export function nextActionCopy(
   return mode === "direct_invoice" ? "direct" : "quote";
 }
 
-export function jobLifecycleActions(job: Pick<JobDetail, "permitted_actions" | "lifecycle" | "latest_invoice" | "active_invoice">): {
+export function jobLifecycleActions(job: Pick<JobDetail, "lifecycle" | "latest_invoice" | "active_invoice"> & { permitted_actions?: unknown }): {
   canDelete: boolean;
   canCancel: boolean;
   canCreateLinked: boolean;
@@ -238,15 +278,183 @@ export function jobLifecycleActions(job: Pick<JobDetail, "permitted_actions" | "
   canFinish: boolean;
   showReceivable: boolean;
 } {
+  const permitted = normalizePermittedActions(job.permitted_actions);
   return {
-    canDelete: job.permitted_actions.includes("delete_job"),
-    canCancel: job.permitted_actions.includes("cancel_job"),
-    canCreateLinked: job.permitted_actions.includes("create_linked_job"),
-    canArchive: job.permitted_actions.includes("archive_job"),
-    canRestore: job.permitted_actions.includes("restore_job"),
-    canFinish: job.permitted_actions.includes("finish_job"),
+    canDelete: permitted.includes("delete_job"),
+    canCancel: permitted.includes("cancel_job"),
+    canCreateLinked: permitted.includes("create_linked_job"),
+    canArchive: permitted.includes("archive_job"),
+    canRestore: permitted.includes("restore_job"),
+    canFinish: permitted.includes("finish_job"),
     showReceivable: job.lifecycle === "canceled" && Boolean(job.active_invoice || job.latest_invoice),
   };
+}
+
+export function presentScopeTotalCents(job: JobDetail): number | null {
+  if (
+    job.latest_change &&
+    (job.latest_change.lifecycle === "accepted" || job.latest_change.request_state === "approved")
+  ) {
+    return job.latest_change.total_cents;
+  }
+  if (job.current_quote) {
+    return job.current_quote.total_cents;
+  }
+  if (job.quote_draft) {
+    return job.quote_draft.total_cents;
+  }
+  if (job.invoice_draft) {
+    return job.invoice_draft.total_cents;
+  }
+  if (job.lifecycle !== "canceled" && job.active_invoice) {
+    return job.active_invoice.total_cents;
+  }
+  return null;
+}
+
+export function presentReceivableCents(job: JobDetail): number | null {
+  if (job.lifecycle !== "canceled") {
+    return null;
+  }
+  return (job.active_invoice ?? job.latest_invoice)?.total_cents ?? null;
+}
+
+export function presentUpdatedLabel(updatedAt: string, nowMs = Date.now()): string {
+  const then = Date.parse(updatedAt);
+  if (!Number.isFinite(then)) {
+    return "";
+  }
+  const minutes = Math.floor(Math.max(0, nowMs - then) / 60_000);
+  if (minutes < 1) {
+    return copy.jobUpdatedJustNow;
+  }
+  if (minutes < 60) {
+    return copy.jobUpdatedMinutes.replace("{count}", String(minutes));
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return copy.jobUpdatedHours.replace("{count}", String(hours));
+  }
+  return copy.jobUpdatedDate.replace("{date}", new Date(then).toLocaleDateString());
+}
+
+export function presentCurrentStep(job: JobDetail): { label: string; tone: "draft" | "ready" | "attention" | "neutral" } {
+  const next = nextActionCopy(
+    job.mode,
+    job.lifecycle,
+    job.current_quote?.lifecycle,
+    Boolean(job.active_invoice),
+  );
+  const quoteLifecycle = job.current_quote?.lifecycle;
+  if (next === "quote" && quoteLifecycle && quoteLifecycle !== "issued") {
+    return { label: copy.createRevision, tone: "attention" };
+  }
+  if (next === "quote") {
+    return { label: job.quote_draft ? copy.openQuote : copy.createQuote, tone: "draft" };
+  }
+  if (next === "direct") {
+    return { label: copy.createInvoice, tone: "draft" };
+  }
+  if (next === "invoice") {
+    return { label: copy.jobStepReadyInvoice, tone: "ready" };
+  }
+  if (next === "published") {
+    return { label: quoteLifecycle ? quoteLifecycleLabel(quoteLifecycle) : copy.jobLifecycleActive, tone: "neutral" };
+  }
+  if (next === "view_invoice") {
+    return { label: copy.viewInvoice, tone: "ready" };
+  }
+  if (next === "replace_invoice") {
+    return { label: copy.invoiceReplace, tone: "attention" };
+  }
+  if (job.lifecycle === "canceled") {
+    return { label: copy.jobLifecycleCanceled, tone: "attention" };
+  }
+  if (job.lifecycle === "finished") {
+    return { label: copy.jobLifecycleFinished, tone: "neutral" };
+  }
+  if (job.lifecycle === "archived") {
+    return { label: copy.jobLifecycleArchived, tone: "neutral" };
+  }
+  return { label: copy.jobLifecycleDraft, tone: "neutral" };
+}
+
+export type JobDocumentAction = "quote" | "request" | "invoice" | "change";
+
+export type JobDocumentRow = {
+  key: string;
+  title: string;
+  subtitle: string;
+  action: JobDocumentAction;
+  targetId?: string;
+};
+
+export function presentJobDocuments(job: JobDetail): JobDocumentRow[] {
+  const rows: JobDocumentRow[] = [];
+  if (job.current_quote) {
+    rows.push({
+      key: `quote-${job.current_quote.id}`,
+      title: copy.jobQuotePill.replace("{number}", job.current_quote.number),
+      subtitle: `${quoteLifecycleLabel(job.current_quote.lifecycle)} · PDF`,
+      action: "quote",
+    });
+    if (job.current_quote.lifecycle === "accepted") {
+      rows.push({
+        key: `receipt-${job.current_quote.id}`,
+        title: copy.jobApprovalReceipt,
+        subtitle: copy.jobApprovalReceiptHint,
+        action: "request",
+      });
+    }
+  }
+  const invoice = job.active_invoice ?? job.latest_invoice;
+  if (invoice) {
+    rows.push({
+      key: `invoice-${invoice.id}`,
+      title: invoice.number,
+      subtitle: invoice.lifecycle,
+      action: "invoice",
+      targetId: invoice.id,
+    });
+  }
+  if (job.latest_change) {
+    rows.push({
+      key: `change-${job.latest_change.id}`,
+      title: job.latest_change.number,
+      subtitle: changeStatusLabel(job.latest_change.lifecycle, job.latest_change.request_state),
+      action: "change",
+    });
+    const approved =
+      job.latest_change.lifecycle === "accepted" || job.latest_change.request_state === "approved";
+    if (approved) {
+      for (const [index, line] of (job.latest_change.additions ?? []).entries()) {
+        rows.push({
+          key: `change-line-${job.latest_change.id}-${index}`,
+          title: line.description,
+          subtitle: formatUsdCents(line.total_cents),
+          action: "change",
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+export type JobActivityRow = { key: string; title: string; at: string };
+
+export function presentJobActivity(job: JobDetail): JobActivityRow[] {
+  const rows: JobActivityRow[] = [{ key: "created", title: copy.jobCreatedActivity, at: job.created_at }];
+  if (job.updated_at && job.updated_at !== job.created_at) {
+    rows.push({ key: "updated", title: copy.jobUpdatedActivity, at: job.updated_at });
+  }
+  return rows.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
+}
+
+export function presentModePill(job: Pick<JobDetail, "mode" | "current_quote">): string {
+  if (job.current_quote?.number) {
+    return copy.jobQuotePill.replace("{number}", job.current_quote.number);
+  }
+  return job.mode === "direct_invoice" ? copy.modeDirect : copy.modeQuote;
 }
 
 export function quoteLifecycleLabel(lifecycle: string): string {

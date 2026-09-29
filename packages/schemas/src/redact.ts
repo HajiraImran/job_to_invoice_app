@@ -39,6 +39,15 @@ const SENSITIVE_KEYS = new Set([
   "city",
   "postal_code",
   "zip",
+  "default_terms",
+  "terms",
+  "commercial_terms",
+  "customer_name",
+  "job_title",
+  "note",
+  "credit_reason",
+  "credit_note",
+  "invoice_number",
 ]);
 
 export function redactText(value: string): string {

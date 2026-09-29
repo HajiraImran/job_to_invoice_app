@@ -1,6 +1,6 @@
 import type { ApiError } from "../api/client.ts";
 import type { EncryptedSqliteHandle } from "../storage/encrypted-database.ts";
-import { setLocalDraftSyncState, upsertLocalDraft } from "./repository.ts";
+import { getLocalDraft, setLocalDraftSyncState, upsertLocalDraft } from "./repository.ts";
 import { ownerDraftPatchBodyFromStored } from "./patch-body.ts";
 import {
   countPendingOutboxBlockedByRetry,
@@ -11,7 +11,10 @@ import {
   markOutboxInFlight,
   markOutboxRetry,
   prepareOutboxForDrain,
+  rebasePendingOutboxVersions,
+  resumeOutboxAfterConflict,
 } from "../sync/outbox.ts";
+import { isStorageError, type StorageErrorCode } from "../storage/storage-error.ts";
 import { pauseResourceForConflict } from "../sync/conflict.ts";
 import type { SyncConflictAnalyticsProps } from "../sync/analytics.ts";
 import {
@@ -46,6 +49,20 @@ export type DrainOutboxResult = {
   outcome: DrainDiagOutcome;
 };
 
+export type LocalPersistStage = "map_patch_body" | "read_existing" | "upsert_draft" | "enqueue_outbox" | "mark_queued";
+
+export type LocalPersistFailureCode = "MAP_FAILED" | "OUTBOX_FORBIDDEN" | StorageErrorCode;
+
+function persistFailureCode(error: unknown): LocalPersistFailureCode | undefined {
+  if (isStorageError(error)) {
+    return error.code;
+  }
+  if (error instanceof Error && error.message === "OUTBOX_FORBIDDEN") {
+    return "OUTBOX_FORBIDDEN";
+  }
+  return undefined;
+}
+
 export async function persistDraftLocally(
   db: EncryptedSqliteHandle,
   input: {
@@ -66,24 +83,37 @@ export async function persistDraftLocally(
     idempotencyKey: string;
     nowIso?: string;
   },
-): Promise<{ status: DraftPersistStatus }> {
+): Promise<{ status: DraftPersistStatus; stage?: LocalPersistStage; code?: LocalPersistFailureCode }> {
   const nowIso = input.nowIso ?? new Date().toISOString();
+  let stage: LocalPersistStage = "read_existing";
   try {
+    const existingDraft = await getLocalDraft(db, input.draftId);
+    const keptServerVersion =
+      existingDraft &&
+      existingDraft.syncState !== "conflict" &&
+      existingDraft.serverVersion != null &&
+      (input.serverVersion == null || existingDraft.serverVersion > input.serverVersion)
+        ? existingDraft.serverVersion
+        : (input.serverVersion ?? null);
+    const baseVersion =
+      keptServerVersion != null && keptServerVersion > input.baseVersion ? keptServerVersion : input.baseVersion;
     const payloadJson = JSON.stringify(input.payload);
+    stage = "map_patch_body";
     const mapped =
       input.patchBody !== undefined
         ? ownerDraftPatchBodyFromStored(input.patchBody)
         : ownerDraftPatchBodyFromStored(input.payload);
     if (!mapped.ok) {
-      return { status: "storage_failure" };
+      return { status: "storage_failure", stage, code: "MAP_FAILED" };
     }
     const bodyJson = JSON.stringify(mapped.value);
+    stage = "upsert_draft";
     await upsertLocalDraft(db, {
       draftId: input.draftId,
       jobId: input.jobId,
       kind: input.kind,
-      baseVersion: input.baseVersion,
-      serverVersion: input.serverVersion ?? null,
+      baseVersion,
+      serverVersion: keptServerVersion,
       schemaVersion: input.schemaVersion,
       payloadJson,
       syncState: "saving",
@@ -93,13 +123,15 @@ export async function persistDraftLocally(
       draftId: input.draftId,
       jobId: input.jobId,
       kind: input.kind,
-      baseVersion: input.baseVersion,
-      serverVersion: input.serverVersion ?? null,
+      baseVersion,
+      serverVersion: keptServerVersion,
       schemaVersion: input.schemaVersion,
       payloadJson,
       syncState: "dirty",
       localUpdatedAt: nowIso,
     });
+    stage = "enqueue_outbox";
+    await resumeOutboxAfterConflict(db, input.draftId, nowIso);
     await enqueueOutboxOperation(db, {
       operationId: input.operationId,
       resourceKind: "draft",
@@ -107,15 +139,38 @@ export async function persistDraftLocally(
       method: "PATCH",
       path: `/v1/drafts/${input.draftId}`,
       bodyJson,
-      baseVersion: input.baseVersion,
+      baseVersion,
       idempotencyKey: input.idempotencyKey,
       nowIso,
     });
+    stage = "mark_queued";
     await setLocalDraftSyncState(db, input.draftId, "queued", { nowIso });
-    return { status: "saved_on_device" };
-  } catch {
-    return { status: "storage_failure" };
+    return { status: "saved_on_device", stage };
+  } catch (error) {
+    return { status: "storage_failure", stage, code: persistFailureCode(error) };
   }
+}
+
+async function ifMatchForOperation(
+  db: EncryptedSqliteHandle,
+  op: { resourceKind: string; resourceId: string; baseVersion: number | null },
+): Promise<number | undefined> {
+  if (op.baseVersion == null) {
+    return undefined;
+  }
+  if (op.resourceKind !== "draft") {
+    return op.baseVersion;
+  }
+  const local = await getLocalDraft(db, op.resourceId);
+  if (
+    local &&
+    local.syncState !== "conflict" &&
+    local.serverVersion != null &&
+    local.serverVersion > op.baseVersion
+  ) {
+    return local.serverVersion;
+  }
+  return op.baseVersion;
 }
 
 function classifyRequestFailure(error: ApiError): DrainDiagOutcome {
@@ -137,7 +192,33 @@ function classifyRequestFailure(error: ApiError): DrainDiagOutcome {
   return "request_failure";
 }
 
+const drainTails = new WeakMap<EncryptedSqliteHandle, Promise<void>>();
+
 export async function drainOutbox(
+  db: EncryptedSqliteHandle,
+  options: Parameters<typeof drainOutboxOnce>[1],
+): Promise<DrainOutboxResult> {
+  const previous = drainTails.get(db) ?? Promise.resolve();
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  drainTails.set(
+    db,
+    previous.then(
+      () => gate,
+      () => gate,
+    ),
+  );
+  await previous.catch(() => undefined);
+  try {
+    return await drainOutboxOnce(db, options);
+  } finally {
+    release();
+  }
+}
+
+async function drainOutboxOnce(
   db: EncryptedSqliteHandle,
   options: {
     request: OwnerRequestFn;
@@ -175,8 +256,14 @@ export async function drainOutbox(
     });
   }
 
-  const runnable = await listRunnableOutboxOperations(db, nowIso);
-  if (runnable.length === 0) {
+  let passes = 0;
+  while (passes < 20) {
+    passes += 1;
+    const runnable = await listRunnableOutboxOperations(db, nowIso);
+    if (runnable.length === 0) {
+      if (passes > 1) {
+        break;
+      }
     const remainingRows = await db.getFirstAsync<{ n: number }>(
       "select count(*) as n from outbox_ops where state in ('pending', 'in_flight', 'paused_conflict', 'failed')",
     );
@@ -189,10 +276,11 @@ export async function drainOutbox(
     const outcome: DrainDiagOutcome =
       blocked > 0 ? "ineligible_retry_time" : "no_executable_operation";
     emitDrainDiagnostic({ stage: "select", outcome, drained: 0, remaining });
-    return { drained: 0, remaining, conflicts: 0, outcome };
-  }
+      return { drained: 0, remaining, conflicts: 0, outcome };
+    }
 
-  for (const op of runnable) {
+    let drainedThisPass = 0;
+    for (const op of runnable) {
     await markOutboxInFlight(db, op.operationId, nowIso);
     let parsedBody: unknown;
     try {
@@ -232,7 +320,7 @@ export async function drainOutbox(
         method: op.method,
         body,
         idempotencyKey: op.idempotencyKey,
-        ifMatch: op.baseVersion ?? undefined,
+        ifMatch: await ifMatchForOperation(db, op),
       });
     } catch {
       await markOutboxRetry(db, op.operationId, op.attempts + 1, "UNAVAILABLE", Date.now(), options.random);
@@ -247,18 +335,27 @@ export async function drainOutbox(
 
     if (result.ok) {
       try {
-        await markOutboxDone(db, op.operationId, new Date().toISOString());
+        const ackedAt = new Date().toISOString();
+        await markOutboxDone(db, op.operationId, ackedAt);
         if (op.resourceKind === "draft") {
           const version =
             typeof result.data.version === "number" ? result.data.version : (op.baseVersion ?? 0) + 1;
-          await setLocalDraftSyncState(db, op.resourceId, "synced", {
+          await rebasePendingOutboxVersions(db, op.resourceId, version, ackedAt);
+          const successor = await db.getFirstAsync<{ operation_id: string }>(
+            `select operation_id from outbox_ops
+             where resource_id = ? and state in ('pending', 'failed')
+             limit 1`,
+            [op.resourceId],
+          );
+          await setLocalDraftSyncState(db, op.resourceId, successor ? "queued" : "synced", {
             baseVersion: version,
             serverVersion: version,
-            payloadJson: JSON.stringify(result.data),
-            nowIso: new Date().toISOString(),
+            payloadJson: successor ? undefined : JSON.stringify(result.data),
+            nowIso: ackedAt,
           });
         }
         drained += 1;
+        drainedThisPass += 1;
         emitDrainDiagnostic({
           stage: "ack",
           outcome: "drained",
@@ -325,6 +422,10 @@ export async function drainOutbox(
       operationKind: op.resourceKind === "job" ? "job" : "draft",
       httpStatus: result.error.status,
     });
+    }
+    if (drainedThisPass === 0) {
+      break;
+    }
   }
 
   const remainingRows = await db.getFirstAsync<{ n: number }>(

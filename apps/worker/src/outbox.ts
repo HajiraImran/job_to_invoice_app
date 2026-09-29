@@ -15,9 +15,15 @@ import {
   type QuoteSnapshotV1,
 } from "@job-to-invoice/domain";
 import type { Pool } from "pg";
-import { withWorkerRole, WORKER_CLAIM_TIMEOUT_MS, WORKER_STATEMENT_TIMEOUT_MS } from "./db.ts";
+import {
+  enterWorkerRoleOperation,
+  withWorkerRole,
+  workerRoleOperationIs,
+  WORKER_CLAIM_TIMEOUT_MS,
+  WORKER_STATEMENT_TIMEOUT_MS,
+} from "./db.ts";
 import type { DocumentsObjectStore } from "./documents-store.ts";
-import type { WorkerPdfStage } from "./worker-log.ts";
+import { pdfFailureErrorCode, writeWorkerPdfFailure, type WorkerPdfStage } from "./worker-log.ts";
 
 export type PdfRenderer = (
   document: QuotePdfDocument | InvoicePdfDocument | CreditPdfDocument | ChangePdfDocument,
@@ -173,6 +179,9 @@ export async function processGenerateOriginalPdf(input: {
   onStage?: (stage: WorkerPdfStage) => void;
   heartbeatMs?: number;
 }): Promise<"idle" | "done" | "retry" | "dead"> {
+  if (!workerRoleOperationIs("worker_pdf")) {
+    return enterWorkerRoleOperation("worker_pdf", () => processGenerateOriginalPdf(input));
+  }
   input.onStage?.("claim_started");
   const claimed = await withWorkerRole(
     input.pool,
@@ -194,8 +203,10 @@ export async function processGenerateOriginalPdf(input: {
     return "idle";
   }
   input.onStage?.("claimed");
+  let failedStage: WorkerPdfStage = "source_loading";
 
   try {
+    input.onStage?.("source_loading");
     const source = await withWorkerRole(input.pool, async (client) => {
       await client.query("select identity.set_local_tenant_context($1::uuid, $2::uuid)", [
         claimed.workspace_id,
@@ -213,6 +224,7 @@ export async function processGenerateOriginalPdf(input: {
     if (!source.row || !source.artifactId) {
       throw new PermanentPdfError("VALIDATION_FAILED", "Published document was not found");
     }
+    failedStage = "rendering";
     const document = asDocument(source.row);
     if (isInvoicePdf(document)) {
       renderInvoiceOriginalHtml(document);
@@ -229,19 +241,25 @@ export async function processGenerateOriginalPdf(input: {
       revision: source.row.revision_no,
       artifactId: source.artifactId,
     });
+    failedStage = "rendering";
     const bytes = await whileLeased(
       input.pool,
       claimed.id,
       async () => {
         input.onStage?.("rendering");
         const rendered = await input.render(document);
-        input.onStage?.("uploading");
+        failedStage = "storage_put";
+        input.onStage?.("storage_put");
         await input.store.putObject({ key, body: rendered, contentType: "application/pdf" });
         return rendered;
       },
       input.heartbeatMs,
     );
+    failedStage = "checksum";
+    input.onStage?.("checksum");
     const sha256 = createHash("sha256").update(bytes).digest("hex");
+    failedStage = "complete_pdf";
+    input.onStage?.("complete_pdf");
     await withWorkerRole(input.pool, async (client) => {
       await client.query(
         "select commercial.complete_original_pdf($1::uuid, $2::uuid, $3, $4, $5::bigint)",
@@ -251,19 +269,31 @@ export async function processGenerateOriginalPdf(input: {
     input.onStage?.("completed");
     return "done";
   } catch (error) {
+    writeWorkerPdfFailure({ stage: failedStage, error, attempt: claimed.attempts });
     const permanent =
       error instanceof PermanentPdfError ||
       (error instanceof Error &&
         /at least one line|must match the issued snapshot|must be a published quote|must be a published invoice/.test(error.message));
     const code =
-      error instanceof PermanentPdfError ? error.code : permanent ? "VALIDATION_FAILED" : "PDF_RENDER_FAILED";
-    const status = await withWorkerRole(input.pool, async (client) => {
-      const failed = await client.query<{ fail_original_pdf: string }>(
-        "select commercial.fail_original_pdf($1::uuid, $2, $3::boolean)",
-        [claimed.id, code, permanent],
-      );
-      return failed.rows[0]?.fail_original_pdf ?? "pending";
-    });
+      error instanceof PermanentPdfError
+        ? error.code
+        : permanent
+          ? "VALIDATION_FAILED"
+          : pdfFailureErrorCode(failedStage, error);
+    let status = "pending";
+    try {
+      failedStage = "fail_recording";
+      status = await withWorkerRole(input.pool, async (client) => {
+        const failed = await client.query<{ fail_original_pdf: string }>(
+          "select commercial.fail_original_pdf($1::uuid, $2, $3::boolean)",
+          [claimed.id, code, permanent],
+        );
+        return failed.rows[0]?.fail_original_pdf ?? "pending";
+      });
+      input.onStage?.("fail_recording");
+    } catch (recordError) {
+      writeWorkerPdfFailure({ stage: "fail_recording", error: recordError, attempt: claimed.attempts });
+    }
     if (status === "dead") {
       input.onStage?.("dead");
       return "dead";

@@ -1,10 +1,9 @@
-import { US_STATES } from "@job-to-invoice/schemas";
+import { isOfflineReadPermitted } from "@job-to-invoice/schemas";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,23 +13,48 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { secureRandomUUID } from "../../../src/crypto/uuid.ts";
 import { copy } from "../../../src/i18n/en.ts";
+import { CustomerPickerSheet } from "../../../src/jobs/CustomerPickerSheet.tsx";
+import {
+  CREATE_JOB_GUTTER,
+  presentCreateJobCustomerLabel,
+  presentCreateJobNextHref,
+  presentCreateJobReady,
+  presentCreateJobScreen,
+  presentModeCards,
+  presentSiteFieldValue,
+} from "../../../src/jobs/create-presentation.ts";
+import {
+  CreateJobAddCustomer,
+  CreateJobHeading,
+  CreateJobModeCard,
+  CreateJobPrimaryButton,
+  CreateJobSelectField,
+  CreateJobSiteChoice,
+  CreateJobTextField,
+  createJobErrorStyle,
+  createJobNoticeStyle,
+  createJobSectionStyle,
+} from "../../../src/jobs/create-ui.tsx";
+import { clearCreateJobForm, holdCreateJobForm, peekCreateJobForm } from "../../../src/jobs/create-session.ts";
 import { emptyJobForm, firstJobFieldError, jobFormFocusName, jobRequestFromForm, type JobFormValues } from "../../../src/jobs/form.ts";
 import { type JobDetail } from "../../../src/jobs/presentation.ts";
 import { upsertCachedJob } from "../../../src/jobs/cache.ts";
-import { jobDetailPath, jobsIndexPath } from "../../../src/jobs/routes.ts";
+import { jobsIndexPath } from "../../../src/jobs/routes.ts";
 import { enqueueOutboxOperation } from "../../../src/sync/outbox.ts";
-import { isOfflineReadPermitted } from "@job-to-invoice/schemas";
 import { retainOrCreateSetupIdempotencyKey } from "../../../src/setup/idempotency.ts";
 import { useAuth } from "../../../src/session/AuthProvider.tsx";
-import { colors, space, type } from "../../../src/theme.ts";
+import { colors } from "../../../src/theme.ts";
 
 export default function CreateJobScreen() {
   const auth = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const screen = presentCreateJobScreen();
   const [values, setValues] = useState<JobFormValues>(emptyJobForm);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | undefined>();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [siteChooserOpen, setSiteChooserOpen] = useState(false);
   const params = useLocalSearchParams<{ relatedJobId?: string | string[]; customerId?: string | string[]; customerName?: string | string[] }>();
   const relatedJobId =
     typeof params.relatedJobId === "string" ? params.relatedJobId : Array.isArray(params.relatedJobId) ? (params.relatedJobId[0] ?? "") : "";
@@ -49,6 +73,13 @@ export default function CreateJobScreen() {
   const selectedCustomerName = firstParam(params.customerName);
 
   useEffect(() => {
+    const held = peekCreateJobForm();
+    if (held) {
+      setValues(held);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!selectedCustomerId) return;
     setField("customer_id", selectedCustomerId);
     if (selectedCustomerName) setField("customer_name", selectedCustomerName);
@@ -58,6 +89,17 @@ export default function CreateJobScreen() {
     () => jobRequestFromForm(values, jobId.current ?? "", relatedJobId || undefined, { savedCustomer: online }),
     [online, relatedJobId, values],
   );
+  const ready = presentCreateJobReady(values, online, submitting);
+  const modes = presentModeCards(values.mode);
+
+  function openAddCustomer() {
+    holdCreateJobForm(values);
+    setPickerOpen(false);
+    router.push({
+      pathname: "/customers/new",
+      params: relatedJobId ? { returnTo: "job", relatedJobId } : { returnTo: "job" },
+    });
+  }
 
   function focusField(field?: string) {
     if (!field) {
@@ -67,6 +109,9 @@ export default function CreateJobScreen() {
   }
 
   async function submit() {
+    if (submitting) {
+      return;
+    }
     if (auth.snapshot.status === "access_expired") {
       setFormError(copy.accessExpired);
       return;
@@ -102,7 +147,7 @@ export default function CreateJobScreen() {
       try {
         const pendingJob: JobDetail = {
           id: parsed.value.id,
-          customer_id: parsed.value.id,
+          customer_id: parsed.value.customer_id ?? "",
           customer_name: parsed.value.customer_name ?? "",
           title: parsed.value.title,
           lifecycle: "draft",
@@ -139,7 +184,8 @@ export default function CreateJobScreen() {
         });
         setSubmitting(false);
         setFormError(copy.jobOfflineCreate);
-        router.replace(jobDetailPath(pendingJob.id));
+        clearCreateJobForm();
+        router.replace(presentCreateJobNextHref(pendingJob.id, parsed.value.mode, false));
         return;
       } catch {
         setSubmitting(false);
@@ -169,7 +215,8 @@ export default function CreateJobScreen() {
           /* ignore */
         }
       }
-      router.replace(jobDetailPath(result.data.id));
+      clearCreateJobForm();
+      router.replace(presentCreateJobNextHref(result.data.id, parsed.value.mode, true));
       return;
     }
     if (result.error.code === "IDEMPOTENCY_MISMATCH") {
@@ -185,241 +232,217 @@ export default function CreateJobScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      style={[styles.flex, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
-    >
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardDismissMode="interactive"
-        keyboardShouldPersistTaps="handled"
-      >
-        <Text accessibilityRole="header" style={styles.title}>
-          {relatedJobId ? copy.createLinkedJob : copy.createJob}
-        </Text>
-        {relatedJobId ? <Text style={styles.banner}>{copy.linkedJobHint}</Text> : null}
-        {auth.snapshot.status === "offline_cached" ? (
-          <Text accessibilityLiveRegion="polite" style={styles.banner}>
-            {copy.offlineCached}
-          </Text>
-        ) : null}
-        {formError ? (
-          <Text accessibilityLiveRegion="polite" style={styles.error}>
-            {formError}
-          </Text>
-        ) : null}
-
-        {online ? (
-          <CustomerPicker
-            error={errors.customer_id ?? errors.customer_name}
-            onAdd={() => router.push({ pathname: "/customers/new", params: { returnTo: "job" } })}
-            onSelect={(id, name) => {
-              setField("customer_id", id);
-              setField("customer_name", name);
+    <View style={styles.root}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.flex}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.content,
+            {
+              paddingTop: insets.top + CREATE_JOB_GUTTER,
+              paddingHorizontal: CREATE_JOB_GUTTER,
+              paddingBottom: 24,
+            },
+          ]}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
+        >
+          <CreateJobHeading
+            onBack={() => {
+              clearCreateJobForm();
+              router.replace(jobsIndexPath());
             }}
-            selectedId={values.customer_id}
-            selectedName={values.customer_name}
+            support={screen.supportingText}
+            title={relatedJobId ? copy.createLinkedJob : screen.heading}
           />
-        ) : (
-          <Field
-            error={errors.customer_name}
-            label={copy.customerName}
-            name="customer_name"
-            onChange={setField}
-            register={inputs}
-            required
-            value={values.customer_name}
-          />
-        )}
-        <Field
-          error={errors.title}
-          label={copy.jobTitle}
-          name="title"
-          onChange={setField}
-          register={inputs}
-          required
-          value={values.title}
-        />
-
-        <Text nativeID="mode-label" style={styles.label}>
-          {copy.jobMode} ({copy.jobRequired})
-        </Text>
-        <View accessibilityRole="radiogroup">
-          <Choice
-            label={copy.modeQuote}
-            onPress={() => setField("mode", "quote")}
-            selected={values.mode === "quote"}
-          />
-          <Choice
-            label={copy.modeDirect}
-            onPress={() => setField("mode", "direct_invoice")}
-            selected={values.mode === "direct_invoice"}
-          />
-        </View>
-        {errors.mode ? (
-          <Text accessibilityLiveRegion="polite" style={styles.error}>
-            {errors.mode}
-          </Text>
-        ) : null}
-
-        <Check
-          hint={copy.noSiteHint}
-          label={copy.noSiteAddress}
-          onPress={() => setField("no_site", !values.no_site)}
-          selected={values.no_site}
-        />
-
-        {values.no_site ? null : (
-          <>
-            <Text style={styles.label}>{copy.jobSite}</Text>
-            <Field
-              error={errors["site_address.line1"] ?? errors.site_address}
-              label={copy.addressLine1}
-              name="line1"
-              onChange={setField}
-              register={inputs}
-              required
-              value={values.line1}
-            />
-            <Field
-              error={errors["site_address.line2"]}
-              label={copy.addressLine2}
-              name="line2"
-              onChange={setField}
-              register={inputs}
-              value={values.line2}
-            />
-            <Field
-              error={errors["site_address.city"]}
-              label={copy.city}
-              name="city"
-              onChange={setField}
-              register={inputs}
-              required
-              value={values.city}
-            />
-            <Text nativeID="state-label" style={styles.label}>
-              {copy.state} ({copy.jobRequired})
+          {relatedJobId ? <Text style={createJobNoticeStyle}>{copy.linkedJobHint}</Text> : null}
+          {auth.snapshot.status === "offline_cached" ? (
+            <Text accessibilityLiveRegion="polite" style={createJobNoticeStyle}>
+              {copy.offlineCached}
             </Text>
-            <View accessibilityRole="radiogroup" style={styles.wrap}>
-              {US_STATES.map((state) => (
-                <Choice
-                  key={state}
-                  compact
-                  label={state}
-                  onPress={() => setField("state", state)}
-                  selected={values.state === state}
+          ) : null}
+          {formError ? (
+            <Text accessibilityLiveRegion="assertive" style={createJobErrorStyle}>
+              {formError}
+            </Text>
+          ) : null}
+
+          <View style={styles.group}>
+            <Text style={createJobSectionStyle}>{screen.billingHeading}</Text>
+            <View accessibilityRole="radiogroup" style={styles.modeStack}>
+              {modes.map((card) => (
+                <CreateJobModeCard
+                  badge={card.badge}
+                  hint={card.hint}
+                  icon={card.mode === "quote" ? "quote" : "invoice"}
+                  key={card.mode}
+                  onPress={() => setField("mode", card.mode)}
+                  selected={card.selected}
+                  title={card.title}
                 />
               ))}
             </View>
-            {errors["site_address.state"] ? (
-              <Text accessibilityLiveRegion="polite" style={styles.error}>
-                {errors["site_address.state"]}
+            {errors.mode ? (
+              <Text accessibilityLiveRegion="polite" style={createJobErrorStyle}>
+                {errors.mode}
               </Text>
             ) : null}
-            <Field
-              error={errors["site_address.postal_code"]}
-              keyboardType="number-pad"
-              label={copy.zip}
-              name="postal_code"
+          </View>
+
+          {online ? (
+            <View style={styles.group}>
+              <CreateJobSelectField
+                accessibilityHint={screen.pickerHint}
+                error={errors.customer_id ?? errors.customer_name}
+                label={presentCreateJobCustomerLabel()}
+                leading="person"
+                onPress={() => setPickerOpen(true)}
+                placeholder={screen.customerPlaceholder}
+                value={values.customer_name}
+              />
+              <CreateJobAddCustomer onPress={openAddCustomer} />
+            </View>
+          ) : (
+            <CreateJobTextField
+              error={errors.customer_name}
+              label={copy.customerName}
+              name="customer_name"
               onChange={setField}
               register={inputs}
               required
-              textContentType="postalCode"
-              value={values.postal_code}
+              value={values.customer_name}
             />
-          </>
-        )}
+          )}
 
-        <Field
-          error={errors.internal_notes}
-          hint={copy.internalNotesHint}
-          label={copy.internalNotes}
-          multiline
-          name="internal_notes"
-          onChange={setField}
-          register={inputs}
-          value={values.internal_notes}
-        />
+          <View style={styles.group}>
+            <CreateJobSelectField
+              accessibilityHint={copy.noSiteHint}
+              error={errors.site_address}
+              label={screen.siteLabel}
+              leading="pin"
+              onPress={() => setSiteChooserOpen((open) => !open)}
+              placeholder={screen.noSiteLabel}
+              value={presentSiteFieldValue(values)}
+            />
+            {siteChooserOpen ? (
+              <View accessibilityRole="radiogroup" style={styles.modeStack}>
+                <CreateJobSiteChoice
+                  label={screen.noSiteLabel}
+                  onPress={() => {
+                    setField("no_site", true);
+                    setSiteChooserOpen(false);
+                  }}
+                  selected={values.no_site}
+                />
+                <CreateJobSiteChoice
+                  label={screen.addSiteLabel}
+                  onPress={() => {
+                    setField("no_site", false);
+                    setSiteChooserOpen(false);
+                  }}
+                  selected={!values.no_site}
+                />
+              </View>
+            ) : null}
+          </View>
 
-        <View style={styles.actions}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ busy: submitting, disabled: submitting }}
-            disabled={submitting}
+          {values.no_site ? null : (
+            <View style={styles.group}>
+              <CreateJobTextField
+                error={errors["site_address.line1"] ?? errors.site_address}
+                label={copy.addressLine1}
+                name="line1"
+                onChange={setField}
+                register={inputs}
+                required
+                textContentType="streetAddressLine1"
+                value={values.line1}
+              />
+              <CreateJobTextField
+                error={errors["site_address.line2"]}
+                label={copy.addressLine2}
+                name="line2"
+                onChange={setField}
+                register={inputs}
+                textContentType="streetAddressLine2"
+                value={values.line2}
+              />
+              <CreateJobTextField
+                error={errors["site_address.city"]}
+                label={copy.city}
+                name="city"
+                onChange={setField}
+                register={inputs}
+                required
+                textContentType="addressCity"
+                value={values.city}
+              />
+              <CreateJobTextField
+                autoCapitalize="characters"
+                error={errors["site_address.state"]}
+                label={copy.state}
+                name="state"
+                onChange={(_key, value) => setField("state", String(value).replace(/[^a-zA-Z]/g, "").slice(0, 2).toUpperCase())}
+                register={inputs}
+                required
+                textContentType="addressState"
+                value={values.state}
+              />
+              <CreateJobTextField
+                error={errors["site_address.postal_code"]}
+                keyboardType="number-pad"
+                label={copy.zip}
+                name="postal_code"
+                onChange={setField}
+                register={inputs}
+                required
+                textContentType="postalCode"
+                value={values.postal_code}
+              />
+            </View>
+          )}
+
+          <CreateJobTextField
+            error={errors.title}
+            label={copy.jobTitle}
+            name="title"
+            onChange={setField}
+            placeholder={screen.titlePlaceholder}
+            register={inputs}
+            required
+            value={values.title}
+          />
+          <CreateJobTextField
+            error={errors.internal_notes}
+            hint={copy.internalNotesHint}
+            label={copy.internalNotes}
+            multiline
+            name="internal_notes"
+            onChange={setField}
+            register={inputs}
+            value={values.internal_notes}
+          />
+        </ScrollView>
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16), paddingHorizontal: CREATE_JOB_GUTTER }]}>
+          <CreateJobPrimaryButton
+            busy={submitting}
+            disabled={!ready}
+            label={submitting ? copy.creatingJob : copy.continueToLines}
             onPress={() => void submit()}
-            style={[styles.button, submitting ? styles.buttonDisabled : null]}
-          >
-            <Text style={styles.buttonLabel}>{submitting ? copy.creatingJob : copy.createJob}</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.replace(jobsIndexPath())}
-            style={styles.secondary}
-          >
-            <Text style={styles.secondaryLabel}>{copy.back}</Text>
-          </Pressable>
+          />
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
-  );
-}
-
-function Field(props: {
-  name: string;
-  label: string;
-  value: string;
-  onChange: <K extends keyof JobFormValues>(key: K, value: JobFormValues[K]) => void;
-  register: { current: Record<string, TextInput | null> };
-  error?: string;
-  required?: boolean;
-  multiline?: boolean;
-  hint?: string;
-  keyboardType?: TextInput["props"]["keyboardType"];
-  textContentType?: TextInput["props"]["textContentType"];
-}) {
-  const labelId = `${props.name}-label`;
-  return (
-    <View>
-      <Text nativeID={labelId} style={styles.label}>
-        {props.label}
-        {props.required ? ` (${copy.jobRequired})` : ""}
-      </Text>
-      <TextInput
-        accessibilityLabel={`${props.label}${props.required ? `, ${copy.jobRequired}` : ""}`}
-        accessibilityHint={props.error ?? props.hint}
-        accessibilityLabelledBy={labelId}
-        keyboardType={props.keyboardType}
-        multiline={props.multiline}
-        nativeID={props.name}
-        onChangeText={(text) => props.onChange(props.name as keyof JobFormValues, text)}
-        ref={(node) => {
-          props.register.current[props.name] = node;
+      </KeyboardAvoidingView>
+      <CustomerPickerSheet
+        onAdd={openAddCustomer}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(id, name) => {
+          setField("customer_id", id);
+          setField("customer_name", name);
+          setPickerOpen(false);
         }}
-        style={[styles.input, props.multiline ? styles.multiline : null, props.error ? styles.inputError : null]}
-        textContentType={props.textContentType}
-        value={props.value}
+        selectedId={values.customer_id}
+        visible={pickerOpen}
       />
-      {props.hint && !props.error ? <Text style={styles.hint}>{props.hint}</Text> : null}
-      {props.error ? (
-        <Text accessibilityLiveRegion="polite" style={styles.error}>
-          {props.error}
-        </Text>
-      ) : null}
     </View>
-  );
-}
-
-function Choice(props: { label: string; selected: boolean; onPress: () => void; compact?: boolean }) {
-  return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ selected: props.selected }}
-      onPress={props.onPress}
-      style={[styles.choice, props.compact ? styles.choiceCompact : null, props.selected ? styles.choiceSelected : null]}
-    >
-      <Text style={[styles.choiceLabel, props.selected ? styles.choiceLabelSelected : null]}>{props.label}</Text>
-    </Pressable>
   );
 }
 
@@ -429,143 +452,14 @@ function firstParam(value: string | string[] | undefined): string {
   return "";
 }
 
-function CustomerPicker(props: {
-  selectedId: string;
-  selectedName: string;
-  error?: string;
-  onSelect: (id: string, name: string) => void;
-  onAdd: () => void;
-}) {
-  const auth = useAuth();
-  const [search, setSearch] = useState("");
-  const [matches, setMatches] = useState<{ id: string; name: string }[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const handle = setTimeout(() => {
-      setLoading(true);
-      const params = new URLSearchParams({ state: "active", limit: "25" });
-      if (search.trim()) params.set("search", search.trim());
-      void auth
-        .runOwnerRequest<{ customers: { id: string; name: string }[] }>({ path: `/v1/customers?${params.toString()}` })
-        .then((result) => {
-          setLoading(false);
-          setMatches(result.ok ? result.data.customers : []);
-        });
-    }, 300);
-    return () => clearTimeout(handle);
-  }, [auth, search]);
-
-  return (
-    <View>
-      <Text style={styles.label}>{copy.customerChoose}</Text>
-      <TextInput
-        accessibilityLabel={copy.customerSearchJobs}
-        onChangeText={setSearch}
-        placeholder={copy.customerSearchJobs}
-        style={styles.input}
-        value={search}
-      />
-      {loading ? (
-        <Text accessibilityLiveRegion="polite" style={styles.banner}>
-          {copy.customersLoading}
-        </Text>
-      ) : null}
-      {props.selectedId ? <Text style={styles.banner}>{props.selectedName}</Text> : null}
-      {matches.map((customer) => (
-        <Pressable
-          accessibilityLabel={customer.name}
-          accessibilityRole="button"
-          key={customer.id}
-          onPress={() => props.onSelect(customer.id, customer.name)}
-          style={styles.choice}
-        >
-          <Text style={styles.choiceLabel}>{customer.name}</Text>
-        </Pressable>
-      ))}
-      <Pressable accessibilityLabel={copy.addCustomer} accessibilityRole="button" onPress={props.onAdd} style={styles.button}>
-        <Text style={styles.buttonLabel}>{copy.addCustomer}</Text>
-      </Pressable>
-      {props.error ? (
-        <Text accessibilityLiveRegion="polite" style={styles.error}>
-          {props.error}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
-function Check(props: { label: string; selected: boolean; onPress: () => void; hint?: string }) {
-  return (
-    <Pressable
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked: props.selected }}
-      accessibilityHint={props.hint}
-      onPress={props.onPress}
-      style={styles.check}
-    >
-      <Text style={styles.choiceLabel}>
-        {props.selected ? "☑ " : "☐ "}
-        {props.label}
-      </Text>
-      {props.hint ? <Text style={styles.hint}>{props.hint}</Text> : null}
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: colors.background },
-  content: { padding: space.gutter, gap: space.scale, paddingBottom: 48 },
-  title: { color: colors.text, fontSize: type.screen, fontWeight: "700" },
-  banner: { color: colors.navy, fontSize: type.secondary },
-  label: { color: colors.text, fontSize: type.secondary, marginTop: space.scale },
-  hint: { color: colors.secondary, fontSize: type.secondary, marginTop: 4 },
-  error: { color: colors.danger, fontSize: type.secondary },
-  input: {
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: space.radius,
-    paddingHorizontal: space.gutter,
-    fontSize: type.body,
-    color: colors.text,
-    backgroundColor: "#FFFFFF",
+  root: { flex: 1, backgroundColor: colors.surface },
+  flex: { flex: 1 },
+  content: { gap: 18, flexGrow: 1 },
+  group: { gap: 10 },
+  modeStack: { gap: 12 },
+  footer: {
+    paddingTop: 12,
+    backgroundColor: colors.surface,
   },
-  multiline: { minHeight: 96, textAlignVertical: "top", paddingVertical: space.scale },
-  inputError: { borderColor: colors.danger, borderWidth: 2 },
-  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  choice: {
-    minHeight: 44,
-    minWidth: 44,
-    borderWidth: 1,
-    borderColor: colors.navy,
-    borderRadius: space.radius,
-    paddingHorizontal: space.gutter,
-    justifyContent: "center",
-    marginTop: 4,
-  },
-  choiceCompact: { paddingHorizontal: 10 },
-  choiceSelected: { backgroundColor: colors.navy },
-  choiceLabel: { color: colors.navy, fontSize: type.secondary, fontWeight: "600" },
-  choiceLabelSelected: { color: "#FFFFFF" },
-  check: { minHeight: 44, justifyContent: "center", marginTop: space.scale },
-  actions: { gap: space.scale, marginTop: space.gutter },
-  button: {
-    minHeight: 48,
-    backgroundColor: colors.navy,
-    borderRadius: space.radius,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  buttonDisabled: { opacity: 0.5 },
-  buttonLabel: { color: "#FFFFFF", fontSize: type.body, fontWeight: "600" },
-  secondary: {
-    minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: space.radius,
-    borderWidth: 1,
-    borderColor: colors.navy,
-  },
-  secondaryLabel: { color: colors.navy, fontSize: type.body, fontWeight: "600" },
 });

@@ -43,7 +43,17 @@ export type S3CompatibleClientOptions = {
   endpoint: string;
   forcePathStyle: boolean;
   credentials: DocumentsCredentialPair;
+  requestChecksumCalculation?: "WHEN_REQUIRED" | "WHEN_SUPPORTED";
+  responseChecksumValidation?: "WHEN_REQUIRED" | "WHEN_SUPPORTED";
+  requestHandler?: { connectionTimeout: number; requestTimeout: number };
+  maxAttempts?: number;
 };
+
+// The SDK default has no connect or request timeout, so an unreachable
+// endpoint would hang the single-threaded worker loop indefinitely.
+export const WORKER_STORAGE_CONNECT_TIMEOUT_MS = 5_000;
+export const WORKER_STORAGE_REQUEST_TIMEOUT_MS = 20_000;
+export const WORKER_STORAGE_MAX_ATTEMPTS = 2;
 
 const SHARED_STORAGE_FIELD_NAMES = [
   "STORAGE_ENDPOINT",
@@ -342,7 +352,81 @@ export function workerClientOptions(config: WorkerDocumentsStorageConfig): S3Com
     endpoint: config.endpoint,
     forcePathStyle: config.forcePathStyle,
     credentials: config.worker,
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
+    requestHandler: {
+      connectionTimeout: WORKER_STORAGE_CONNECT_TIMEOUT_MS,
+      requestTimeout: WORKER_STORAGE_REQUEST_TIMEOUT_MS,
+    },
+    maxAttempts: WORKER_STORAGE_MAX_ATTEMPTS,
   };
+}
+
+export type DevelopmentStorageAlignment = "endpoint_loopback" | "download_lan";
+
+function literalPrivateIpv4(hostname: string): boolean {
+  return isIpv4(hostname) !== undefined && isRfc1918Host(hostname);
+}
+
+function withHost(value: string, hostname: string): string | undefined {
+  try {
+    const url = new URL(value);
+    url.hostname = hostname;
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Development only. DHCP changes leave STORAGE_* pointing at an RFC1918
+ * address this machine no longer owns. Server-side storage traffic then goes
+ * to loopback (MinIO is published on the host), and presigned downloads use
+ * the current LAN address so a phone can reach them. Hostnames, public
+ * addresses, and addresses still assigned to this machine are left alone.
+ */
+export function alignDevelopmentStorageEnv(
+  env: NodeJS.Dict<string>,
+  host: { localAddresses: readonly string[]; lanHost?: string },
+): DevelopmentStorageAlignment[] {
+  const appEnv = env.APP_ENV ?? "development";
+  if (appEnv !== "development" || env.NODE_ENV === "production") {
+    return [];
+  }
+  const local = new Set(host.localAddresses);
+  const stale = (hostname: string) => literalPrivateIpv4(hostname) && !local.has(hostname);
+  const changes: DevelopmentStorageAlignment[] = [];
+  const endpoint = present(env.STORAGE_ENDPOINT);
+  let endpointHost: string | undefined;
+  try {
+    endpointHost = endpoint ? new URL(endpoint).hostname : undefined;
+  } catch {
+    endpointHost = undefined;
+  }
+  const lanHost = host.lanHost && literalPrivateIpv4(host.lanHost) ? host.lanHost : undefined;
+  const download = present(env.STORAGE_DOWNLOAD_ENDPOINT) ?? endpoint;
+  if (download && lanHost) {
+    try {
+      const downloadHost = new URL(download).hostname;
+      if (downloadHost !== lanHost && (isLoopbackHost(downloadHost) || stale(downloadHost))) {
+        const next = withHost(download, lanHost);
+        if (next) {
+          env.STORAGE_DOWNLOAD_ENDPOINT = next;
+          changes.push("download_lan");
+        }
+      }
+    } catch {
+      // assertStorageEndpoint reports the invalid URL when the env is loaded.
+    }
+  }
+  if (endpoint && endpointHost && stale(endpointHost)) {
+    const next = withHost(endpoint, "127.0.0.1");
+    if (next) {
+      env.STORAGE_ENDPOINT = next;
+      changes.push("endpoint_loopback");
+    }
+  }
+  return changes;
 }
 
 export function apiClientOptions(config: ApiDocumentsStorageConfig): S3CompatibleClientOptions {
