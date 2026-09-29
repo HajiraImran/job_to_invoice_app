@@ -216,6 +216,54 @@ function asDate(value: Date | string): string {
   return String(value).slice(0, 10);
 }
 
+export type IssuedCreditNoteSummary = {
+  id: string;
+  number: string;
+  revision_no: number;
+  lifecycle: string;
+  total_cents: number;
+  pdf_state: string;
+  invoice_id: string;
+};
+
+export async function loadIssuedCreditNotes(
+  client: PoolClient,
+  workspaceId: string,
+  filter: { jobId: string } | { invoiceId: string },
+): Promise<IssuedCreditNoteSummary[]> {
+  const byJob = "jobId" in filter;
+  const result = await client.query<{
+    id: string;
+    number: string;
+    revision_no: number;
+    lifecycle: string;
+    total_cents: string | number;
+    pdf_state: string;
+    invoice_id: string;
+  }>(
+    `select d.id, d.number, d.revision_no, d.lifecycle, d.total_cents,
+            coalesce(p.download_state, 'preparing') as pdf_state,
+            d.prior_document_id as invoice_id
+     from commercial.documents d
+     left join lateral commercial.original_pdf_download($1::uuid, d.id) p on true
+     where d.workspace_id = $1
+       and d.kind = 'credit'
+       and d.lifecycle = 'issued'
+       and ${byJob ? "d.job_id = $2" : "d.prior_document_id = $2"}
+     order by d.issued_at desc, d.id desc`,
+    [workspaceId, byJob ? filter.jobId : filter.invoiceId],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    number: row.number,
+    revision_no: row.revision_no,
+    lifecycle: row.lifecycle,
+    total_cents: asCents(row.total_cents),
+    pdf_state: row.pdf_state,
+    invoice_id: row.invoice_id,
+  }));
+}
+
 function asCents(value: string | number): number {
   return typeof value === "number" ? value : Number(value);
 }
@@ -405,6 +453,7 @@ export function presentIssuedInvoice(
   row: IssueRow,
   pdfState = row.pdf_state,
   ledger?: { state: LedgerState; entries: LedgerEntryDb[]; credit_sources?: CreditSource[] },
+  issuedCredits: IssuedCreditNoteSummary[] = [],
 ) {
   const snapshot = row.snapshot_json;
   const dueDate = row.due_date ? asDate(row.due_date) : snapshot.kind === "invoice" ? snapshot.due_date : asDate(row.issue_date);
@@ -448,6 +497,7 @@ export function presentIssuedInvoice(
     recorded_by: "Recorded by business",
     entries: presentLedgerEntries(ledger?.entries ?? []),
     credit_sources: ledger?.credit_sources ?? [],
+    issued_credits: issuedCredits,
     snapshot,
     net_cents: asCents(row.net_cents),
     tax_cents: asCents(row.tax_cents),
@@ -1188,7 +1238,8 @@ export function registerInvoiceRoutes(
           dueDate,
           row.lifecycle === "voided",
         );
-        return { kind: "ok" as const, presented: presentIssuedInvoice(row, row.pdf_state, ledger) };
+        const issuedCredits = await loadIssuedCreditNotes(client, provisioned.workspace_id, { invoiceId: row.id });
+        return { kind: "ok" as const, presented: presentIssuedInvoice(row, row.pdf_state, ledger, issuedCredits) };
       });
       if (!loaded || !("kind" in loaded)) {
         const status = loaded?.account_status;

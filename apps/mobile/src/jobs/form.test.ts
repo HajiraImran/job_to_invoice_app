@@ -366,6 +366,42 @@ describe("job overview presentation", () => {
     expect(presentReceivableCents(detailJob({ lifecycle: "canceled" }))).toBeNull();
   });
 
+  it("lists issued credit notes so the owner can open their PDFs", () => {
+    const job = detailJob({
+      lifecycle: "invoiced",
+      permitted_actions: ["view_invoice"],
+      active_invoice: {
+        id: "inv",
+        number: "INV-000001",
+        revision_no: 1,
+        lifecycle: "issued",
+        total_cents: 25980,
+        due_date: null,
+      },
+      issued_credits: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          number: "CN-000001",
+          revision_no: 1,
+          lifecycle: "issued",
+          total_cents: 2165,
+          pdf_state: "ready",
+          invoice_id: "inv",
+        },
+      ],
+    });
+    expect(presentJobDocuments(job)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "CN-000001",
+          subtitle: "Issued credit note · PDF",
+          action: "credit",
+          targetId: "11111111-1111-4111-8111-111111111111",
+        }),
+      ]),
+    );
+  });
+
   it("hides finish and archive until the server permits them", () => {
     const invoiced = detailJob({
       lifecycle: "invoiced",

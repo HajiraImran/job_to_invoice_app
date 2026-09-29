@@ -722,6 +722,8 @@ export const copy = {
   invoiceReceived: "Received",
   invoiceRefunded: "Refunded",
   invoiceBalance: "Balance",
+  jobCreditDocumentHint: "Issued credit note · PDF",
+  invoiceCreditNotes: "Credit notes",
   invoiceLedger: "Ledger",
   invoiceRecordPayment: "Record payment",
   invoiceRecordRefund: "Record refund",

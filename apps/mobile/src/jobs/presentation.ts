@@ -82,6 +82,15 @@ export type JobDetail = JobSummary & {
     request_state: string | null;
     additions?: Array<{ description: string; total_cents: number }>;
   } | null;
+  issued_credits?: Array<{
+    id: string;
+    number: string;
+    revision_no: number;
+    lifecycle: string;
+    total_cents: number;
+    pdf_state: string;
+    invoice_id: string;
+  }>;
 };
 
 export type JobsListKind = "loading" | "empty" | "loaded" | "error" | "offline" | "access_expired";
@@ -379,7 +388,7 @@ export function presentCurrentStep(job: JobDetail): { label: string; tone: "draf
   return { label: copy.jobLifecycleDraft, tone: "neutral" };
 }
 
-export type JobDocumentAction = "quote" | "request" | "invoice" | "change";
+export type JobDocumentAction = "quote" | "request" | "invoice" | "change" | "credit";
 
 export type JobDocumentRow = {
   key: string;
@@ -415,6 +424,15 @@ export function presentJobDocuments(job: JobDetail): JobDocumentRow[] {
       subtitle: invoice.lifecycle,
       action: "invoice",
       targetId: invoice.id,
+    });
+  }
+  for (const credit of job.issued_credits ?? []) {
+    rows.push({
+      key: `credit-${credit.id}`,
+      title: credit.number,
+      subtitle: copy.jobCreditDocumentHint,
+      action: "credit",
+      targetId: credit.id,
     });
   }
   if (job.latest_change) {

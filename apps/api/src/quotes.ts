@@ -39,7 +39,7 @@ import { buildChangeSnapshot, loadAcceptedScopeSources, mapChangeError } from ".
 import { payloadFromJson } from "./drafts.ts";
 import { withApiRole, withTenant } from "./db.ts";
 import { fail, success } from "./envelope.ts";
-import { presentIssuedInvoice, loadInvoiceLedgerState, mapInvoiceError } from "./invoices.ts";
+import { presentIssuedInvoice, loadInvoiceLedgerState, loadIssuedCreditNotes, mapInvoiceError } from "./invoices.ts";
 import { bearerToken, JwtVerificationError, type JwtVerifier, type VerifiedAccess } from "./jwt.ts";
 import {
   quotePublishDatabaseStage,
@@ -1108,7 +1108,7 @@ export function registerQuotePublishRoutes(
              on dr.workspace_id = d.workspace_id and dr.parent_document_id = d.id and dr.kind = d.kind
            left join lateral commercial.original_pdf_download($2::uuid, d.id) p on true
            left join lateral commercial.document_delivery_status($2::uuid, d.id) da on true
-           where d.id = $1 and d.kind in ('quote', 'invoice', 'change')`,
+           where d.id = $1 and d.kind in ('quote', 'invoice', 'change', 'credit')`,
           [params.documentId, owner.workspace_id],
         );
         const row = result.rows[0];
@@ -1131,7 +1131,8 @@ export function registerQuotePublishRoutes(
           dueDate,
           row.lifecycle === "voided",
         );
-        return { row, ledger };
+        const issuedCredits = await loadIssuedCreditNotes(client, owner.workspace_id, { invoiceId: row.id });
+        return { row, ledger, issuedCredits };
       });
       if (!loaded?.row) {
         return sendFail(request, reply, API_ERROR_CODES.NOT_FOUND, DOCUMENT_NOT_FOUND);
@@ -1147,6 +1148,7 @@ export function registerQuotePublishRoutes(
             },
             loaded.row.pdf_state,
             loaded.ledger,
+            loaded.issuedCredits,
           ),
         );
       }

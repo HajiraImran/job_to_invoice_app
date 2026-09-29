@@ -1,7 +1,7 @@
 ﻿import { formatUsdCents } from "@job-to-invoice/schemas";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { copy } from "../../../../src/i18n/en.ts";
 import { getCachedJob, upsertCachedJob } from "../../../../src/jobs/cache.ts";
@@ -18,6 +18,7 @@ import {
   presentScopeTotalCents,
   presentUpdatedLabel,
   type JobDetail,
+  type JobDocumentAction,
 } from "../../../../src/jobs/presentation.ts";
 import { createLinkedJobPath, jobQuotePath, jobPublishPath, jobRequestPath, jobInvoicePath, jobInvoiceDetailPath, jobInvoiceReplacePath, jobChangePath, jobReducePath, jobsIndexPath } from "../../../../src/jobs/routes.ts";
 import { quoteActionLabel } from "../../../../src/quotes/presentation.ts";
@@ -335,7 +336,7 @@ export default function JobDetailScreen() {
     router.replace(jobsIndexPath());
   }
 
-  function openDocument(action: "quote" | "request" | "invoice" | "change", targetId?: string) {
+  function openDocument(action: JobDocumentAction, targetId?: string) {
     if (action === "quote") {
       router.push(jobPublishPath(jobId));
       return;
@@ -348,9 +349,32 @@ export default function JobDetailScreen() {
       router.push(jobChangePath(jobId));
       return;
     }
+    if (action === "credit" && targetId) {
+      void openCreditPdf(targetId);
+      return;
+    }
     if (targetId) {
       router.push(jobInvoiceDetailPath(jobId, targetId));
     }
+  }
+
+  async function openCreditPdf(documentId: string) {
+    if (auth.snapshot.status === "offline_cached") {
+      Alert.alert(copy.creditPdfFailedTitle, copy.invoiceDetailOffline);
+      return;
+    }
+    const result = await runOwnerRequest<{ state: string; url: string | null }>({
+      path: `/v1/documents/${documentId}/download`,
+    });
+    if (result.ok && result.data.state === "ready" && result.data.url) {
+      await Linking.openURL(result.data.url);
+      return;
+    }
+    if (result.ok && result.data.state === "failed") {
+      Alert.alert(copy.creditPdfFailedTitle, copy.creditPdfFailed);
+      return;
+    }
+    Alert.alert(copy.creditPdfTitle, result.ok ? copy.creditPdfPreparing : result.error.message || copy.creditPdfFailed);
   }
 
   return (
